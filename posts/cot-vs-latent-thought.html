@@ -99,6 +99,38 @@ problem adds just one round. On parallel hardware, rounds ≈ wait time — so h
   <tr><td>1,000,000,000</td><td>1,000,000,000</td><td>30</td></tr>
 </table>
 
+<h3>Proof sketch, in plain terms — scratchpad vs parallel layers</h3>
+<p>The paper's proof sketch is the same idea stated as a <b>computation graph</b>. Take a little pyramid —
+3 nodes to compute, arranged in 2 levels of depth:</p>
+<pre style="font-family:ui-monospace,Menlo,Consolas,monospace;background:#f4f7fa;border:1px solid #e0e5ea;border-radius:6px;padding:.8rem 1rem;font-size:.9rem;">
+inputs:   a    b    c    d
+level 1:    e=a+b     f=c+d
+level 2:        g=e+f
+</pre>
+
+<p><b>What "scratchpad memory" means.</b> CoT computes by <em>writing intermediate results down as tokens</em>,
+then reading them back — its token sequence <em>is</em> scratch paper. To compute <code>g</code>, attention
+looks back at the tokens it already wrote for <code>e</code> and <code>f</code> (retrieve predecessors), the
+feed-forward layer does the <code>e+f</code>, and the result is written as the next token. Powerful — it's how
+CoT does long multi-step work — but it emits <b>one token per step</b>.</p>
+
+<p><b>Why the loop is parallel.</b> The looped TF keeps every node as its own position and runs all their
+feed-forwards at once, so it finishes a whole <em>level</em> per iteration:</p>
+<table>
+  <tr><th></th><th>CoT (one token/step)</th><th>Looped TF (one level/step)</th></tr>
+  <tr><td>Step 1</td><td>write <code>e</code></td><td>compute <code>e</code> <b>and</b> <code>f</code> together</td></tr>
+  <tr><td>Step 2</td><td>write <code>f</code></td><td>compute <code>g</code></td></tr>
+  <tr><td>Step 3</td><td>write <code>g</code></td><td>— done —</td></tr>
+  <tr><td><b>Total</b></td><td><b>3 = # nodes (size)</b></td><td><b>2 = # levels (depth)</b></td></tr>
+</table>
+<p><b>Why CoT can't parallelize:</b> a single forward pass <em>reads</em> all tokens in parallel, but its
+<em>output</em> is just one new token — so each step finishes only one node. The loop updates all positions'
+states every pass, finishing a whole level at once. Scale up a pyramid over 1024 inputs: depth ≈ 10, size ≈ 1023,
+so the loop takes ~10 steps and CoT ~1023.</p>
+<div class="callout"><strong>The catch — "with sufficient size".</strong> Holding a 1024-node level at once needs
+~1024 positions of width. So the loop spends <em>width (space)</em> to save <em>steps (time)</em>; CoT spends
+steps but stays narrow. That trade is what "provided the model has sufficient resources" means.</div>
+
 <h3>Claim B — approximate counting (marbles analogy)</h3>
 <div class="analogy">A jar of a million marbles — how many are red? Counting exactly is hopeless; grab a
 <b>random handful of 100</b>, see 30 red → estimate ~300,000. Works only if the handful is truly random.</div>
