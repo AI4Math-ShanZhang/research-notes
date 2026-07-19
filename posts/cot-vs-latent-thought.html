@@ -131,6 +131,33 @@ so the loop takes ~10 steps and CoT ~1023.</p>
 ~1024 positions of width. So the loop spends <em>width (space)</em> to save <em>steps (time)</em>; CoT spends
 steps but stays narrow. That trade is what "provided the model has sufficient resources" means.</div>
 
+<h3>Two kinds of "depth" — layers vs iterations</h3>
+<p>The "depth" in the proof is <b>not</b> the transformer's layer count. There are two separate axes:</p>
+<ul>
+  <li><b>Transformer depth = number of layers <code>L</code>.</b> The fixed architectural stack (e.g. 12 layers).
+  One forward pass goes through all <code>L</code> layers once. Same for all three methods.</li>
+  <li><b>Computation/graph depth <code>D</code>.</b> How many sequential levels the <em>problem</em> needs (our
+  pyramid: D=2).</li>
+</ul>
+<p>For a <b>looped TF</b>, the relevant depth is the number of <b>loop iterations <code>T</code></b>, not the
+layers. Loop an <code>L</code>-layer block <code>T</code> times → <b>effective depth <code>L×T</code></b> of
+sequential computation, but only <code>L</code> layers' worth of weights (the block is reused). Each iteration
+handles one graph level, so you loop ≈ <code>D</code> times.</p>
+<table>
+  <tr><th></th><th>Layers (weights)</th><th>Forward passes</th><th>Effective depth</th></tr>
+  <tr><td>Plain TF, one pass</td><td>L=2</td><td>1</td><td>2 — only shallow problems</td></tr>
+  <tr><td><b>Looped TF</b>, T iterations</td><td>L=2 (reused)</td><td>T</td><td><b>L×T</b> — solves depth-(L·T)</td></tr>
+</table>
+<p><b>Why it matters:</b> one forward pass gives only <code>L</code> levels of sequential computation, so a plain
+transformer is stuck doing shallow work. Looping grows effective depth (<code>L×T</code>) <em>cheaply</em> — more
+computation, no more parameters. That extra effective depth is what maps to graph depth <code>D</code>.</p>
+<p><b>Where CoT fits:</b> same fixed depth <code>L</code>, but many <b>decoding steps</b> — each a fresh forward
+pass. Its sequential computation is carried through the <em>scratchpad tokens</em> across steps, not through
+layers or iterations. So CoT's reach is set by number of steps, which scales with <em>size</em> (nodes).</p>
+<div class="callout"><strong>One line:</strong> transformer layers <code>L</code> = depth of one forward pass
+(fixed); latent thought's "depth" = loop <b>iterations</b> (effective depth <code>L×T</code> ≈ graph depth D);
+CoT's "depth" = <b>decoding steps</b>, carried by the scratchpad and scaling with size.</div>
+
 <h3>Claim B — approximate counting (marbles analogy)</h3>
 <div class="analogy">A jar of a million marbles — how many are red? Counting exactly is hopeless; grab a
 <b>random handful of 100</b>, see 30 red → estimate ~300,000. Works only if the handful is truly random.</div>
