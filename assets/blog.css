@@ -1,0 +1,68 @@
+/* ===== Shared styles for the blog (homepage + note pages) ===== */
+:root{
+  --accent:#3D5A9B; --accent2:#4A8ED4; --ink:#1c2530; --muted:#6b7684;
+  --line:#e3e7ec; --bg:#fff; --chip:#eef1f6;
+  --summary-bg:#eef4fb; --summary-line:#4A8ED4;
+  --notes-bg:#fff8ee;   --notes-line:#E8900D;
+}
+*{box-sizing:border-box}
+body{ font-family:Georgia,"Times New Roman",serif; line-height:1.7; color:var(--ink);
+      background:var(--bg); max-width:760px; margin:0 auto; padding:2.5rem 1.5rem; }
+
+/* header / nav */
+.site-head{ border-bottom:1px solid var(--line); padding-bottom:1.1rem; margin-bottom:1.6rem; }
+.site-head h1{ margin:0 0 .25rem; font-size:1.9rem; }
+.site-head p{ margin:0; color:var(--muted); }
+.nav{ margin-top:.7rem; font-family:-apple-system,system-ui,sans-serif; font-size:.9rem; }
+.nav a{ color:var(--accent); text-decoration:none; margin-right:1.1rem; }
+.nav a:hover{ text-decoration:underline; }
+.back{ font-family:-apple-system,system-ui,sans-serif; font-size:.9rem; }
+.back a{ color:var(--accent); text-decoration:none; }
+.back a:hover{ text-decoration:underline; }
+
+/* category filter bar (homepage) */
+.filters{ font-family:-apple-system,system-ui,sans-serif; margin:0 0 1.5rem; }
+.filters button{ font:inherit; font-size:.82rem; cursor:pointer; border:1px solid var(--line);
+  background:#fff; color:#4a5568; border-radius:14px; padding:4px 12px; margin:0 .35rem .4rem 0; }
+.filters button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+
+/* category block */
+.category{ margin:0 0 2.2rem; }
+.category > h2{ font-size:1.35rem; color:var(--accent); margin:0 0 .2rem;
+  display:flex; align-items:baseline; gap:.5rem; }
+.category > .blurb{ color:var(--muted); font-size:.95rem; margin:0 0 1rem; }
+.count{ font-family:-apple-system,system-ui,sans-serif; font-size:.72rem; color:#fff;
+  background:var(--accent2); border-radius:10px; padding:1px 8px; }
+
+/* note list item */
+.note{ padding:.8rem 0 1rem; border-bottom:1px solid var(--line); }
+.note a.title{ font-size:1.13rem; color:var(--ink); text-decoration:none; font-weight:bold; }
+.note a.title:hover{ color:var(--accent); text-decoration:underline; }
+.note .meta{ color:var(--muted); font-size:.85rem; margin:.2rem 0 .4rem;
+  font-family:-apple-system,system-ui,sans-serif; }
+.note .summary{ margin:.2rem 0 .5rem; font-size:.98rem; }
+.tag{ display:inline-block; font-family:-apple-system,system-ui,sans-serif; font-size:.72rem;
+  background:var(--chip); color:#4a5568; border-radius:10px; padding:2px 9px; margin-right:.35rem; }
+
+/* ===== note page: the two-section format ===== */
+.note-page h1{ color:var(--accent); border-bottom:3px solid var(--accent); padding-bottom:.4rem; margin-top:.8rem; }
+.paper-meta{ color:var(--muted); font-size:.95rem; font-family:-apple-system,system-ui,sans-serif; }
+.section{ border-radius:0 8px 8px 0; padding:.4rem 1.1rem 1rem; margin:1.5rem 0; }
+.section > h2{ font-size:1.25rem; margin:.6rem 0 .4rem; padding-bottom:.3rem; }
+.paper-summary{ background:var(--summary-bg); border-left:5px solid var(--summary-line); }
+.paper-summary > h2{ color:#2c5b8f; }
+.key-notes{ background:var(--notes-bg); border-left:5px solid var(--notes-line); }
+.key-notes > h2{ color:#b56b00; }
+
+/* generic content bits reused inside notes */
+h2,h3{ color:#2c3e50; }
+code{ background:#eef1f4; padding:1px 5px; border-radius:4px; font-size:.92em;
+  font-family:ui-monospace,Menlo,Consolas,monospace; }
+table{ border-collapse:collapse; width:100%; margin:1rem 0; background:#fff;
+  font-family:-apple-system,system-ui,sans-serif; font-size:.92rem; }
+th,td{ border:1px solid var(--line); padding:.5rem .65rem; text-align:left; vertical-align:top; }
+th{ background:var(--accent); color:#fff; }
+tr:nth-child(even) td{ background:#f6f8fa; }
+.mermaid{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:1rem; margin:1rem 0; }
+footer{ margin-top:3rem; color:var(--muted); font-size:.85rem; text-align:center;
+  font-family:-apple-system,system-ui,sans-serif; border-top:1px solid var(--line); padding-top:1rem; }

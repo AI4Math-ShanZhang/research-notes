@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RECAP (π0.6) — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>RECAP (π0.6): RL for VLAs</h1>
+<p class="paper-meta">Paper: <em>π0.6</em> — Physical Intelligence,
+<a href="https://arxiv.org/abs/2511.14759">arXiv:2511.14759</a>.
+Full walkthrough: <code>VLA_WorldModel/recap_rl_explained.html</code>.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+<p>RECAP is the reinforcement-learning recipe behind π0.6, aimed at improving a vision-language-action
+(VLA) policy on real robots without the instability of on-policy policy-gradient methods.</p>
+<ul>
+  <li><b>Fit a value function offline.</b> From logged trajectories (including human corrections), RECAP
+  trains a value function — "how good is this state?" — with a Bellman-style update, rather than rolling out
+  the policy live.</li>
+  <li><b>Extract the policy by advantage conditioning.</b> Instead of pushing gradients through returns
+  (PPO-style), it turns the value estimate into an <em>advantage</em> and conditions the policy on it, so the
+  policy learns to imitate the high-advantage actions already present in the data.</li>
+  <li><b>Training objective.</b> The final loss combines the value fit with the advantage-conditioned policy
+  term, keeping updates close to the data distribution.</li>
+</ul>
+<p>Compared with PPO, the appeal is stability and data-efficiency on real-robot data: no fragile on-policy
+rollouts, and human corrections fold in naturally as high-value examples.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+<ul>
+  <li><b>Value function = "what is this moment worth?"</b> It scores a state by the return you can still
+  expect from it — the single most reusable idea in the paper.</li>
+  <li><b>Advantage = "was this action better than average here?"</b> Positive advantage → do more of it.
+  Conditioning on advantage is a soft, offline-safe way to prefer good actions without unstable gradients.</li>
+  <li><b>Why not just PPO?</b> PPO needs fresh on-policy rollouts and is twitchy on real robots. RECAP stays
+  offline/near-data, which is why corrections and logged data slot in cleanly.</li>
+  <li><b>Open question for me:</b> how sensitive is the policy to value-function error? A bad value estimate
+  could reward the wrong actions — worth checking against the experiments.</li>
+</ul>
+</section>
+
+</body>
+</html>
