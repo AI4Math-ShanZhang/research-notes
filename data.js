@@ -49,7 +49,7 @@ const BLOG = {
 
     {
       id: "vla",
-      name: "VLA",
+      name: "VLA/VWA",
       blurb: "Vision-language-action policies — training, RL, decoding, and masking.",
       notes: [
         { title:"Intro: VLA, World Models & World-Action Models", file:"posts/intro_vla_world_model.html", date:"2026-07-19", paper:"Overview note", tags:["intro","overview"], summary:"A gentle introduction to what VLAs, world models, and world-action models are, and how they relate." },
