@@ -183,6 +183,44 @@ parallel — the deepest reason diffusion conquered images first but is still ca
 assumes they are roughly <em>conditionally independent</em> given what's revealed. When tokens are strongly coupled,
 aggressive parallel unmasking can produce inconsistent text, so real diffusion LMs still need enough denoising steps
 (enough depth) for tightly-coupled problems.</div>
+
+<h3>Fine print: positional encodings (where the power really comes from)</h3>
+<p>A positional encoding (PE) is the signal that tells each token <em>where it is</em> — attention alone is
+order-blind. The paper treats PEs as an <b>external, precomputed input</b>, so they can carry information the
+transformer itself is too weak to compute. This matters because the total capability is <b>deliberately split</b>
+between the PEs (indexing) and the transformer (the AC⁰ work on top).</p>
+
+<div class="take">
+<h4>Why the transformer can't compute modulo / division / binary</h4>
+A fixed-precision transformer is a <b>subset of AC⁰</b>: constant depth, unbounded-fan-in aggregation. Such a model
+<b>cannot compute parity</b> (XOR of all bits) — the classic AC⁰ impossibility. Intuition: an unbounded AND/OR can
+ask <em>"any 1?"</em> or <em>"all 1?"</em>, but never <em>"exactly how many 1s?"</em> — it's blind to exact counts.
+And <b>modulo</b> is exact counting mod k, <b>division</b> needs <b>carry propagation</b> (a long dependency chain),
+and <b>binary representation</b> is just repeated mod-2/divide-by-2. All need log-depth (a counting tree / carry
+ripple); constant depth is too shallow. Fixed precision makes it worse — it can't even represent a large index.
+</div>
+
+<div class="take">
+<h4>How the PE plugs into the loop / dLLM</h4>
+The PE arrives with the hard values <b>precomputed</b> per position: <code>binary(i)</code>, <code>i mod k</code>,
+<code>i / k</code>. Every loop/denoising step reuses the same weights, so what changes is <b>addressing</b> — which
+slot to read/write, with wrap-around like <code>(i−2) mod N</code>. That indexing is exactly the modulo/division the
+model can't do. So it <b>looks up</b> the PE and performs only easy AC⁰ ops on top (add the step counter, compare,
+shift by a power of two) to land on the target position, then attends there.
+<br><br><b>Why it's the prerequisite for looping:</b> without correct indexing, iteration 2 wouldn't know where
+iteration 1 left off — the loop couldn't build on itself. Honest addressing from the PE is what lets T iterations
+stack into effective depth (AC⁰ → AC^d). Hence "L-uniform PEs are a prerequisite for looping to increase power
+beyond fixed-depth models."
+</div>
+
+<div class="callout"><strong>Why this isn't cheating.</strong> The PE encodes only <b>position and length</b>
+(universal addressing, same recipe for any input of that size), computable in <b>log-space (L-uniform)</b> — not
+anything problem-specific. Some prior work smuggles entire circuits into the PE; here the PE just does the boring
+index bookkeeping the model provably can't, while the <b>loop still does the real reasoning</b>.</div>
+
+<p><b>Cheat-sheet analogy:</b> the transformer is a worker who can add and compare but <em>can't divide</em>; the PE
+is a printed cheat-sheet with all the division/modulo answers already filled in. With it, the worker finishes the
+job using only simple arithmetic + lookups.</p>
 </section>
 
 </body>
