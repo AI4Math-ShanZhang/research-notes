@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sight-Cone Masking — interactive</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --camA:#4A8ED4;--camB:#F79A38;--ok:#3DBD79;--no:#F06B7F;--y:#9B72CF;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.55;}
+  header{background:linear-gradient(135deg,#3D5A9B,#38BDB8);color:#fff;padding:34px 20px;text-align:center;}
+  header h1{margin:0 0 6px;font-size:1.6rem;}
+  header p{margin:0;opacity:.95;}
+  .wrap{max-width:960px;margin:0 auto;padding:24px 18px 70px;}
+  h2{font-size:1.35rem;border-bottom:2px solid var(--line);padding-bottom:6px;margin-top:34px;}
+  h3{margin:18px 0 6px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:16px 0;box-shadow:0 2px 10px rgba(30,50,90,.04);}
+  .lead{color:var(--muted);font-size:1.05rem;}
+  .demo{display:flex;flex-wrap:wrap;gap:18px;}
+  .canvaswrap{flex:1 1 460px;}
+  canvas{width:100%;height:auto;background:#0f1622;border-radius:12px;border:1px solid var(--line);}
+  .panel{flex:1 1 300px;}
+  .verdict{border-radius:12px;padding:14px 16px;font-weight:700;font-size:1.1rem;text-align:center;margin-bottom:12px;color:#fff;}
+  .verdict.ok{background:var(--ok);} .verdict.no{background:var(--no);}
+  .ctrl{margin:10px 0;font-size:.9rem;}
+  .ctrl label{display:flex;justify-content:space-between;color:var(--muted);}
+  .ctrl input[type=range]{width:100%;}
+  .readout{background:#f7f9fc;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:.85rem;font-variant-numeric:tabular-nums;}
+  .readout b{color:var(--ink);}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.8rem;margin-top:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block;}
+  ol.steps{counter-reset:s;list-style:none;padding:0;}
+  ol.steps li{counter-increment:s;position:relative;padding:10px 0 10px 44px;border-bottom:1px dashed var(--line);}
+  ol.steps li:last-child{border-bottom:none;}
+  ol.steps li::before{content:counter(s);position:absolute;left:0;top:10px;width:30px;height:30px;background:#38BDB8;color:#fff;border-radius:50%;text-align:center;line-height:30px;font-weight:700;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:.9rem;}
+  th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:#f0f4fa;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.86em;}
+  /* figure 4 schematic */
+  .fig{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;}
+  .stack{position:relative;}
+  .frame{width:120px;height:80px;border:2px solid #cdd6e2;border-radius:8px;background:#eef3f9;position:absolute;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(3,1fr);}
+  .frame div{border:1px solid #dbe3ee;}
+  .frame .tube{background:repeating-linear-gradient(45deg,#3a3f4a,#3a3f4a 5px,#565c68 5px,#565c68 10px);}
+  .frame.ycond{background:#f3eefb;border-color:#c9b6e6;}
+  .frame.ycond .tube{background:repeating-linear-gradient(45deg,#6b4a9a,#6b4a9a 5px,#8a6bbf 5px,#8a6bbf 10px);}
+  .stackbox{height:150px;width:200px;position:relative;margin:26px 0 10px;}
+  .caption{font-size:.82rem;color:var(--muted);}
+  .kbox{background:#ecf9f1;border:1px solid #bfe6cf;border-radius:10px;padding:13px 16px;margin:12px 0;}
+  .kbox strong{color:#2a8a58;}
+  .pill{display:inline-block;background:#eef5fc;color:#2c5c8f;border-radius:20px;padding:2px 10px;font-size:.8rem;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sight-Cone Masking — compute co-visibility, live</h1>
+  <p>Move the sliders. Two camera patches may "talk" only if their cones cross in 3D.</p>
+</header>
+
+<div class="wrap">
+
+  <!-- ===== INTERACTIVE ===== -->
+  <div class="card">
+    <p class="lead">Top-down view. Each camera looks along one patch's line of sight, drawn as a <b>cone</b> (widening beam) between a near and far depth. The test: do the two cones <b>overlap</b> anywhere in the depth band?</p>
+    <div class="demo">
+      <div class="canvaswrap">
+        <canvas id="cv" width="640" height="420"></canvas>
+        <div class="legend">
+          <span><i class="sw" style="background:#4A8ED4"></i> Camera A cone (patch u)</span>
+          <span><i class="sw" style="background:#F79A38"></i> Camera B cone (patch u′)</span>
+          <span><i class="sw" style="background:#3DBD79"></i> closest-approach test</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="verdict" id="verdict">—</div>
+        <div class="ctrl"><label>Camera A aim <span id="aAv"></span></label><input type="range" id="aA" min="40" max="140" value="72"></div>
+        <div class="ctrl"><label>Camera B aim <span id="aBv"></span></label><input type="range" id="aB" min="40" max="140" value="108"></div>
+        <div class="ctrl"><label>Cone half-angle γ <span id="gv"></span></label><input type="range" id="g" min="3" max="26" value="12"></div>
+        <div class="ctrl"><label>Depth near d<sub>min</sub> <span id="dnv"></span></label><input type="range" id="dn" min="20" max="180" value="60"></div>
+        <div class="ctrl"><label>Depth far d<sub>max</sub> <span id="dfv"></span></label><input type="range" id="df" min="200" max="390" value="340"></div>
+        <div class="readout" id="readout"></div>
+      </div>
+    </div>
+    <p class="caption">Try: aim both cameras at the center → cones cross → <b>co-visible</b>. Aim A up-left and B up-right → no crossing → <b>blocked</b>. Widen γ or the depth band → more pairs become co-visible (more lenient).</p>
+  </div>
+
+  <!-- ===== HOW TO COMPUTE ===== -->
+  <h2>How co-visibility is computed — the exact steps</h2>
+  <div class="card">
+    <p class="lead">This is precisely what the slider demo runs each frame. For one pair of patches <code>u</code> (camera A) and <code>u′</code> (camera B):</p>
+    <ol class="steps">
+      <li><b>Build each cone.</b> Apex = the camera's optical center <code>p₀</code>. Axis <code>v̂</code> = the unit direction from that center through the patch's pixel, computed from the camera's <b>intrinsics</b> (focal length, principal point) and <b>extrinsics</b> (world position + orientation). Half-angle <code>γ</code> = the angular size of one patch (optionally widened by a factor <code>l ≥ 1</code>).</li>
+      <li><b>March along each axis inside the depth band.</b> A point on cone A is <code>pₐ(t) = p₀ᴬ + t·v̂ᴬ</code> for depth <code>t ∈ [d_min, d_max]</code>; same for cone B with depth <code>s</code>. The band handles the fact that you don't know how far the object is.</li>
+      <li><b>Find the closest approach.</b> Solve for the depths <code>(t*, s*)</code> — one on each axis — that make the two axes come nearest, then clamp <code>t*, s*</code> into <code>[d_min, d_max]</code>.</li>
+      <li><b>Compute the cone radius there.</b> A cone widens with depth: radius <code>r = t·tan(γ)</code>. So <code>r₁ = t*·tan(γ)</code> and <code>r₂ = s*·tan(γ)</code>.</li>
+      <li><b>Overlap test.</b> The cones intersect (patches are <b>co-visible</b>) if the gap between the two closest points is no bigger than the two radii combined:<br><code>‖pₐ(t*) − p_b(s*)‖ ≤ r₁ + r₂</code>.</li>
+      <li><b>Fill the mask.</b> <code>M_sc[u,u′] = 1</code> if co-visible (attention allowed), else <code>0</code> (attention gets a −∞ bias → blocked). Same-camera pairs are always <code>1</code> (the diagonal). Done for all pairs in parallel, once per sample.</li>
+    </ol>
+  </div>
+
+  <!-- ===== PARAMETERS ===== -->
+  <h2>The parameters / information you use</h2>
+  <div class="card">
+    <table>
+      <tr><th>Input</th><th>What it is</th><th>Where it comes from</th></tr>
+      <tr><td><b>Extrinsics</b></td><td>Each camera's 3D position and orientation</td><td>Robot calibration (fixed per robot)</td></tr>
+      <tr><td><b>Intrinsics</b></td><td>Focal length, principal point → turns a pixel into a ray direction</td><td>Camera calibration</td></tr>
+      <tr><td><b>Distortion</b></td><td>Lens warping correction for the ray</td><td>Camera calibration</td></tr>
+      <tr><td><b>Patch index (v, h, w)</b></td><td>Which view <code>v</code>, and the grid cell <code>(h, w)</code> of the patch → its pixel center</td><td>The token's position in the feature map</td></tr>
+      <tr><td><b>Half-angle γ (and scale l)</b></td><td>How wide the cone opens. <code>l&gt;1</code> = more lenient (allows more pairs)</td><td>Set from patch angular size; <code>l</code> is a tunable knob</td></tr>
+      <tr><td><b>Depth band [d_min, d_max]</b></td><td>Near/far range where objects are expected; the "depth of field" you test within</td><td>Tunable knob (scene scale)</td></tr>
+    </table>
+    <div class="kbox">
+      <strong>The two knobs you actually tune:</strong> the cone width <code>γ·l</code> and the depth band <code>[d_min, d_max]</code>. Both control leniency — bigger cones / wider band → more pairs pass as co-visible. Everything else is fixed by calibration. And it's all <b>training-only</b>: at inference the mask is dropped so the robot needs no live calibration.
+    </div>
+  </div>
+
+  <!-- ===== FIGURE 4 ===== -->
+  <h2>Reading Figure 4 — what are <span style="color:#3a3f4a">x</span> and <span style="color:var(--y)">y</span>?</h2>
+  <div class="card">
+    <p class="lead">Figure 4 has two panels. (a) is the sight-cone mask you just played with — a big allowed/blocked grid over patch pairs. (b) is the <b>tube mask</b>, and that's where <code>x</code> and <code>y</code> show up. Here's the key:</p>
+
+    <div class="kbox" style="background:#eef5fc;border-color:#cfe0f2;">
+      <strong style="color:#2c5c8f;">x = the video latents being generated (the "states")</strong><br>
+      The stack labelled <code>x_t, x_{t+1}, x_{t+2}…</code> is the sequence of <b>video frames the model is denoising</b> — the compact codes it is trying to produce. These are the "states"/tokens flowing through the network. (During training they're the noised targets; the model's job is to clean them up.)
+    </div>
+    <div class="kbox" style="background:#f3eefb;border-color:#c9b6e6;">
+      <strong style="color:#6b4a9a;">y = the conditioning channel (the hint / observed content)</strong><br>
+      <code>y</code> is the <b>conditioning</b> fed alongside <code>x</code> — the known/observed information (inpainting-style, "InP") that guides what to generate. Think of it as "here's what you already know about the scene." It rides along the frames but is <i>given</i>, not generated.
+    </div>
+
+    <h3>What the "tube" does with x and y</h3>
+    <div class="fig">
+      <div>
+        <div class="stackbox" id="xstack"></div>
+        <div class="caption"><b>x</b> — latents. A <b>tube</b> = the same small k×k window, held across <i>all</i> frames on one chosen view, is replaced with pure <b>noise</b>.</div>
+      </div>
+      <div>
+        <div class="stackbox" id="ystack"></div>
+        <div class="caption"><b>y</b> — conditioning. With a <i>nested</i> probability, the same tube is <b>also</b> masked here, so the model can't peek at the answer in the hint either.</div>
+      </div>
+    </div>
+    <div class="kbox">
+      <strong>Why do this?</strong> Normally the model could recover a masked patch by the easy route — copying from the <i>same view's other frames</i> (a temporal shortcut) or from the <i>conditioning y</i>. By blanking the whole tube through time in <b>x</b> (and sometimes in <b>y</b> too), <em>both</em> shortcuts are cut. The <b>only</b> way left to reconstruct that region is to attend to the <b>other cameras</b> — which forces cross-view attention to actually be learned and used. The reconstruction loss on that tube is even up-weighted to push harder.
+    </div>
+    <p class="caption">So the two masks are a team: <span class="pill">sight-cone</span> says <i>which</i> cross-view pairs are geometrically allowed; <span class="pill">tube</span> creates a <i>need</i> to use them. Both are training-only.</p>
+  </div>
+
+</div>
+
+<script>
+// ---------- interactive sight-cone ----------
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const W=cv.width, H=cv.height;
+const camA={x:150,y:360}, camB={x:490,y:360};
+const $=id=>document.getElementById(id);
+const els=['aA','aB','g','dn','df'].map($);
+
+function deg2rad(d){return d*Math.PI/180;}
+function dirFromAim(deg){const t=deg2rad(deg);return {x:Math.cos(t),y:-Math.sin(t)};} // 90=up
+function rot(v,a){const c=Math.cos(a),s=Math.sin(a);return {x:v.x*c - v.y*s, y:v.x*s + v.y*c};}
+function add(p,v,t){return {x:p.x+v.x*t, y:p.y+v.y*t};}
+function sub(a,b){return {x:a.x-b.x, y:a.y-b.y};}
+function dot(a,b){return a.x*b.x + a.y*b.y;}
+function len(a){return Math.hypot(a.x,a.y);}
+
+function closest(A,u,B,v,dmin,dmax){
+  const w0=sub(A,B);
+  const b=dot(u,v), d=dot(u,w0), e=dot(v,w0);
+  const D=1-b*b;
+  let t,s;
+  if(Math.abs(D)<1e-6){ t=(dmin+dmax)/2; s=(dmin+dmax)/2; }
+  else { t=(b*e - d)/D; s=(e - b*d)/D; }
+  t=Math.max(dmin,Math.min(dmax,t));
+  s=Math.max(dmin,Math.min(dmax,s));
+  return {t,s};
+}
+
+function coneRegion(cam,dir,g,dmin,dmax){
+  const eL=rot(dir, deg2rad(g)), eR=rot(dir,-deg2rad(g));
+  return [add(cam,eL,dmin), add(cam,eL,dmax), add(cam,eR,dmax), add(cam,eR,dmin)];
+}
+function poly(pts,fill,stroke){
+  ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);
+  ctx.closePath();ctx.fillStyle=fill;ctx.fill();
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1.5;ctx.stroke();}
+}
+function cameraDot(cam,color,label){
+  ctx.fillStyle=color;ctx.beginPath();ctx.arc(cam.x,cam.y,9,0,7);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='bold 12px sans-serif';ctx.textAlign='center';
+  ctx.fillText(label,cam.x,cam.y+4);
+}
+
+function draw(){
+  const aA=+$('aA').value, aB=+$('aB').value, g=+$('g').value, dmin=+$('dn').value, dmax=+$('df').value;
+  $('aAv').textContent=aA+'°';$('aBv').textContent=aB+'°';$('gv').textContent=g+'°';
+  $('dnv').textContent=dmin;$('dfv').textContent=dmax;
+
+  ctx.clearRect(0,0,W,H);
+  // ground grid
+  ctx.strokeStyle='rgba(255,255,255,.06)';ctx.lineWidth=1;
+  for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+
+  const dA=dirFromAim(aA), dB=dirFromAim(aB);
+  // cones
+  poly(coneRegion(camA,dA,g,dmin,dmax),'rgba(74,142,212,.30)','rgba(74,142,212,.8)');
+  poly(coneRegion(camB,dB,g,dmin,dmax),'rgba(247,154,56,.30)','rgba(247,154,56,.8)');
+
+  // closest approach + radii
+  const {t,s}=closest(camA,dA,camB,dB,dmin,dmax);
+  const PA=add(camA,dA,t), PB=add(camB,dB,s);
+  const r1=t*Math.tan(deg2rad(g)), r2=s*Math.tan(deg2rad(g));
+  const dist=len(sub(PA,PB));
+  const covis = dist <= r1+r2;
+
+  // radius circles
+  ctx.setLineDash([4,4]);
+  ctx.strokeStyle='rgba(74,142,212,.9)';ctx.beginPath();ctx.arc(PA.x,PA.y,r1,0,7);ctx.stroke();
+  ctx.strokeStyle='rgba(247,154,56,.9)';ctx.beginPath();ctx.arc(PB.x,PB.y,r2,0,7);ctx.stroke();
+  ctx.setLineDash([]);
+  // connecting line
+  ctx.strokeStyle=covis?'#3DBD79':'#F06B7F';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(PA.x,PA.y);ctx.lineTo(PB.x,PB.y);ctx.stroke();
+  // closest points
+  [[PA,'#4A8ED4'],[PB,'#F79A38']].forEach(([p,c])=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();});
+
+  cameraDot(camA,'#4A8ED4','A');cameraDot(camB,'#F79A38','B');
+
+  // verdict + readout
+  const v=$('verdict');
+  if(covis){v.className='verdict ok';v.textContent='CO-VISIBLE → attention ALLOWED';}
+  else{v.className='verdict no';v.textContent='NOT co-visible → attention BLOCKED (−∞)';}
+  $('readout').innerHTML=
+    `gap between cones = <b>${dist.toFixed(1)}</b><br>`+
+    `r₁ + r₂ = ${r1.toFixed(1)} + ${r2.toFixed(1)} = <b>${(r1+r2).toFixed(1)}</b><br>`+
+    `test: gap ${covis?'≤':'>'} r₁+r₂ → M_sc = <b>${covis?1:0}</b>`;
+}
+els.forEach(e=>e.addEventListener('input',draw));
+draw();
+
+// ---------- figure 4 schematic ----------
+function buildStack(id,ycond){
+  const box=document.getElementById(id);
+  const offsets=[{x:0,y:40},{x:26,y:20},{x:52,y:0}]; // 3 frames, back to front
+  offsets.forEach((o,idx)=>{
+    const f=document.createElement('div');
+    f.className='frame'+(ycond?' ycond':'');
+    f.style.left=o.x+'px';f.style.top=o.y+'px';f.style.zIndex=idx;
+    for(let c=0;c<12;c++){
+      const cell=document.createElement('div');
+      // tube = column index 1 (same window across all frames)
+      if(c%4===1) cell.className='tube';
+      f.appendChild(cell);
+    }
+    box.appendChild(f);
+  });
+}
+buildStack('xstack',false);
+buildStack('ystack',true);
+</script>
+</body>
+</html>

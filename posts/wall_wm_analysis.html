@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WALL-WM — A Beginner's Walkthrough (Pipeline · Data · Experiments)</title>
+<style>
+  :root{
+    --vla:#4A8ED4; --wm:#9B72CF; --wam:#3DBD79; --data:#F79A38;
+    --ink:#23303e; --muted:#5f6b78; --bg:#f7f9fc; --card:#fff; --line:#e4e9f0;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.65;}
+  header{background:linear-gradient(135deg,#3D5A9B,#9B72CF);color:#fff;padding:52px 24px 44px;text-align:center;}
+  header h1{margin:0 0 10px;font-size:2rem;letter-spacing:-.5px;}
+  header .sub{opacity:.95;font-size:1.05rem;max-width:680px;margin:0 auto;}
+  header .meta{margin-top:16px;font-size:.85rem;opacity:.85;}
+  .wrap{max-width:900px;margin:0 auto;padding:28px 24px 80px;}
+  section{margin:40px 0;}
+  h2{font-size:1.5rem;margin-bottom:6px;display:flex;align-items:center;gap:10px;border-bottom:2px solid var(--line);padding-bottom:8px;}
+  h3{font-size:1.15rem;margin:22px 0 6px;}
+  .dot{width:14px;height:14px;border-radius:50%;display:inline-block;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 24px;margin:16px 0;box-shadow:0 2px 10px rgba(30,50,90,.04);}
+  .lead{font-size:1.1rem;color:var(--muted);}
+  .tldr{background:#eef5fc;border-left:4px solid var(--vla);border-radius:0 10px 10px 0;padding:16px 20px;margin:16px 0;}
+  .analogy{background:#f3eefb;border-left:4px solid var(--wm);border-radius:0 10px 10px 0;padding:14px 18px;margin:14px 0;}
+  .analogy strong,.tldr strong{display:block;margin-bottom:4px;}
+  .why{background:#fffaf0;border:1px solid #f5e2bf;border-radius:10px;padding:14px 18px;margin:14px 0;}
+  .why strong{color:#b9791a;}
+  ul.clean{padding-left:20px;} ul.clean li{margin:6px 0;}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:.94rem;}
+  th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{background:#f0f4fa;font-weight:600;}
+  .num{font-variant-numeric:tabular-nums;}
+  .best{color:#2a8a58;font-weight:700;}
+  /* pipeline steps */
+  .steps{counter-reset:s;list-style:none;padding:0;}
+  .steps li{counter-increment:s;position:relative;padding:12px 0 12px 52px;margin:6px 0;border-bottom:1px dashed var(--line);}
+  .steps li:last-child{border-bottom:none;}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:12px;width:34px;height:34px;background:var(--data);color:#fff;border-radius:50%;text-align:center;line-height:34px;font-weight:700;}
+  .steps li b{color:var(--ink);}
+  /* flow boxes */
+  .flow{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px;margin:18px 0;}
+  .flow .box{background:#fff;border:2px solid var(--vla);border-radius:10px;padding:9px 14px;font-weight:600;font-size:.9rem;text-align:center;}
+  .flow .arrow{color:var(--muted);font-size:1.3rem;}
+  .flow.wm .box{border-color:var(--wm);}
+  .flow.data .box{border-color:var(--data);}
+  .grid{display:flex;flex-wrap:wrap;gap:14px;margin:14px 0;}
+  .grid .col{flex:1 1 230px;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;}
+  .grid .col h4{margin:0 0 6px;font-size:.98rem;}
+  .tag{display:inline-block;background:#eef5fc;color:#2c5c8f;border-radius:20px;padding:3px 11px;font-size:.8rem;margin:3px 4px 3px 0;}
+  .kbox{background:#ecf9f1;border:1px solid #bfe6cf;border-radius:10px;padding:14px 18px;margin:14px 0;}
+  .kbox strong{color:#2a8a58;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.86em;}
+  .glossary dt{font-weight:700;margin-top:10px;}
+  .glossary dd{margin:2px 0 0;color:var(--muted);}
+  .callq{font-weight:700;background:#f3eefb;border-radius:10px;padding:10px 15px;margin-bottom:6px;}
+  .callq::before{content:"❓ ";}
+  footer{text-align:center;color:var(--muted);font-size:.85rem;padding:24px;}
+  .toc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 22px;margin:18px 0;}
+  .toc a{color:var(--vla);text-decoration:none;} .toc a:hover{text-decoration:underline;}
+  .toc ol{margin:6px 0;padding-left:22px;} .toc li{margin:3px 0;}
+</style>
+</head>
+<body>
+<header>
+  <h1>WALL-WM: Carving World-Action Modeling at the Event Joints</h1>
+  <p class="sub">A gentle walkthrough for a newcomer — focused on <b>the pipeline</b>, <b>how the data is built</b>, and <b>the experiment setup</b>.</p>
+  <div class="meta">X Square Robot Team · June 2026 · arXiv:2606.01955 · A <b>World Action Model (WAM)</b> for robots</div>
+</header>
+
+<div class="wrap">
+
+  <div class="toc">
+    <b>What's inside</b>
+    <ol>
+      <li><a href="#big">The one big idea (in plain words)</a></li>
+      <li><a href="#pipe">The pipeline — how the model is put together</a></li>
+      <li><a href="#data">The data — how it's built and what format it takes</a></li>
+      <li><a href="#train">The training recipe (the stages)</a></li>
+      <li><a href="#exp">The experiment setting & results</a></li>
+      <li><a href="#glob">Mini-glossary + takeaways</a></li>
+    </ol>
+  </div>
+
+  <!-- ============ BIG IDEA ============ -->
+  <section id="big">
+    <h2><span class="dot" style="background:var(--wam)"></span> 1. The one big idea</h2>
+    <p class="lead">Recall from your intro: a <b>World Action Model</b> is a robot brain that both <i>imagines</i> what will happen (like a learned simulator) and <i>acts</i>. WALL-WM is one such model. Its whole contribution is about <b>where you cut the training data into pieces.</b></p>
+
+    <div class="card">
+      <h3>The problem it fixes: "cutting by the clock"</h3>
+      <p>Most robot models chop a task into <b>fixed-length chunks</b> — e.g. "predict the next 0.5 seconds of movement," over and over. Convenient, but it cuts blindly. A single clock-slice might land in the <i>middle</i> of grabbing a cup, or accidentally merge "reach" and "lift" into one blurry blob.</p>
+      <p>The paper's insight, borrowed from a Plato line — <i>"carve nature at its joints"</i>:</p>
+      <div class="tldr">
+        <strong>The core move</strong>
+        Don't cut by the clock. Cut by <b>meaningful events</b> — natural units of behavior like <i>reach, grasp, lift, move, place</i>. Each event is something you can name in words, see in the video, and carry out as an action. WALL-WM makes this "action-grounded semantic event" the atomic unit of learning.
+      </div>
+      <div class="analogy">
+        <strong>Everyday analogy</strong>
+        It's the difference between cutting a movie every 10 seconds regardless of what's happening, versus cutting it <i>at scene boundaries</i>. Scene-based cuts keep each clip coherent — a whole "reach for the cup" stays together instead of being split across two random slices.
+      </div>
+      <p>Why this matters: language (goals), vision (smooth scene changes), and action (fast motor control) all live at <b>different natural rhythms</b>. Forcing them into one fixed window mismatches all three. Events give a shared unit that all three modalities agree on.</p>
+    </div>
+
+    <div class="grid">
+      <div class="col"><h4>Two ways it can run</h4>
+        <p style="margin:0;color:var(--muted)"><b>Event mode:</b> something (a planner, a person, a VLM) proposes the next event in words → WALL-WM executes a <i>variable-length</i> segment until that event is done.<br><br><b>Unified mode:</b> the classic "fixed-length chunk" style is kept, but guided by a language-reasoning module so it still benefits from event structure.</p>
+      </div>
+      <div class="col"><h4>What it is built from</h4>
+        <p style="margin:0;color:var(--muted)">A <b>video model</b> (predicts future frames — the "imaginer") glued layer-by-layer to an <b>action model</b> (predicts the robot's movements — the "doer"), plus a <b>language reasoner</b> on top. One system that sees, foresees, and acts.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PIPELINE ============ -->
+  <section id="pipe">
+    <h2><span class="dot" style="background:var(--vla)"></span> 2. The pipeline — how the model is put together</h2>
+    <p class="lead">Think of three cooperating parts. Here's each in plain terms, then how they connect.</p>
+
+    <div class="flow">
+      <span class="box">💬 Language reasoner<br><small>(what to do next)</small></span>
+      <span class="arrow">→</span>
+      <span class="box wm" style="border-color:var(--wm)">🔮 Video world model<br><small>(imagine future frames)</small></span>
+      <span class="arrow">↔</span>
+      <span class="box" style="border-color:var(--wam)">🦾 Action model<br><small>(produce movements)</small></span>
+    </div>
+
+    <div class="card">
+      <h3>Part A — The video "world model" (the imaginer)</h3>
+      <ul class="clean">
+        <li><b>Where it comes from:</b> it reuses a pre-trained <b>text-to-video model</b> (the "Wan" model) — an AI that already knows how to generate realistic video. That gives it visual common sense "for free," instead of learning the visual world from scratch.</li>
+        <li><b>What it does here:</b> given the current camera views + an instruction, it predicts the <i>future video</i> of the task — this is the "imagining what happens next" you learned about.</li>
+        <li><b>Multi-view &amp; multi-robot:</b> real robots have several cameras. WALL-WM adds a <b>cross-view attention</b> so the cameras can share information, plus a trick (<code>Camera RoPE</code>) that tags each token with <i>which camera</i> it came from, so one model works across different robots with different camera setups.</li>
+      </ul>
+      <div class="why">
+        <strong>Jargon decoded — "DiT" and "flow matching":</strong> A <b>DiT</b> is just the specific neural-network style used (a Transformer that generates images/video). <b>Flow matching</b> is the training method: it teaches the model to turn random noise into a clean video step by step. You don't need the math — think "a modern video generator, trained to denoise."
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Part B — The action model (the doer)</h3>
+      <ul class="clean">
+        <li>A second Transformer, the same depth as the video one, that outputs the robot's <b>end-effector trajectory</b> (where the hand/gripper should go).</li>
+        <li><b>Layer-wise coupling — the key link:</b> at every layer, the action model <i>reads the video model's features</i>. So the action stream is continuously informed by what the world model is imagining. The information flows <b>one way</b> (video → action), which keeps the video model's visual knowledge intact instead of being overwritten by short-horizon action shortcuts.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>Part C — The language reasoner (the planner)</h3>
+      <ul class="clean">
+        <li>Built on a <b>vision-language model</b> (a Qwen 9B model) that reads the scene + your instruction and figures out the <i>next event</i> to do and roughly how long it will take.</li>
+        <li><b>Staircase Decoding</b> — their speed trick: normally a model "thinks" one reasoning step at a time (slow). Staircase decoding produces the reasoning steps <b>in parallel</b> across different layers of the network, so long-horizon planning stays fast enough for real-time control.</li>
+      </ul>
+    </div>
+
+    <div class="kbox">
+      <strong>How they cooperate at run-time:</strong> the language reasoner names the next event → the video world model imagines that event unfolding → the action model, reading those imagined features layer by layer, produces the actual movements → the robot executes → then it looks at the new scene and repeats. This is exactly the "dream-before-you-do" loop, made concrete.
+    </div>
+  </section>
+
+  <!-- ============ DATA ============ -->
+  <section id="data">
+    <h2><span class="dot" style="background:var(--data)"></span> 3. The data — how it's built &amp; what format it takes</h2>
+    <p class="lead">This is where a lot of the real work is. The model is only as good as the data feeding it, and WALL-WM builds a careful "data ecosystem." Here's the whole journey from raw footage to training-ready examples.</p>
+
+    <h3>3a. Where the data comes from (the sources)</h3>
+    <div class="grid">
+      <div class="col"><h4>🎬 General internet video</h4><p style="margin:0;color:var(--muted)">Broad visual/physics common sense at huge scale. Includes a <b>1.2M-clip</b> slice of OpenVID plus web video (YouTube, HD-VILA).</p></div>
+      <div class="col"><h4>🧑 Egocentric human video</h4><p style="margin:0;color:var(--muted)">First-person "hands doing things" footage (Ego4D, EPIC-KITCHENS) — teaches manipulation geometry without a robot.</p></div>
+      <div class="col"><h4>🕶️ Robot-free "UMI" recordings</h4><p style="margin:0;color:var(--muted)">A person wears a rig with cameras + handheld grippers (no robot). Cheap to collect, and already shaped like what the robot will see.</p></div>
+      <div class="col"><h4>🤖 Robot teleoperation</h4><p style="margin:0;color:var(--muted)">Real robots driven by humans → true <code>[video + action]</code> pairs. From their own platforms plus DROID, AgiBot World.</p></div>
+    </div>
+    <p>A special <b>recovery / failure source</b> sits in the center: clips of the robot fixing mistakes (re-grasping, retrying). These "how to recover" moments are rare but crucial, so they're deliberately over-sampled.</p>
+
+    <div class="why">
+      <strong>Their own collection hardware:</strong> tabletop bimanual (two-arm) robots, mobile robots (QUANTA X1 / X1 Pro), and a wheeled humanoid (QUANTA X2) with dexterous hands. Plus <b>XRZero-G0</b>: a wearable no-robot rig — a VR-tracked headset with three cameras + two handheld grippers. Because no robot is tied up, they can collect data <i>much</i> faster and pair a small "anchor" of real-robot data with a large volume of this cheap data.
+    </div>
+
+    <h3>3b. The data-processing pipeline (raw → training-ready)</h3>
+    <ol class="steps">
+      <li><b>Collect</b> — two styles: <i>structured</i> (one clean demo of a named task, with defined start/end) and <i>unstructured</i> (operator just moves freely for a long time). Both feed the same downstream pipeline.</li>
+      <li><b>Temporal synchronization</b> — a subtle but vital fix. The camera and the action log are often <i>slightly out of sync</i> (e.g. a ~100 ms / 2-frame offset at 20 FPS). If left alone, the model links an image to the <i>wrong</i> action — disastrous near contact ("approaching" vs "grasping"). They measure motion in the video (optical flow) and motion in the actions, slide one against the other to find the true offset, then re-align them.</li>
+      <li><b>Deployment-alignment cleaning</b> — throw out bad episodes: missing cameras, jumpy/duplicated action records, wrong frame-rate, gripper glitches, or motions the robot physically can't reach.</li>
+      <li><b>Hierarchical captioning</b> — segment each episode at <i>action boundaries</i> and label it at four zoom levels (see 3c). This is what turns raw video into <b>event-grounded</b> data.</li>
+      <li><b>Cluster-balanced sampling</b> — group examples by <i>scene+instruction</i> and separately by <i>motion type</i>, then sample training batches evenly across groups so rare-but-important behaviors (recoveries, unusual tasks) aren't drowned out by common ones.</li>
+      <li><b>Recovery augmentation</b> — near contact-rich moments, deliberately perturb the robot's start pose and record how it recovers, filling in the "what if it slips" space that normal demos rarely show.</li>
+    </ol>
+
+    <h3>3c. The data format (what one example actually looks like)</h3>
+    <p>After cleaning, every episode becomes a <b>canonical record</b> containing:</p>
+    <div class="grid">
+      <div class="col"><h4>📹 Synchronized multi-view video</h4><p style="margin:0;color:var(--muted)">Several camera streams, time-aligned.</p></div>
+      <div class="col"><h4>🎯 Aligned action records</h4><p style="margin:0;color:var(--muted)">The end-effector trajectory, re-indexed to the video clock.</p></div>
+      <div class="col"><h4>📐 Camera + robot-state metadata</h4><p style="margin:0;color:var(--muted)">Calibration, proprioception (the robot's own joint/pose readings).</p></div>
+      <div class="col"><h4>🏷️ Source + confidence flags</h4><p style="margin:0;color:var(--muted)">Where it came from, plus quality/cleaning provenance.</p></div>
+    </div>
+
+    <p style="margin-top:18px;">And crucially, each episode carries a <b>four-level caption hierarchy</b> — the same clip described at four zoom levels:</p>
+    <table>
+      <tr><th>Level</th><th>Name</th><th>Describes</th><th>Example</th></tr>
+      <tr><td><b>L3</b></td><td>Task</td><td>The whole goal of the episode</td><td>"Put the socks and pants into the laundry basket in order."</td></tr>
+      <tr><td><b>L2</b></td><td>Subtask</td><td>A meaningful stage</td><td>"Place pants into laundry basket."</td></tr>
+      <tr><td><b>L1</b></td><td>Action</td><td>A single primitive motion</td><td>"Close the fingers", "lift", "release gripper."</td></tr>
+      <tr><td><b>L0</b></td><td>Segment</td><td>The finest short events (incl. corrections)</td><td>"Adjust wrist posture before grasping."</td></tr>
+    </table>
+    <p>A fifth optional <b>Human</b> layer holds hand-annotated labels on a subset — used as a trusted reference to check the auto-generated captions. This multi-level scheme is what lets the model learn both the big goal <i>and</i> the tiny recovery motions, instead of averaging them away.</p>
+
+    <div class="kbox">
+      <strong>The data takeaway in one line:</strong> take many kinds of video (web → human → robot-free rig → real robot), <b>sync the video and action clocks</b>, <b>clean</b> aggressively, then <b>label every clip at four event-zoom levels</b> and <b>sample it in a balanced way</b>. The output is <code>[multi-view video + aligned action + 4-level event captions + metadata]</code>.
+    </div>
+  </section>
+
+  <!-- ============ TRAINING ============ -->
+  <section id="train">
+    <h2><span class="dot" style="background:var(--vla)"></span> 4. The training recipe (built in stages)</h2>
+    <p class="lead">They don't train everything at once. Each stage adds one capability while freezing the parts already learned (freezing = "keep it fixed so it isn't damaged").</p>
+    <table>
+      <tr><th>Stage</th><th>What is trained</th><th>Plain purpose</th></tr>
+      <tr><td><b>1. Video pre-training</b></td><td>Video model only</td><td>Teach the "imaginer" to predict future frames of events, starting from the Wan video prior.</td></tr>
+      <tr><td><b>2. Action pre-training</b></td><td>Action model (video frozen)</td><td>Teach the "doer" to produce movements while reading the frozen imaginer's features.</td></tr>
+      <tr><td><b>3. VLM text conditioner</b></td><td>Language-model adapter heads</td><td>Wire the Qwen vision-language model in as the instruction/next-event brain.</td></tr>
+      <tr><td><b>4. Staircase distillation</b></td><td>Reasoning branch</td><td>Teach the fast parallel "thinking" (latent chain-of-thought).</td></tr>
+      <tr><td><b>5. Next-chunk adaptation</b></td><td>Both towers (optional)</td><td>Adapt to the fixed-length "unified mode" for classic VLA-style evaluation.</td></tr>
+    </table>
+    <div class="grid">
+      <div class="col"><h4>A couple of behind-the-scenes details</h4>
+        <p style="margin:0;color:var(--muted)">A <b>3D VAE</b> compresses video into compact "latents" (the model reasons over these small codes, not raw pixels — exactly the "invent your own compact state" idea). Clips are capped at 65 latent frames.</p>
+      </div>
+      <div class="col"><h4>Making it fast &amp; cheap</h4>
+        <p style="margin:0;color:var(--muted)">A custom optimizer (<b>DMuon</b>), custom GPU kernels, and packing many events into one sequence. For deployment they <b>distill</b> (fewer denoising steps) and use <b>FP8</b> (lower-precision math) to hit <b>10 Hz</b> control — fast enough to run a real robot loop.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ EXPERIMENTS ============ -->
+  <section id="exp">
+    <h2><span class="dot" style="background:var(--wam)"></span> 5. The experiment setting &amp; results</h2>
+    <p class="lead">They test two different things: (1) is it a good <b>imaginer</b> (video generation)? and (2) is it a good <b>doer</b> (real robots)?</p>
+
+    <h3>5a. Test 1 — Embodied video generation (the imaginer)</h3>
+    <div class="card">
+      <ul class="clean">
+        <li><b>Setup:</b> give the model an initial view + instruction, ask it to generate the future video. Evaluated with the <b>WorldArena</b> protocol on a benchmark of <b>200 in-distribution + 50 out-of-distribution tasks</b> (OOD = novel object–verb pairings, unseen scenes — a test of true generalization).</li>
+        <li><b>Baselines:</b> the general video generators Wan2.1 and Wan2.2 (the same family WALL-WM started from).</li>
+        <li><b>What they measure:</b> not just "does it look pretty," but embodied-relevant qualities — <i>Motion Quality</i>, <i>Semantic Consistency</i> (does it follow the instruction?), and <i>Physical Plausibility</i> (do contacts/physics look real?).</li>
+      </ul>
+      <table>
+        <tr><th>Model</th><th>Semantic Alignment ↑</th><th>Motion Smoothness ↑</th><th>Interaction Quality ↑</th><th>Instruction Following ↑</th></tr>
+        <tr><td>Wan2.1-1.3B</td><td class="num">0.857</td><td class="num">0.619</td><td class="num">0.219</td><td class="num">0.308</td></tr>
+        <tr><td>Wan2.2-5B</td><td class="num">0.805</td><td class="num">0.683</td><td class="num">0.226</td><td class="num">0.298</td></tr>
+        <tr><td><b>WALL-WM</b></td><td class="num best">0.886</td><td class="num best">0.771</td><td class="num best">0.434</td><td class="num best">0.391</td></tr>
+      </table>
+      <p style="margin:0;color:var(--muted)">Reading it: WALL-WM wins clearly on the <i>physical/interaction</i> qualities that matter for robots — its embodied training turned a generic video model into one that respects real-world physics. (It also stays competitive on a separate 3D-awareness test on CO3Dv2.)</p>
+    </div>
+
+    <h3>5b. Test 2 — Real-robot manipulation (the doer)</h3>
+    <div class="card">
+      <ul class="clean">
+        <li><b>Setup:</b> a real tabletop two-arm robot, multi-view cameras, language instructions.</li>
+        <li><b>Metric — "Task Progress" (0–100):</b> instead of a harsh pass/fail, they score <i>how far</i> the robot got toward the goal. This captures partial success (e.g. grasped but didn't place), which pass/fail would hide.</li>
+        <li><b>Baselines:</b> π<sub>0.5</sub>, DreamZero, LingBot-VA (recent robot models), plus <b>WALL-WM-U-Scratch</b> — the same architecture but trained <i>without</i> the event-centric pretraining, to isolate what the event idea actually buys.</li>
+        <li><b>Four test suites:</b> everyday manipulation, reasoning (pick the right object), dexterous (precise insertion), and generalization (cluttered scene, shuffled instructions).</li>
+      </ul>
+      <table>
+        <tr><th>Suite (what it tests)</th><th>WALL-WM (event)</th><th>U-Scratch<br><small>(no event pretrain)</small></th><th>π<sub>0.5</sub></th><th>DreamZero</th><th>LingBot-VA</th></tr>
+        <tr><td><b>Diverse</b> — everyday grasp/place/pour</td><td class="num best">75.9</td><td class="num">63.0</td><td class="num">55.5</td><td class="num">40.0</td><td class="num">29.7</td></tr>
+        <tr><td><b>Reasoning</b> — pick the right object/order</td><td class="num best">71.6</td><td class="num">59.5</td><td class="num">56.4</td><td class="num">—</td><td class="num">31.6</td></tr>
+        <tr><td><b>Dexterous</b> — precise insertion</td><td class="num best">32.0</td><td class="num">31.3</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+        <tr><td><b>Generalization</b> — clutter + shuffled instructions</td><td class="num best">53.8</td><td class="num">18.5</td><td class="num">24.0</td><td class="num">28.5</td><td class="num">—</td></tr>
+      </table>
+      <p style="margin:0;color:var(--muted)">Reading it: WALL-WM leads every suite on average. The gap is largest on <b>Generalization</b> (53.8 vs ~18–28) — the event idea helps most exactly where the robot must handle new, messy situations. On <b>Dexterous</b> the gap is small: precise insertion is limited by fine motor accuracy, which event-structure alone doesn't solve.</p>
+    </div>
+
+    <div class="why">
+      <strong>The honest limitations (the paper says so itself):</strong> dexterous fine-contact tasks are still hard (low absolute scores). Bigger models help but cost latency. And they note their real-robot evaluation runs on <i>their own</i> hardware with heavy tuning, so cross-system comparisons aren't perfectly apples-to-apples.
+    </div>
+  </section>
+
+  <!-- ============ GLOSSARY ============ -->
+  <section id="glob">
+    <h2><span class="dot" style="background:var(--vla)"></span> 6. Mini-glossary &amp; takeaways</h2>
+    <dl class="glossary">
+      <dt>WAM (World Action Model)</dt><dd>A model that both imagines the future and acts — the family WALL-WM belongs to.</dd>
+      <dt>Action-grounded semantic event</dt><dd>The atomic unit here: a coherent bit of behavior (reach/grasp/lift…) you can name, see, and do. The "joint" they carve at.</dd>
+      <dt>Chunk-centric vs event-centric</dt><dd>Cutting the data by a fixed clock vs. by meaningful events. The paper argues for events.</dd>
+      <dt>DiT / flow matching</dt><dd>The network style (Transformer generator) and its training method (denoise noise into clean video/action). Just "a modern generator."</dd>
+      <dt>Latents / VAE</dt><dd>Compact codes the model reasons over instead of raw pixels — cheaper and cleaner.</dd>
+      <dt>Teleoperation</dt><dd>A human remotely driving the robot to create demonstration data.</dd>
+      <dt>Proprioception</dt><dd>The robot's sense of its own body — joint angles, gripper pose.</dd>
+      <dt>Task Progress</dt><dd>A 0–100 score for how far the robot got, not just pass/fail.</dd>
+    </dl>
+
+    <div class="tldr">
+      <strong>Three sentences to remember</strong>
+      1) WALL-WM's big idea: cut robot training data at <b>meaningful events</b>, not by a fixed clock.<br>
+      2) Its pipeline glues a <b>video world model</b> (imaginer) to an <b>action model</b> (doer), guided by a <b>language reasoner</b> — and its data is many video sources, clock-synced, cleaned, and labeled at four event-zoom levels.<br>
+      3) In experiments it makes a generic video model physically realistic <i>and</i> tops real-robot manipulation, winning most where generalization is hardest.
+    </div>
+
+    <div class="kbox">
+      <strong>Where this connects to your intro:</strong> WALL-WM is the concrete version of the "dream-before-you-do" loop — the video model is the <i>learned simulator</i> (knowledge), and the action model + language reasoner supply the <i>decision</i>. It's a real World Action Model you can now read the source paper for. Next good step: skim its Figure 2 and Figure 3 with this map in hand.
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  Beginner walkthrough of WALL-WM (arXiv:2606.01955) · focused on pipeline, data, and experiments · PDF saved alongside this file.
+</footer>
+</body>
+</html>

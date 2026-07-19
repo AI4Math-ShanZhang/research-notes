@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WALL-WM — Input → Output Data Flow</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --vis:#4A8ED4;--txt:#9B72CF;--act:#3DBD79;--state:#F79A38;--world:#38BDB8;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.55;}
+  header{background:linear-gradient(135deg,#3D5A9B,#38BDB8);color:#fff;padding:34px 20px;text-align:center;}
+  header h1{margin:0 0 6px;font-size:1.55rem;}
+  header p{margin:0;opacity:.95;}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 18px 70px;}
+  h2{font-size:1.3rem;border-bottom:2px solid var(--line);padding-bottom:6px;margin-top:34px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 20px;margin:14px 0;box-shadow:0 2px 10px rgba(30,50,90,.04);}
+  .lead{color:var(--muted);font-size:1.05rem;}
+  /* stream legend */
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.85rem;margin:10px 0;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:14px;height:14px;border-radius:4px;display:inline-block;}
+  /* tensor chips */
+  .tensor{display:inline-block;border-radius:8px;padding:6px 10px;margin:4px 5px 4px 0;font-size:.82rem;border:1px solid;background:#fff;vertical-align:top;}
+  .tensor .nm{font-weight:700;}
+  .tensor .sh{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.8rem;}
+  .tensor .ds{display:block;color:var(--muted);font-size:.74rem;margin-top:2px;max-width:210px;}
+  .t-vis{border-color:var(--vis);} .t-vis .nm{color:var(--vis);}
+  .t-txt{border-color:var(--txt);} .t-txt .nm{color:var(--txt);}
+  .t-act{border-color:var(--act);} .t-act .nm{color:var(--act);}
+  .t-state{border-color:var(--state);} .t-state .nm{color:var(--state);}
+  .t-world{border-color:var(--world);} .t-world .nm{color:var(--world);}
+  /* stage */
+  .stage{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:center;margin:10px 0;}
+  .io{}
+  .op{background:#f0f4fa;border:1px solid var(--line);border-radius:12px;padding:12px 14px;text-align:center;min-width:150px;}
+  .op b{display:block;font-size:.95rem;}
+  .op small{color:var(--muted);font-size:.76rem;}
+  .arrow{text-align:center;color:var(--muted);font-size:1.3rem;margin:-4px 0;}
+  .stagehead{font-weight:700;color:var(--ink);margin:16px 0 2px;font-size:1.02rem;display:flex;align-items:center;gap:8px;}
+  .stagehead .n{background:#38BDB8;color:#fff;border-radius:50%;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem;}
+  .note{font-size:.85rem;color:var(--muted);margin:4px 0 0;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:.88rem;}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:#f0f4fa;}
+  .sh{font-family:ui-monospace,Menlo,Consolas,monospace;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.85em;}
+  .toggle{display:inline-flex;gap:6px;margin:6px 0;}
+  .toggle button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 14px;cursor:pointer;font-weight:600;}
+  .toggle button.on{background:var(--txt);color:#fff;border-color:var(--txt);}
+  .hidden{display:none;}
+  .kbox{background:#ecf9f1;border:1px solid #bfe6cf;border-radius:10px;padding:13px 16px;margin:12px 0;}
+  .kbox strong{color:#2a8a58;}
+  .loop{background:#fff8ec;border:1px solid #f0d79a;border-radius:10px;padding:13px 16px;margin:12px 0;}
+  .loop strong{color:#b9791a;}
+  /* S1-S4 fusion */
+  .fusion{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;}
+  .sbox{flex:1 1 200px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fff;position:relative;}
+  .sbox .tag{font-weight:700;font-size:.82rem;border-radius:20px;padding:2px 10px;color:#fff;display:inline-block;margin-bottom:6px;}
+  .sbox .where{float:right;font-size:.72rem;color:var(--muted);font-weight:600;margin-top:2px;}
+  .sbox b{display:block;margin:2px 0 4px;font-size:.95rem;}
+  .sbox p{margin:0;font-size:.84rem;color:var(--muted);}
+  .s1 .tag{background:var(--vis);} .s2 .tag{background:var(--world);}
+  .s3 .tag{background:#7a86c9;} .s4 .tag{background:var(--act);}
+  .fusionflow{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.8rem;background:#0f1622;color:#d7e0ea;border-radius:10px;padding:12px 14px;white-space:pre;overflow-x:auto;line-height:1.5;margin:12px 0;}
+  .fusionflow .v{color:#7cc4ff;} .fusionflow .a{color:#7ee0a6;} .fusionflow .c{color:#c9a6ff;}
+</style>
+</head>
+<body>
+<header>
+  <h1>WALL-WM Data Flow: from cameras & words to motor numbers</h1>
+  <p>Every stage: what tensor goes in, what operation runs, what tensor comes out.</p>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <p class="lead"><b>The 10-second version.</b> Three things go IN — <span style="color:var(--vis)">camera images</span>, a <span style="color:var(--txt)">language instruction</span>, and the <span style="color:var(--state)">robot's own pose</span>. One thing comes OUT — a <span style="color:var(--act)">table of movement numbers</span> the motors run. The <span style="color:var(--world)">world model</span> (imagined future video) rides along to guide the action. Everything below is just that, in detail.</p>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--vis)"></i> vision stream</span>
+      <span><i class="sw" style="background:var(--txt)"></i> language stream</span>
+      <span><i class="sw" style="background:var(--state)"></i> robot state</span>
+      <span><i class="sw" style="background:var(--world)"></i> world-model (video)</span>
+      <span><i class="sw" style="background:var(--act)"></i> action stream</span>
+    </div>
+    <p class="note">Shapes below are written as <span class="sh">[dims]</span> with example numbers. Symbols: <b>N<sub>v</sub></b> cameras · <b>H,W</b> image size · <b>T</b> frames · <b>h,w,C</b> latent size/channels · <b>D</b> model width · <b>L</b> text length · <b>K</b> reasoning steps · <b>T<sub>a</sub></b> action steps (chunk) · <b>A</b> action dims per step.</p>
+  </div>
+
+  <!-- ============ INPUTS ============ -->
+  <div class="stagehead"><span class="n">0</span> Inputs (what the robot has right now)</div>
+  <div class="card">
+    <div class="tensor t-vis"><span class="nm">multi-view image</span> <span class="sh">[N_v, H, W, 3]</span><span class="ds">e.g. [3, 480, 640, 3] uint8 — 3 cameras, RGB pixels</span></div>
+    <div class="tensor t-txt"><span class="nm">instruction</span> <span class="sh">"put the cup in the sink"</span><span class="ds">a text string</span></div>
+    <div class="tensor t-state"><span class="nm">proprio state s</span> <span class="sh">[D_s]</span><span class="ds">e.g. [14] float — arm joint angles + gripper, the robot's sense of its own body</span></div>
+    <p class="note">During <b>training</b> there is also a target: the true future video + true action trajectory. At <b>run-time</b> those are what we generate.</p>
+  </div>
+
+  <!-- ============ VISION ENCODE ============ -->
+  <div class="stagehead"><span class="n">1</span> Encode vision — pixels → latents (3D VAE)</div>
+  <div class="card">
+    <div class="stage">
+      <div class="io"><div class="tensor t-vis"><span class="nm">raw frames</span> <span class="sh">[N_v, T, H, W, 3]</span><span class="ds">pixels, per camera over time</span></div></div>
+      <div class="op"><b>3D VAE encoder</b><small>compress space ÷8 & time (1+4N → 1+N frames)</small></div>
+      <div class="io"><div class="tensor t-vis"><span class="nm">video latents</span> <span class="sh">[N_v, T_lat, h, w, C]</span><span class="ds">e.g. [3, ≤65, 60, 80, 16] float — small codes, not pixels</span></div></div>
+    </div>
+    <p class="note">Why: pixels are huge and redundant. The VAE squeezes each frame into a compact grid of numbers (the "invent your own compact state" idea). All the heavy modelling happens on these latents.</p>
+  </div>
+
+  <!-- ============ TOKENIZE ============ -->
+  <div class="stagehead"><span class="n">2</span> Tokenize vision — latents → a sequence of tokens</div>
+  <div class="card">
+    <div class="stage">
+      <div class="io"><div class="tensor t-vis"><span class="nm">video latents</span> <span class="sh">[N_v, T_lat, h, w, C]</span></div></div>
+      <div class="op"><b>patchify + linear</b><small>cut each latent frame into p×p patches → embed to width D<br>+ Camera RoPE (tags which camera)</small></div>
+      <div class="io"><div class="tensor t-vis"><span class="nm">video tokens</span> <span class="sh">[N_v, S, D]</span><span class="ds">S = T_lat·(h/p)·(w/p) tokens per view, each a D-vector</span></div></div>
+    </div>
+    <p class="note">Now the video is a list of tokens (like words), ready for a Transformer. Sight-cone + tube masks act on <i>these</i> tokens during training.</p>
+  </div>
+
+  <!-- ============ LANGUAGE ============ -->
+  <div class="stagehead"><span class="n">3</span> Language-Guided Reasoning — the Qwen "brain" (instruction → conditioning)</div>
+  <div class="card">
+    <p class="lead">This is the <b>planner</b>. A vision-language model — <b>Qwen3.5-9B</b> — reads the current views + the instruction and <i>reasons</i> before anything is generated. It's needed because a raw instruction ("organize the items") is too coarse for a long task; the VLM turns it into concrete, step-appropriate guidance.</p>
+    <div class="stage">
+      <div class="io">
+        <div class="tensor t-vis"><span class="nm">multi-view observation</span> <span class="sh">[N_v, H, W, 3]</span></div>
+        <div class="tensor t-txt"><span class="nm">instruction ℓ</span> <span class="sh">"put the cup in the sink"</span></div>
+      </div>
+      <div class="op"><b>Qwen3.5-9B VLM</b><small>scene grounding · event decomposition · progress tracking · replanning</small></div>
+      <div class="io"><div class="tensor t-txt"><span class="nm">VLM hidden states H_q</span> <span class="sh">[L, D_vlm]</span></div></div>
+    </div>
+    <p class="note">The VLM does the four reasoning jobs a static instruction can't. Its output then takes one of two forms depending on the mode:</p>
+
+    <div class="toggle">
+      <button id="btnEvent" class="on">Event mode</button>
+      <button id="btnUnified">Unified mode</button>
+    </div>
+    <div id="pEvent">
+      <div class="stage">
+        <div class="io"><div class="tensor t-txt"><span class="nm">next-event caption</span> <span class="sh">"grasp the cup"</span><span class="ds">the VLM (or a human / agent) names the next event in words</span></div></div>
+        <div class="op"><b>T5 text encoder</b><small>words → embeddings</small></div>
+        <div class="io"><div class="tensor t-txt"><span class="nm">text conditioning c</span> <span class="sh">[L, D]</span><span class="ds">e.g. [~30, D] — one D-vector per token</span></div></div>
+      </div>
+      <p class="note">Event mode: the reasoner emits a natural-language next-event description that conditions one variable-length event.</p>
+    </div>
+    <div id="pUnified" class="hidden">
+      <div class="stage">
+        <div class="io"><div class="tensor t-txt"><span class="nm">VLM hidden states H_q</span> <span class="sh">[L, D_vlm]</span></div></div>
+        <div class="op"><b>Staircase decoder (MoT on Qwen)</b><small>reason → K continuous latent thoughts, in parallel</small></div>
+        <div class="io"><div class="tensor t-txt"><span class="nm">reasoning latents z</span> <span class="sh">[K, D]</span><span class="ds">a compact plan, NOT words — continuous, gradient-friendly</span></div></div>
+      </div>
+      <p class="note">Unified mode: the Staircase decoder turns the VLM's reasoning into K latent "thoughts" (fast, parallel) that steer fixed-length chunk generation.</p>
+    </div>
+
+    <div class="kbox" style="background:#f3eefb;border-color:#c9b6e6;margin-top:12px;">
+      <strong style="color:#6b4a9a;">Where does this conditioning go?</strong> Into the <b>Multi-View Video DiT's cross-attention</b> (Stage 4), alongside the image tokens — same path as any text/observation conditioning. So Language-Guided Reasoning shapes <b>what the world model imagines</b>; the <b>Action DiT inherits it indirectly</b> through the video→action coupling (S3–S4). The language sets the goal → the world model imagines the called play → the action tower runs it.
+    </div>
+  </div>
+
+  <!-- ============ WORLD MODEL ============ -->
+  <div class="stagehead"><span class="n">4</span> World model — imagine the future (Video DiT)</div>
+  <div class="card">
+    <div class="stage">
+      <div class="io">
+        <div class="tensor t-vis"><span class="nm">noisy future video tokens</span> <span class="sh">[N_v, S, D]</span></div>
+        <div class="tensor t-vis"><span class="nm">observation y (cond.)</span> <span class="sh">[N_v, S, D]</span><span class="ds">the known current frames (inpainting channel)</span></div>
+        <div class="tensor t-txt"><span class="nm">text c / latents z</span> <span class="sh">[L, D] / [K, D]</span></div>
+      </div>
+      <div class="op"><b>Multi-View Video DiT</b><small>flow-matching denoise, many steps<br>intra-view + cross-view attention</small></div>
+      <div class="io">
+        <div class="tensor t-vis"><span class="nm">clean future video latents</span> <span class="sh">[N_v, T_lat, h, w, C]</span></div>
+        <div class="tensor t-world"><span class="nm">per-layer video features h^V</span> <span class="sh">[N_v, S, D] × depth</span><span class="ds">the hidden states the action tower will read</span></div>
+      </div>
+    </div>
+    <p class="note">Starts from pure noise and refines it into a coherent future, guided by the observation + the instruction. Its <i>internal layer features</i> (h^V) are the key hand-off to the action tower.</p>
+  </div>
+
+  <!-- ============ ACTION MODEL ============ -->
+  <div class="stagehead"><span class="n">5</span> Action model — turn imagination into motion (Action DiT)</div>
+  <div class="card">
+    <div class="stage">
+      <div class="io">
+        <div class="tensor t-act"><span class="nm">noisy action tokens</span> <span class="sh">[T_a, D]</span></div>
+        <div class="tensor t-state"><span class="nm">proprio state s</span> <span class="sh">[D_s] → [1, D]</span></div>
+        <div class="tensor t-world"><span class="nm">video features h^V</span> <span class="sh">[N_v, S, D] (per layer)</span></div>
+      </div>
+      <div class="op"><b>Action DiT</b><small>same depth as video tower<br>each layer cross-attends to matched h^V (layer coupling)</small></div>
+      <div class="io"><div class="tensor t-act"><span class="nm">action hidden states</span> <span class="sh">[T_a, D]</span></div></div>
+    </div>
+    <p class="note">At every layer the action tower <i>reads</i> the world model's features for that layer — so the motion is continuously informed by the imagined future. Flow between them is one-way (video → action).</p>
+  </div>
+
+  <!-- ============ HEAD ============ -->
+  <div class="stagehead"><span class="n">6</span> Action head — hidden states → real numbers</div>
+  <div class="card">
+    <div class="stage">
+      <div class="io"><div class="tensor t-act"><span class="nm">action hidden states</span> <span class="sh">[T_a, D]</span></div></div>
+      <div class="op"><b>MLP head (regressor)</b><small>continuous — no vocabulary, no sampling</small></div>
+      <div class="io"><div class="tensor t-act"><span class="nm">action trajectory</span> <span class="sh">[T_a, A]</span><span class="ds">e.g. [16, 14] float — 16 steps × (Δpos, Δrot, gripper) per arm</span></div></div>
+    </div>
+    <p class="note">This is the "numbers, not words" head. Each row is one action step the motors can run directly.</p>
+  </div>
+
+  <!-- ============ ZOOM: SPATIAL-TEMPORAL FUSION ============ -->
+  <h2>Zoom in: Spatial-Temporal Fusion (S1→S4) — how Stages 4–5 actually connect</h2>
+  <div class="card">
+    <p class="lead">Figure 3(c) details how the multi-view video is fused and threaded into the action tower. It's <b>four sub-steps that repeat in every paired block</b> (the "× depth"). The trick: <b>where the "view" dimension sits in the tensor decides whether cameras are isolated or interacting.</b></p>
+
+    <div class="fusion">
+      <div class="sbox s1"><span class="tag">S1</span><span class="where">in Video DiT</span><b>Intra-view attention</b><p>Views on the <b>batch axis</b> → each camera attends within itself (space + time, 3D RoPE). The inherited single-camera skill, unchanged.</p></div>
+      <div class="sbox s2"><span class="tag">S2</span><span class="where">in Video DiT</span><b>Cross-view attention</b><p>Regroup per frame → cameras attend to <b>each other</b> (Camera RoPE + sight-cone/tube masks). Added via a zero-init gate, so it ramps up during training.</p></div>
+      <div class="sbox s3"><span class="tag">S3</span><span class="where">the bridge</span><b>ViewConcat</b><p>Concatenate the per-view tokens along the <b>sequence axis</b> into one fused sequence → this becomes the keys/values.</p></div>
+      <div class="sbox s4"><span class="tag">S4</span><span class="where">in Action DiT</span><b>Block-wise coupling</b><p>The action block <b>cross-attends</b> to those fused video keys/values. One-way (video → action), at every block.</p></div>
+    </div>
+
+    <div class="fusionflow"><span class="v">VIDEO DiT block  ─►  [ S1 intra-view ] → [ S2 cross-view ]  ─►  h^V (per-view features)</span>
+                                                            │
+                                          <span class="c">[ S3 ViewConcat: fuse views → K,V ]</span>
+                                                            │  (one-way)
+<span class="a">ACTION DiT block ───────────────────────────────► [ S4 cross-attend to K,V ]</span></div>
+
+    <p class="note"><b>Where each runs:</b> <span style="color:var(--vis)">S1</span> and <span style="color:var(--world)">S2</span> are purely inside the <b>Multi-View Video DiT</b>; <span style="color:#7a86c9">S3</span> is the hand-off prep (rearranging the video tower's outputs); <span style="color:var(--act)">S4</span> happens in the <b>Action DiT</b>. So the fusion lives in the video tower, but the coupling (S3–S4) reaches into the action tower — and the whole pattern repeats at every layer.</p>
+    <p class="note"><b>Two axes:</b> temporal fusion = S1 across frames; spatial fusion = S1 within a frame + S2 across cameras. "Spatial-temporal fusion" = doing both, then coupling the result into action.</p>
+  </div>
+
+  <!-- ============ EXECUTE ============ -->
+  <div class="stagehead"><span class="n">7</span> Execute & loop</div>
+  <div class="card">
+    <div class="stage">
+      <div class="io"><div class="tensor t-act"><span class="nm">action trajectory</span> <span class="sh">[T_a, A]</span></div></div>
+      <div class="op"><b>robot controller</b><small>inverse kinematics → motor commands</small></div>
+      <div class="io"><div class="tensor t-state"><span class="nm">robot moves</span> <span class="sh">→ new [N_v,H,W,3]</span><span class="ds">new camera view after acting</span></div></div>
+    </div>
+    <div class="loop"><strong>The rolling loop:</strong> execute the chunk → observe the new scene → go back to Stage 1. Event mode re-plans at each event boundary; unified mode at each fixed chunk. <i>(Optional: a VAE decoder can turn the video latents back into watchable pixels <span class="sh">[N_v,T,H,W,3]</span>, but that's only for visualization — the robot never needs it.)</i></div>
+  </div>
+
+  <!-- ============ CHEAT SHEET ============ -->
+  <h2>Format cheat-sheet</h2>
+  <div class="card">
+    <table>
+      <tr><th>Data</th><th>Shape (example)</th><th>What it is</th></tr>
+      <tr><td>Pixels</td><td class="sh">[N_v, T, H, W, 3]</td><td>raw camera video, uint8</td></tr>
+      <tr><td>Video latents</td><td class="sh">[N_v, T_lat, h, w, C]</td><td>VAE-compressed video, float</td></tr>
+      <tr><td>Video tokens</td><td class="sh">[N_v, S, D]</td><td>patchified latents, ready for Transformer</td></tr>
+      <tr><td>Text embeddings</td><td class="sh">[L, D]</td><td>instruction encoded (event mode)</td></tr>
+      <tr><td>Reasoning latents</td><td class="sh">[K, D]</td><td>staircase "thoughts" (unified mode)</td></tr>
+      <tr><td>Proprio state</td><td class="sh">[D_s]</td><td>robot's own pose readings</td></tr>
+      <tr><td>Action tokens</td><td class="sh">[T_a, D]</td><td>internal action representation</td></tr>
+      <tr><td>Action trajectory</td><td class="sh">[T_a, A]</td><td>the OUTPUT — movement numbers</td></tr>
+    </table>
+    <p class="note">The whole journey is a chain of format changes: <b>pixels → latents → tokens → hidden features → numbers</b>. No discrete "word" appears anywhere in the action path — it stays continuous end-to-end.</p>
+  </div>
+
+  <!-- ============ INSIGHTS ============ -->
+  <h2>Three insights for the VLA task</h2>
+  <div class="kbox">
+    <strong>1. It's a translation problem across formats.</strong> A VLA model is fundamentally: <span class="sh">images + words + state → action numbers</span>. Everything in the middle (VAE, tokens, DiT, head) is just converting between representations so a Transformer can bridge those very different formats.
+  </div>
+  <div class="kbox">
+    <strong>2. The world model is a helper, not the output.</strong> The imagined future video (<span style="color:var(--world)">teal</span>) is generated so its <i>features</i> can guide the action tower. The robot's actual output is only the action numbers. "Dream to act better."
+  </div>
+  <div class="kbox">
+    <strong>3. Two towers, coupled layer-by-layer, one-way.</strong> Video tower imagines; action tower acts; at each depth the action tower reads the video tower's features. Keeping it one-way protects the video model's visual knowledge from being overwritten by short-horizon action shortcuts.
+  </div>
+
+</div>
+
+<script>
+const be=document.getElementById('btnEvent'), bu=document.getElementById('btnUnified');
+const pe=document.getElementById('pEvent'), pu=document.getElementById('pUnified');
+be.onclick=()=>{be.classList.add('on');bu.classList.remove('on');pe.classList.remove('hidden');pu.classList.add('hidden');};
+bu.onclick=()=>{bu.classList.add('on');be.classList.remove('on');pu.classList.remove('hidden');pe.classList.add('hidden');};
+</script>
+</body>
+</html>

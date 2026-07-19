@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LingBot-VA §3.3 &amp; §3.4 — Teacher Forcing &amp; the Deployment Trick</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --train:#4A8ED4;--deploy:#3DBD79;--warn:#F06B7F;--good:#3DBD79;--robot:#F79A38;--model:#9B72CF;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;}
+  header{background:linear-gradient(135deg,#3D5A9B,#3DBD79);color:#fff;padding:36px 20px;text-align:center;}
+  header h1{margin:0 0 6px;font-size:1.55rem;}
+  header p{margin:0;opacity:.95;}
+  .wrap{max-width:900px;margin:0 auto;padding:24px 18px 70px;}
+  h2{font-size:1.35rem;margin-top:34px;display:flex;align-items:center;gap:9px;border-bottom:2px solid var(--line);padding-bottom:6px;}
+  h3{font-size:1.1rem;margin:20px 0 6px;}
+  .dot{width:13px;height:13px;border-radius:50%;display:inline-block;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 22px;margin:14px 0;box-shadow:0 2px 10px rgba(30,50,90,.04);}
+  .lead{color:var(--muted);font-size:1.06rem;}
+  .analogy{border-left:4px solid var(--train);background:#eef5fc;border-radius:0 10px 10px 0;padding:13px 18px;margin:14px 0;}
+  .analogy.d{border-color:var(--deploy);background:#ecf9f1;}
+  .analogy strong{display:block;margin-bottom:3px;}
+  .why{background:#fffaf0;border:1px solid #f5e2bf;border-radius:10px;padding:13px 18px;margin:13px 0;}
+  .why strong{color:#b9791a;}
+  .bad{background:#fff2f5;border:1px solid #f3c6d2;border-radius:10px;padding:13px 18px;margin:13px 0;}
+  .bad strong{color:#c0435a;}
+  .good{background:#ecf9f1;border:1px solid #bfe6cf;border-radius:10px;padding:13px 18px;margin:13px 0;}
+  .good strong{color:#2a8a58;}
+  ul.clean{padding-left:20px;} ul.clean li{margin:6px 0;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.85em;}
+  /* timeline */
+  .tl{margin:14px 0;}
+  .tlrow{display:flex;align-items:center;gap:6px;margin:6px 0;}
+  .tllabel{width:70px;font-size:.8rem;font-weight:700;text-align:right;color:var(--muted);flex-shrink:0;}
+  .track{display:flex;gap:3px;flex:1;}
+  .blk{border-radius:6px;padding:8px 6px;font-size:.72rem;text-align:center;color:#fff;font-weight:600;white-space:nowrap;}
+  .exec{background:var(--robot);} .idle{background:#c8cdd4;color:#5f6b78;}
+  .compute{background:var(--model);} .stale{background:repeating-linear-gradient(45deg,#e07b90,#e07b90 5px,#f0a3b2 5px,#f0a3b2 10px);}
+  .fdm{background:var(--good);}
+  .tlcap{font-size:.82rem;color:var(--muted);margin-top:2px;}
+  .verdict{border-radius:8px;padding:6px 12px;font-size:.85rem;font-weight:700;display:inline-block;margin-top:6px;}
+  .verdict.no{background:#fff2f5;color:#c0435a;} .verdict.ok{background:#ecf9f1;color:#2a8a58;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:.9rem;}
+  th,td{padding:8px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:#f0f4fa;}
+  .kbox{background:#f3eefb;border:1px solid #c9b6e6;border-radius:10px;padding:13px 18px;margin:13px 0;}
+  .kbox strong{color:#6b4a9a;}
+  .step{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:6px 12px;margin:4px 0;font-size:.9rem;}
+</style>
+</head>
+<body>
+<header>
+  <h1>LingBot-VA — §3.3 Training &amp; §3.4 Deployment</h1>
+  <p>Two ideas, kept simple: <b>teacher forcing</b> (how it's trained) and the <b>deployment trick</b> (how it runs fast on a real robot).</p>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <p class="lead">Quick reminder: LingBot-VA weaves <b>video</b> and <b>action</b> into one sequence and predicts the next pieces from the past. §3.3 is <i>how you train that</i>; §3.4 is <i>how you run it fast enough for a real robot</i>. Both boil down to a couple of clever tricks.</p>
+  </div>
+
+  <!-- ============ 3.3 TEACHER FORCING ============ -->
+  <h2><span class="dot" style="background:var(--train)"></span> §3.3 — Teacher Forcing</h2>
+
+  <div class="card">
+    <h3>The idea, in plain words</h3>
+    <p>To train a model that generates a sequence (frame, action, frame, action…), you teach it to predict each next piece from the pieces before it. But what do you feed as "the pieces before it"?</p>
+    <ul class="clean">
+      <li><b>Option A — use the model's own guesses.</b> Risky: if it guessed step 3 wrong, step 4 is built on a mistake, and errors snowball.</li>
+      <li><b>Option B — use the real answers from the dataset.</b> Clean: every step is predicted from <i>correct</i> context, so the model learns each step properly.</li>
+    </ul>
+    <p><b>Teacher forcing = Option B.</b> During training you always feed the <b>ground-truth</b> previous frames/actions as context, never the model's own predictions.</p>
+    <div class="analogy">
+      <strong>Everyday analogy</strong>
+      Like learning to cook from a recipe where, after every step, you're handed the <i>correctly</i> prepared result of the previous step — instead of building on your own possibly-burnt attempt. You learn each step cleanly.
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>The usual catch — and why robots dodge it</h3>
+    <p>Teacher forcing normally has a downside called <b>train–test mismatch</b>: at <i>test</i> time there are no ground-truth answers, so the model must feed itself its <i>own</i> predictions — a situation it never practised. Its small errors then compound (this is why text generators can drift).</p>
+    <div class="why">
+      <strong>The key insight for robots:</strong> a robot <b>gets real observations from the world after every action</b>. So at deployment the "ground truth" (the real camera view) <i>is</i> available — exactly like training. The robot naturally retrieves real feedback, so teacher forcing <b>matches deployment</b> and the mismatch mostly disappears.
+    </div>
+    <div class="analogy d">
+      <strong>Why it fits a robot</strong>
+      A text model has to imagine the whole story alone. A robot doesn't — it <i>looks</i> after each move and sees what really happened. That real glimpse plays the role of the "ground-truth previous step," so training and deployment line up.
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Bonus: it trains fast (the causal mask)</h3>
+    <p>Because the whole sequence's ground truth is known during training, the model can predict <b>all positions at once</b> in a single pass, using a <b>causal attention mask</b> — a rule that lets each token look only at <i>earlier</i> tokens, never future ones (Figure 3). That "look only backward" rule keeps it honest (the present depends only on the past) <i>and</i> lets training run in parallel.</p>
+    <div class="analogy">
+      <strong>Causal mask analogy</strong>
+      Like a rule in an exam: you may use your notes from earlier questions, but you can't peek at the answers to later ones. Everyone answers all questions at once, but nobody cheats forward in time.
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Two smaller §3.3 tricks (quick)</h3>
+    <p><b>Noisy History Augmentation.</b> During training they add noise to the past video frames. Why? So the action decoder learns to read actions from <i>partially</i> noisy video. Then at test time you only need to clean the video <b>halfway</b> (not fully) before decoding actions — <b>halving</b> the video denoising steps for a big speedup, with no loss in action quality.</p>
+    <p><b>Two training losses.</b> Just like WALL-WM, it's flow matching, not next-token: a <b>dynamics loss</b> (predict the future video) + an <b>inverse-dynamics loss</b> (decode the action from the video), combined as <code>L = L_dyn + λ·L_inv</code>.</p>
+  </div>
+
+  <!-- ============ 3.4 DEPLOYMENT ============ -->
+  <h2><span class="dot" style="background:var(--deploy)"></span> §3.4 — The Deployment Trick (run it fast)</h2>
+
+  <div class="card">
+    <p class="lead">Predicting video is slow (many denoising steps). On a real robot that needs ~real-time control, waiting for each prediction is a problem. §3.4 is a chain of three fixes, ending in the clever one.</p>
+    <h3>Fix 0 — KV cache (don't recompute the past)</h3>
+    <p>Since each step conditions on the whole history, they <b>cache</b> the computation of past tokens and reuse it — only the newest tokens need fresh work. Standard autoregressive speedup.</p>
+  </div>
+
+  <!-- Sync -->
+  <div class="card">
+    <h3>The problem — Synchronous (robot waits)</h3>
+    <p>Naively: the robot executes an action, then <b>stops and waits</b> while the model computes the next one, then executes, then waits… The robot sits idle. Jerky and slow.</p>
+    <div class="tl">
+      <div class="tlrow"><div class="tllabel">Robot</div><div class="track">
+        <span class="blk exec" style="flex:2">execute a₁</span><span class="blk idle" style="flex:2">idle 💤</span><span class="blk exec" style="flex:2">execute a₂</span><span class="blk idle" style="flex:2">idle 💤</span></div></div>
+      <div class="tlrow"><div class="tllabel">Model</div><div class="track">
+        <span class="blk" style="flex:2;background:transparent"></span><span class="blk compute" style="flex:2">compute a₂</span><span class="blk" style="flex:2;background:transparent"></span><span class="blk compute" style="flex:2">compute a₃</span></div></div>
+    </div>
+    <span class="verdict no">Robot idles half the time → too slow</span>
+  </div>
+
+  <!-- Async naive -->
+  <div class="card">
+    <h3>Fix 1 — Asynchronous (overlap execute &amp; predict)</h3>
+    <p>The idea: while the robot <b>executes</b> the current chunk, the model <b>predicts the next chunk in parallel</b>. The robot never stops — prediction latency is hidden behind execution.</p>
+    <div class="tl">
+      <div class="tlrow"><div class="tllabel">Robot</div><div class="track">
+        <span class="blk exec" style="flex:2">execute a₁</span><span class="blk exec" style="flex:2">execute a₂</span><span class="blk exec" style="flex:2">execute a₃</span></div></div>
+      <div class="tlrow"><div class="tllabel">Model</div><div class="track">
+        <span class="blk compute" style="flex:2">predict a₂</span><span class="blk compute" style="flex:2">predict a₃</span><span class="blk compute" style="flex:2">predict a₄</span></div></div>
+    </div>
+    <p class="tlcap">Now the two rows run at the same time — no idle. But there's a subtle bug…</p>
+    <div class="bad">
+      <strong>The naive-async bug (stale hallucination):</strong> to predict the next chunk <i>while</i> executing, the model can't wait for the <b>real</b> new camera view (it hasn't arrived yet), so it uses its <b>own predicted</b> video for "now." The video model loves smoothness, so it just <b>keeps continuing its own imagined video</b> and <b>ignores the real world</b> → the robot slowly drifts off (open-loop degradation).
+    </div>
+    <div class="tl">
+      <div class="tlrow"><div class="tllabel">Model uses</div><div class="track">
+        <span class="blk stale" style="flex:3">its own STALE predicted frame 🚫 (ignores reality)</span></div></div>
+    </div>
+    <span class="verdict no">Fast, but drifts — stops reacting to what's really there</span>
+  </div>
+
+  <!-- FDM grounded -->
+  <div class="card">
+    <h3>Fix 2 — FDM-grounded Async (the actual trick) ✅</h3>
+    <p>The fix: before predicting ahead, do a quick <b>Forward Dynamics Model (FDM)</b> step to re-anchor on reality. Instead of trusting the stale forecast, the model takes the <b>most recent real observation</b> plus the <b>action it's currently doing</b>, and <b>"imagines" the resulting frame</b> — a short physics forward pass grounded in the latest real glimpse. That feedback-grounded frame (not the stale one) goes into the cache, so every prediction re-aligns with the real world first.</p>
+    <div class="tl">
+      <div class="tlrow"><div class="tllabel">Model uses</div><div class="track">
+        <span class="blk fdm" style="flex:1">latest REAL obs</span><span class="blk" style="flex:0.2;background:transparent">+</span><span class="blk exec" style="flex:1">current action</span><span class="blk" style="flex:0.2;background:transparent">→</span><span class="blk fdm" style="flex:1.4">FDM: updated frame ✅</span></div></div>
+    </div>
+    <span class="verdict ok">Fast AND stays grounded in reality → robust closed-loop control</span>
+    <div class="analogy d">
+      <strong>Driving analogy (the whole §3.4 in one picture)</strong>
+      <b>Synchronous</b> = stop the car at every turn to think — safe but painfully slow.<br>
+      <b>Naive async</b> = keep driving while planning the next 3 turns, but plan from where you <i>imagined</i> you'd be, eyes closed → you drift into the wrong lane.<br>
+      <b>FDM-grounded async</b> = keep driving <i>and</i> glance at the road first (real observation), update where you actually are, <i>then</i> plan ahead. Fast and on-course.
+    </div>
+  </div>
+
+  <!-- summary -->
+  <h2><span class="dot" style="background:#3D5A9B"></span> Summary</h2>
+  <div class="card">
+    <table>
+      <tr><th>Idea</th><th>Problem it solves</th><th>In one line</th></tr>
+      <tr><td><b>Teacher forcing</b></td><td>How to train sequence prediction cleanly</td><td>feed real ground-truth as context — and robots get real observations at test time, so it matches deployment</td></tr>
+      <tr><td><b>Causal mask</b></td><td>Train efficiently + respect time</td><td>each token looks only backward → parallel training, present depends only on past</td></tr>
+      <tr><td><b>Noisy history aug.</b></td><td>Video is slow to denoise</td><td>train on noisy history → only denoise halfway at test → 2× faster</td></tr>
+      <tr><td><b>KV cache</b></td><td>Don't recompute history</td><td>cache past tokens, reuse them</td></tr>
+      <tr><td><b>Async execution</b></td><td>Robot shouldn't wait</td><td>execute now while predicting the next chunk in parallel</td></tr>
+      <tr><td><b>FDM grounding</b></td><td>Async drifts on stale predictions</td><td>re-anchor on the latest real observation before predicting ahead</td></tr>
+    </table>
+    <div class="kbox">
+      <strong>The two takeaways:</strong> (1) <b>Teacher forcing</b> works unusually well here because a robot naturally sees the real world after each move — the "answer key" is available at deployment. (2) The <b>deployment trick</b> is async execution (never idle) made safe by <b>FDM grounding</b> (glance at reality before planning ahead), turning it into robust closed-loop control.
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

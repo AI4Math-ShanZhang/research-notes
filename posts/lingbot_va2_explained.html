@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LingBot-VA 2.0 — a beginner's visual guide</title>
+<style>
+  :root{
+    --bg:#0f1117; --card:#191c24; --card2:#20242e; --ink:#e8ebf2; --mut:#9aa3b5;
+    --line:#2b3040; --v1:#e07a5f; --v2:#3dbd79; --accent:#4a8ed4; --warn:#f79a38;
+    --purple:#9b72cf; --teal:#38bdb8; --pink:#f06b7f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.62;}
+  header{padding:38px 22px 30px;text-align:center;background:linear-gradient(135deg,#1b2438,#2a1b30);}
+  header h1{margin:0 0 8px;font-size:1.85rem;}
+  header p{margin:6px auto 0;max-width:720px;color:var(--mut);}
+  .wrap{max-width:1000px;margin:0 auto;padding:22px;}
+  h2{font-size:1.35rem;margin:44px 0 6px;}
+  .sub{color:var(--mut);margin:0 0 14px;font-size:.95rem;}
+  h3{font-size:1.05rem;margin:22px 0 8px;}
+  .step-badge{display:inline-block;background:var(--accent);color:#fff;border-radius:20px;
+    font-size:.75rem;font-weight:700;padding:3px 11px;letter-spacing:.5px;margin-bottom:6px;}
+  .lead{background:var(--card2);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;}
+  .lead b{color:#fff;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0;}
+  @media(max-width:760px){.grid2,.grid3{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;}
+  .card.v1{border-top:3px solid var(--v1);}
+  .card.v2{border-top:3px solid var(--v2);}
+  .card h3{margin-top:0;}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.92rem;}
+  th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top;}
+  th{background:var(--card2);font-size:.78rem;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);}
+  td.dim{color:var(--mut);width:120px;font-weight:600;}
+  .col-v1{color:#f0b4a3;} .col-v2{color:#a6e2c2;}
+  .note{color:var(--mut);font-size:.92rem;}
+  .demo{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:16px 0;}
+  button{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 16px;
+    font-size:.9rem;cursor:pointer;margin:4px 8px 4px 0;transition:filter .15s;font-weight:600;}
+  button:hover{filter:brightness(1.14);}
+  button.ghost{background:var(--card2);border:1px solid var(--line);color:var(--ink);}
+  button.warnb{background:var(--v1);} button.goodb{background:var(--v2);color:#0f1117;}
+  .caption{font-size:.9rem;color:var(--mut);margin-top:10px;min-height:2.4em;}
+  /* pipeline */
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:14px 0;}
+  .box{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;
+    font-size:.85rem;text-align:center;min-width:96px;}
+  .box small{display:block;color:var(--mut);font-size:.72rem;margin-top:3px;}
+  .arrow{color:var(--accent);font-size:1.3rem;}
+  /* latent action strip */
+  .vidstrip{display:flex;gap:0;align-items:center;flex-wrap:wrap;margin:10px 0;}
+  .vframe{width:70px;height:56px;border:1px solid var(--line);border-radius:6px;position:relative;
+    background:#12151d;overflow:hidden;flex:0 0 auto;}
+  .hand{position:absolute;width:16px;height:16px;border-radius:4px;background:var(--warn);top:20px;transition:left .5s;}
+  .obj{position:absolute;width:12px;height:12px;border-radius:50%;background:var(--teal);top:30px;left:46px;}
+  .vlab{position:absolute;bottom:1px;left:4px;font-size:.6rem;color:var(--mut);}
+  .between{display:flex;flex-direction:column;align-items:center;justify-content:center;width:56px;flex:0 0 auto;}
+  .lcode{background:var(--purple);color:#fff;font-size:.62rem;font-weight:700;border-radius:5px;padding:2px 6px;margin-top:2px;}
+  .lcode.big{background:var(--pink);}
+  /* MCP */
+  .frame{width:66px;height:52px;border-radius:6px;position:relative;flex:0 0 auto;border:1px solid var(--line);
+    overflow:hidden;background:#12151d;}
+  .ball{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--teal);top:19px;transition:left .5s ease,background .3s;}
+  .frame .lab{position:absolute;bottom:1px;left:4px;font-size:.6rem;color:var(--mut);}
+  .frame.past{opacity:.5;} .frame.pred{outline:2px dashed var(--v2);} .frame.copy .ball{background:var(--v1);}
+  .frames{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:12px 0;}
+  /* foresight */
+  .track{display:flex;align-items:center;gap:3px;margin:8px 0;}
+  .track .name{width:130px;flex:0 0 auto;font-size:.8rem;color:var(--mut);font-weight:600;}
+  .cell{height:32px;flex:1;border-radius:5px;display:flex;align-items:center;justify-content:center;
+    font-size:.68rem;font-weight:700;border:1px solid rgba(0,0,0,.25);opacity:.25;transition:opacity .3s,transform .3s;}
+  .cell.on{opacity:1;}
+  .act{background:var(--accent);color:#fff;} .think{background:var(--purple);color:#fff;}
+  .obs{background:var(--warn);color:#0f1117;} .idle{background:#2a2f3d;color:var(--mut);border-style:dashed;}
+  .reground{background:var(--v2);color:#0f1117;} .drift{background:var(--v1);color:#fff;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.78rem;color:var(--mut);margin-top:10px;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block;}
+  .glossary p{margin:8px 0;} .glossary b{color:var(--warn);}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 20px;margin:18px 0;}
+  .toc a{color:var(--accent);text-decoration:none;margin-right:6px;}
+  .toc a:hover{text-decoration:underline;}
+  .analogy{background:rgba(155,114,207,.12);border-left:4px solid var(--purple);border-radius:8px;padding:12px 16px;margin:12px 0;}
+  .analogy b{color:#d3bdf0;}
+</style>
+</head>
+<body>
+<header>
+  <h1>LingBot-VA 2.0 — a beginner's visual guide</h1>
+  <p>New to VLA? Start here. We build up from "what is a video-action model" to the four upgrades and the real-time deployment trick — one idea at a time, with things you can click.</p>
+</header>
+
+<div class="wrap">
+
+  <div class="toc">
+    <b>Roadmap:</b>
+    <a href="#big">0 · Big picture</a> ·
+    <a href="#changes">1 · What changed (v1→v2)</a> ·
+    <a href="#latent">2 · Where "action" comes from</a> ·
+    <a href="#mcp">3 · The copying problem (MCP)</a> ·
+    <a href="#fore">4 · Real-time trick (Foresight)</a> ·
+    <a href="#glo">Glossary</a>
+  </div>
+
+  <!-- 0 -->
+  <h2 id="big">0 · The big picture: what is a "video-action model"?</h2>
+  <p class="sub">Two ways to build a robot brain.</p>
+  <div class="grid2">
+    <div class="card v1">
+      <h3>Reactive policy (older idea)</h3>
+      <p class="note">See the camera → immediately output an action. Fast, but it never "thinks about" how the world will change. Like acting on reflex.</p>
+      <div class="flow"><div class="box">📷 image</div><span class="arrow">→</span><div class="box">🦾 action</div></div>
+    </div>
+    <div class="card v2">
+      <h3>Video-action model (this paper)</h3>
+      <p class="note">First <b>imagine</b> how the scene will unfold (like a short mental movie), then read the action off that imagined future. Grounds control in physics → generalizes better.</p>
+      <div class="flow"><div class="box">📷 image</div><span class="arrow">→</span><div class="box">🎬 imagine<small>future frames</small></div><span class="arrow">→</span><div class="box">🦾 action</div></div>
+    </div>
+  </div>
+  <div class="lead"><b>LingBot-VA 2.0's one-line pitch:</b> the previous version (v1) bolted robot actions onto an off-the-shelf video generator, then patched it to work for control. v2 <b>rebuilds the whole thing from scratch, natively for robots</b>, so the knowledge learned from web video is baked in the right shape instead of being inherited and then damaged.</div>
+
+  <!-- 1 -->
+  <h2 id="changes">1 · The four upgrades at a glance</h2>
+  <p class="sub">Don't memorize — we visualize the two tricky ones (2 &amp; 4) below.</p>
+  <table>
+    <tr><th>Part</th><th>v1 (LingBot-VA)</th><th>v2 (LingBot-VA 2.0)</th></tr>
+    <tr><td class="dim">① Tokenizer</td>
+      <td class="col-v1">Compresses video just to <em>redraw pixels</em>. Action stapled on later.</td>
+      <td class="col-v2"><b>Semantic + action-aware.</b> Latents carry <em>meaning</em>, and it invents an "action" from video (§2).</td></tr>
+    <tr><td class="dim">② Backbone</td>
+      <td class="col-v1">Looks at the whole clip at once (bidirectional), then <em>retrofitted</em> to run forward-in-time — which damages what it learned.</td>
+      <td class="col-v2"><b>Forward-in-time from birth</b> (causal, trained from scratch). No retrofit, no damage.</td></tr>
+    <tr><td class="dim">③ Compute</td>
+      <td class="col-v1">Every part of the network runs every step (slow).</td>
+      <td class="col-v2"><b>Mixture-of-Experts:</b> only a few "experts" fire per step → big brain, fast per step.</td></tr>
+    <tr><td class="dim">④ Training signal</td>
+      <td class="col-v1">Predict the very next moment.</td>
+      <td class="col-v2"><b>Multi-Chunk Prediction:</b> predict several moments ahead so it learns motion, not copying (§3).</td></tr>
+    <tr><td class="dim">⑤ Deployment</td>
+      <td class="col-v1">Robot waits while the model thinks (stutters).</td>
+      <td class="col-v2"><b>Foresight Reasoning:</b> think while acting, re-check reality every frame (§4).</td></tr>
+  </table>
+
+  <!-- 2 -->
+  <h2 id="latent">2 · Where does "action" come from if the data is just video?</h2>
+  <p class="sub">The confusing part — solved with two data sources and a self-invented action.</p>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>🌐 Huge pile: web / human video</h3>
+      <p class="note"><b>No action labels</b> — just pixels. This is the cheap, endless data.</p>
+    </div>
+    <div class="card">
+      <h3>🦾 Small pile: robot teleoperation</h3>
+      <p class="note"><b>Has real action numbers</b> — recorded from the robot. Expensive, so there's little of it.</p>
+    </div>
+  </div>
+
+  <div class="analogy"><b>The key idea (the "latent action"):</b> watch a <b>muted</b> cooking video. You never see the chef's motor commands — but by comparing two frames you can <em>infer</em> "the hand moved left and closed on the cup." That inferred <em>"what changed between frame t and t+1"</em> is a self-discovered action. Now every web video secretly teaches action, for free.</div>
+
+  <div class="demo">
+    <p class="note">A tiny network (the <b>Inverse Dynamics Model</b>) looks at two neighbouring frames and squeezes the difference into a small code <span class="lcode" style="display:inline-block">ℓ</span>. It's forced to be tiny, so it can only carry the <em>change</em> (the action), not the whole picture.</p>
+    <div class="vidstrip" id="laStrip"></div>
+    <button id="laPlay">▶ Show the inferred latent action</button>
+    <div class="caption" id="laCap">Orange = hand, teal = cup. Click to see what the model infers between each pair of frames.</div>
+  </div>
+
+  <table>
+    <tr><th>Stage</th><th>Data</th><th>"Action" here means…</th><th>Format</th></tr>
+    <tr><td class="dim">Pretrain</td><td>web video (no labels)</td><td class="col-v2"><b>latent action ℓ</b> — invented from frame-to-frame change</td><td>small learned vector, no units</td></tr>
+    <tr><td class="dim">Finetune</td><td>robot teleop (labels)</td><td class="col-v1"><b>real action a</b> — the actual command</td><td>[dx,dy,dz,roll,pitch,yaw,gripper] ≈ 7 numbers</td></tr>
+  </table>
+  <p class="note">So: web video teaches <b>how the world moves</b> (via latent actions, at massive scale); the small robot set teaches <b>how those movements map to real command numbers</b>. That mapping lives in a small per-robot encoder/decoder around one shared world model. The final model outputs real numeric action chunks the robot executes.</p>
+
+  <!-- 3 -->
+  <h2 id="mcp">3 · The "copying" problem, and how MCP fixes it</h2>
+  <p class="sub">Why predicting only the next moment teaches the model nothing.</p>
+  <div class="demo">
+    <p class="note">Two neighbouring frames look <em>almost identical</em> (a robot barely moves in a split second). So a lazy model can score well by just <span style="color:var(--v1)">outputting the frame it already has</span> — "predict next = current." It learns to copy appearance, not motion.</p>
+    <div class="frames" id="mcpFrames"></div>
+    <button id="btnNext" class="warnb">▶ Predict next only → copying wins</button>
+    <button id="btnMcp" class="goodb">▶ Predict many ahead (MCP) → must model motion</button>
+    <div class="caption" id="mcpCap">Green dashed = frames the model must predict. Watch how far the supervision reaches — and whether copying can survive it.</div>
+  </div>
+  <p class="note"><b>Why it works:</b> copying is fine for the very next frame (barely changed) but hopeless 2–3 seconds out (the arm has swept across, the cup is lifted). Forcing the model to nail <em>all</em> horizons at once makes copying useless — the only way to win is to actually model the trajectory. That's "trajectory-level dynamics instead of short-term visual continuity."</p>
+
+  <!-- 4 -->
+  <h2 id="fore">4 · The real-time deployment trick: Foresight Reasoning</h2>
+  <p class="sub">How to think about the future without making the robot freeze.</p>
+
+  <div class="demo">
+    <p class="note">Pick a mode and press play. Watch the robot track (top), the model's thinking (middle), and real camera frames (bottom).</p>
+    <div>
+      <button id="mSerial" class="ghost">1 · Serial (naive)</button>
+      <button id="mDrift" class="warnb">2 · Async, no re-ground</button>
+      <button id="mFore" class="goodb">3 · Foresight Reasoning</button>
+    </div>
+
+    <div style="margin-top:14px;">
+      <div class="track"><span class="name">🦾 Robot (acts)</span><div id="rowRobot" style="display:flex;flex:1;gap:3px;"></div></div>
+      <div class="track"><span class="name">💭 Model (thinks)</span><div id="rowModel" style="display:flex;flex:1;gap:3px;"></div></div>
+      <div class="track"><span class="name">📷 Real camera</span><div id="rowCam" style="display:flex;flex:1;gap:3px;"></div></div>
+    </div>
+
+    <div class="legend">
+      <span><span class="sw act"></span> robot acting</span>
+      <span><span class="sw idle"></span> robot idle (stutter!)</span>
+      <span><span class="sw think"></span> imagine future</span>
+      <span><span class="sw drift"></span> drifting on a stale guess</span>
+      <span><span class="sw obs"></span> real frame arrives</span>
+      <span><span class="sw reground"></span> re-ground on reality</span>
+    </div>
+    <div class="caption" id="foreCap">Choose a mode above.</div>
+  </div>
+
+  <div class="grid3">
+    <div class="card v1"><h3>1 · Serial</h3><p class="note">Robot acts, then <b>waits</b> while the model thinks, then acts. The wait = model latency becomes control latency. Robot stutters.</p></div>
+    <div class="card" style="border-top:3px solid var(--warn)"><h3>2 · Naive async</h3><p class="note">Think <em>while</em> acting — but the model keeps dreaming forward from its <b>own guesses</b>, ignores reality, and <b>drifts</b> until it fails.</p></div>
+    <div class="card v2"><h3>3 · Foresight</h3><p class="note"><b>Draft ahead</b> so the robot never idles, and <b>overwrite the guess with the real frame</b> the instant it arrives. Fast <em>and</em> grounded.</p></div>
+  </div>
+
+  <div class="analogy"><b>Mental model — speculative execution for robots:</b> guess your next move while you're still finishing the current one (so you never pause), but the moment your eyes get a fresh look at the real scene, throw away the guess and use reality. Draft = speed; re-ground = safety.</div>
+
+  <!-- glossary -->
+  <h2 id="glo">Glossary</h2>
+  <div class="card glossary">
+    <p><b>latent / world-state (z)</b> — a compressed code for a video frame; the model works in these codes, not raw pixels.</p>
+    <p><b>latent action (ℓ)</b> — a self-invented action inferred from the change between two frames; lets unlabeled web video teach control.</p>
+    <p><b>real action (a)</b> — the actual robot command, e.g. end-effector move + gripper (~7 numbers), predicted in chunks.</p>
+    <p><b>causal</b> — only looks backward in time (like a robot must). Opposite of bidirectional (peeks at the future).</p>
+    <p><b>eroded priors</b> — knowledge from web video gets weakened when a bidirectional model is forced into causal form; v2 avoids this by being causal from scratch.</p>
+    <p><b>MoE (Mixture-of-Experts)</b> — many expert sub-networks; only a few run per step → capacity of a big model, speed of a small one.</p>
+    <p><b>MCP (Multi-Chunk Prediction)</b> — supervise several future chunks at once so the model learns motion, not frame-copying.</p>
+    <p><b>Foresight Reasoning</b> — think ahead in parallel with acting, re-grounded on every real observation, so the robot is real-time without drifting.</p>
+  </div>
+
+  <p class="note" style="margin-top:26px;text-align:center;">Beginner guide for the VLA / world-model discussion · pairs with <em>vla_world_model_survey.html</em></p>
+</div>
+
+<script>
+/* ---------- 2 · latent action strip ---------- */
+(function(){
+  const strip=document.getElementById('laStrip');
+  const cap=document.getElementById('laCap');
+  const positions=[6,20,34,46]; // hand x per frame (moves toward cup, then grasps)
+  function build(revealed){
+    strip.innerHTML='';
+    positions.forEach((x,i)=>{
+      const f=document.createElement('div'); f.className='vframe';
+      const h=document.createElement('div'); h.className='hand'; h.style.left=x+'px';
+      const o=document.createElement('div'); o.className='obj';
+      const l=document.createElement('div'); l.className='vlab'; l.textContent='frame '+i;
+      f.append(h,o,l); strip.appendChild(f);
+      if(i<positions.length-1){
+        const b=document.createElement('div'); b.className='between';
+        b.innerHTML='<span style="color:#9aa3b5;font-size:.7rem">↔</span>'+
+          (revealed?('<span class="lcode'+(i===positions.length-2?' big':'')+'">ℓ'+i+'</span>'):'<span style="color:#4a5064;font-size:.62rem">?</span>');
+        strip.appendChild(b);
+      }
+    });
+  }
+  build(false);
+  document.getElementById('laPlay').onclick=()=>{
+    build(true);
+    cap.innerHTML="Each <span style='color:#d3bdf0'>ℓ</span> is inferred from the two frames it sits between — 'hand moved right' (ℓ0, ℓ1), then 'hand closed on the cup' (ℓ2, pink = grasp). <b>No labels were used</b> — only the video.";
+  };
+})();
+
+/* ---------- 3 · MCP ---------- */
+(function(){
+  const framesEl=document.getElementById('mcpFrames'); const cap=document.getElementById('mcpCap');
+  const N=8, PAST=3; let cells=[];
+  function build(){ framesEl.innerHTML=''; cells=[];
+    for(let i=0;i<N;i++){
+      const f=document.createElement('div'); f.className='frame'+(i<PAST?' past':'');
+      const b=document.createElement('div'); b.className='ball'; b.style.left=(6+i*6)+'px';
+      const l=document.createElement('div'); l.className='lab'; l.textContent=i<PAST?('t'+(i-PAST)):('t+'+(i-PAST+1));
+      f.append(b,l); framesEl.appendChild(f); cells.push({f,b});
+    }}
+  build();
+  function reset(){ cells.forEach((c,i)=>{c.f.classList.remove('pred','copy');c.b.style.left=(6+i*6)+'px';}); }
+  document.getElementById('btnNext').onclick=()=>{ reset();
+    const p=PAST; cells[p].f.classList.add('pred','copy'); cells[p].b.style.left=(6+(PAST-1)*6)+'px';
+    cap.innerHTML="<b>Next only:</b> supervision reaches one step. The model parks the ball at its last spot (orange) and still scores well — it learned <span style='color:var(--v1)'>copying</span>, not motion.";
+  };
+  document.getElementById('btnMcp').onclick=()=>{ reset();
+    for(let i=PAST;i<N;i++) cells[i].f.classList.add('pred');
+    cap.innerHTML="<b>MCP:</b> supervision reaches many steps. Copying the last frame fails far out — the model must predict the ball's <span style='color:var(--v2)'>real trajectory</span>. Now it learns dynamics.";
+  };
+})();
+
+/* ---------- 4 · Foresight ---------- */
+(function(){
+  const T=6;
+  const rowRobot=document.getElementById('rowRobot'), rowModel=document.getElementById('rowModel'),
+        rowCam=document.getElementById('rowCam'), cap=document.getElementById('foreCap');
+  function mkRow(row){ const cells=[]; row.innerHTML='';
+    for(let i=0;i<T;i++){ const c=document.createElement('div'); c.className='cell'; row.appendChild(c); cells.push(c);} return cells; }
+  let R=mkRow(rowRobot), M=mkRow(rowModel), C=mkRow(rowCam), timer=null;
+  function clearAll(){ [R,M,C].forEach(a=>a.forEach(c=>{c.className='cell';c.textContent='';})); }
+  function set(c,cls,txt){ c.className='cell '+cls+' on'; c.textContent=txt; }
+
+  const modes={
+    serial:[ // robot idles while model thinks: alternate
+      {r:'act,act',m:'',c:''},{r:'idle',m:'think',c:''},{r:'act,act',m:'',c:'obs'},
+      {r:'idle',m:'think',c:''},{r:'act,act',m:'',c:'obs'},{r:'idle',m:'think',c:''}
+    ],
+    drift:[
+      {r:'act',m:'think',c:'obs'},{r:'act',m:'think',c:''},{r:'act',m:'drift',c:''},
+      {r:'act',m:'drift',c:''},{r:'act',m:'drift',c:''},{r:'act',m:'drift',c:''}
+    ],
+    fore:[
+      {r:'act',m:'think',c:'obs'},{r:'act',m:'reground',c:''},{r:'act',m:'think',c:'obs'},
+      {r:'act',m:'reground',c:''},{r:'act',m:'think',c:'obs'},{r:'act',m:'reground',c:''}
+    ]
+  };
+  const caps={
+    serial:"<b>Serial:</b> the robot <span style='color:var(--mut)'>idles</span> every time the model thinks. Model latency becomes control latency — the robot stutters.",
+    drift:"<b>Async, no re-ground:</b> the robot keeps acting, but after one real frame the model keeps dreaming from its <span style='color:var(--v1)'>own guesses</span> and <span style='color:var(--v1)'>drifts</span> away from reality.",
+    fore:"<b>Foresight Reasoning:</b> the robot <em>never</em> idles, and every real frame (orange) <span style='color:var(--v2)'>re-grounds</span> the model's guess. Fast <b>and</b> stays on track."
+  };
+  function play(mode){
+    clearAll(); if(timer) clearInterval(timer); cap.innerHTML=caps[mode];
+    let i=0; const seq=modes[mode];
+    const stepFn=()=>{
+      if(i>=T){ clearInterval(timer); return; }
+      const s=seq[i];
+      if(s.r==='act') set(R[i],'act','act'); else if(s.r==='act,act') set(R[i],'act','act');
+      else if(s.r==='idle') set(R[i],'idle','wait');
+      if(s.m==='think') set(M[i],'think','imagine'); else if(s.m==='drift') set(M[i],'drift','drift');
+      else if(s.m==='reground') set(M[i],'reground','re-ground');
+      if(s.c==='obs') set(C[i],'obs','obs'); else set(C[i],'idle','–');
+      i++;
+    };
+    stepFn(); timer=setInterval(stepFn,650);
+  }
+  document.getElementById('mSerial').onclick=()=>play('serial');
+  document.getElementById('mDrift').onclick=()=>play('drift');
+  document.getElementById('mFore').onclick=()=>play('fore');
+})();
+</script>
+</body>
+</html>

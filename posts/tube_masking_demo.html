@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tube Patch Masking — interactive</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --a:#4A8ED4;--b:#F79A38;--c:#3DBD79;--ok:#3DBD79;--no:#F06B7F;--y:#9B72CF;--tube:#E8900D;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.55;}
+  header{background:linear-gradient(135deg,#3D5A9B,#E8900D);color:#fff;padding:34px 20px;text-align:center;}
+  header h1{margin:0 0 6px;font-size:1.6rem;}
+  header p{margin:0;opacity:.95;}
+  .wrap{max-width:980px;margin:0 auto;padding:24px 18px 70px;}
+  h2{font-size:1.35rem;border-bottom:2px solid var(--line);padding-bottom:6px;margin-top:34px;}
+  h3{margin:16px 0 6px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:16px 0;box-shadow:0 2px 10px rgba(30,50,90,.04);}
+  .lead{color:var(--muted);font-size:1.05rem;}
+  .demo{display:flex;flex-wrap:wrap;gap:20px;}
+  .stage{flex:1 1 520px;}
+  .panel{flex:1 1 240px;}
+  .verdict{border-radius:12px;padding:13px 15px;font-weight:700;font-size:1rem;text-align:center;margin-bottom:12px;color:#fff;}
+  .verdict.ok{background:var(--ok);} .verdict.no{background:var(--no);} .verdict.warn{background:#c98a2e;}
+  .ctrl{margin:11px 0;font-size:.9rem;}
+  .ctrl label{display:block;color:var(--muted);margin-bottom:3px;}
+  .ctrl input[type=range]{width:100%;}
+  .btns{display:flex;gap:6px;}
+  .btns button{flex:1;border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px;cursor:pointer;font-weight:600;}
+  .btns button.on{background:var(--a);color:#fff;border-color:var(--a);}
+  .toggle{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:.9rem;cursor:pointer;}
+  /* views */
+  .view{margin:12px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fbfcfe;}
+  .view.target{border-color:var(--tube);box-shadow:0 0 0 2px rgba(232,144,13,.15);}
+  .vlabel{font-weight:700;font-size:.9rem;margin-bottom:6px;display:flex;justify-content:space-between;}
+  .vlabel .role{font-weight:400;color:var(--muted);font-size:.8rem;}
+  .frames{display:flex;gap:14px;}
+  .frameblock{text-align:center;}
+  .ft{font-size:.68rem;color:var(--muted);margin-bottom:3px;}
+  .grid{display:grid;grid-template-columns:repeat(4,16px);grid-template-rows:repeat(3,16px);gap:2px;}
+  .cell{width:16px;height:16px;border-radius:3px;background:#e7edf5;border:1px solid #dbe3ee;}
+  .cell.tube{outline:2px solid var(--tube);outline-offset:-1px;}
+  .cell.noise{background:repeating-linear-gradient(45deg,#3a3f4a,#3a3f4a 3px,#565c68 3px,#565c68 6px);border-color:#2b2f38;}
+  .cell.source{background:var(--c);border-color:#2a8a58;}
+  .ystrip{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:.72rem;color:var(--muted);}
+  .ygrid{display:grid;grid-template-columns:repeat(4,12px);grid-template-rows:repeat(3,12px);gap:2px;}
+  .ygrid .cell{width:12px;height:12px;background:#f0eafa;border-color:#d9caf0;}
+  .ygrid .cell.noise{background:repeating-linear-gradient(45deg,#6b4a9a,#6b4a9a 3px,#8a6bbf 3px,#8a6bbf 6px);border-color:#573a7d;}
+  .routes{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;}
+  .route{flex:1 1 200px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff;font-size:.86rem;}
+  .route b{display:block;margin-bottom:3px;}
+  .route .tag{float:right;font-weight:700;}
+  .route.blocked .tag{color:var(--no);} .route.open .tag{color:var(--ok);}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.78rem;margin-top:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block;}
+  ol.steps{counter-reset:s;list-style:none;padding:0;}
+  ol.steps li{counter-increment:s;position:relative;padding:10px 0 10px 44px;border-bottom:1px dashed var(--line);}
+  ol.steps li:last-child{border-bottom:none;}
+  ol.steps li::before{content:counter(s);position:absolute;left:0;top:10px;width:30px;height:30px;background:var(--tube);color:#fff;border-radius:50%;text-align:center;line-height:30px;font-weight:700;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:.9rem;}
+  th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:#f0f4fa;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.86em;}
+  .kbox{background:#fff8ec;border:1px solid #f0d79a;border-radius:10px;padding:13px 16px;margin:12px 0;}
+  .kbox strong{color:#b9791a;}
+  .pill{display:inline-block;background:#eef5fc;color:#2c5c8f;border-radius:20px;padding:2px 10px;font-size:.8rem;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tube Patch Masking — force the model to look across cameras</h1>
+  <p>Sight-cone said <i>which</i> views may talk. Tube masking creates a <i>reason</i> they must.</p>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <p class="lead">The problem: even after sight-cone masking allows the right cross-view links, the model is lazy — it can often reconstruct a hidden patch from the <b>same camera's other time frames</b> (a temporal shortcut) and never bother using the other cameras. <b>Tube masking removes that shortcut</b> so the only way left is to look across views.</p>
+  </div>
+
+  <!-- ===== INTERACTIVE ===== -->
+  <div class="card">
+    <div class="demo">
+      <div class="stage" id="stage"></div>
+      <div class="panel">
+        <div class="verdict" id="verdict">—</div>
+        <div class="ctrl"><label>Masked view v* (which camera gets a hole)</label>
+          <div class="btns" id="viewbtns"></div></div>
+        <div class="ctrl"><label>Window size k <span id="kv"></span></label><input type="range" id="k" min="1" max="2" value="2"></div>
+        <div class="ctrl"><label>Window column <span id="colv"></span></label><input type="range" id="col" min="0" max="3" value="1"></div>
+        <label class="toggle"><input type="checkbox" id="tube" checked> Mask the <b>whole tube</b> (all frames) — uncheck = one frame only</label>
+        <label class="toggle"><input type="checkbox" id="masky"> Also mask conditioning <b style="color:var(--y)">y</b> (nested prob.)</label>
+        <label class="toggle"><input type="checkbox" id="covis" checked> Window is in the <b>co-visible set U</b> (another view sees it)</label>
+        <div class="routes" id="routes"></div>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="outline:2px solid #E8900D;background:#e7edf5"></i> tube (chosen window)</span>
+      <span><i class="sw noise" style="background:#4a4f5a"></i> masked → noise</span>
+      <span><i class="sw source"></i> co-visible source in another view</span>
+      <span><i class="sw" style="background:#f0eafa;border:1px solid #d9caf0"></i> conditioning y</span>
+    </div>
+  </div>
+
+  <!-- ===== STEPS ===== -->
+  <h2>How tube masking works — the steps</h2>
+  <div class="card">
+    <ol class="steps">
+      <li><b>Decide to apply it.</b> With probability <code>p_tube</code> this training sample gets a tube mask (otherwise it trains normally).</li>
+      <li><b>Pick one view v*.</b> Choose a single camera to punch a hole in.</li>
+      <li><b>Pick a k×k window</b> (k random in <code>[l_min, l_max]</code>) — but only from the <b>co-visible set U</b>: patches that at least one <i>other</i> view can see (using the sight-cone mask <code>M_sc</code>). This guarantees recovery is actually possible.</li>
+      <li><b>Extend it through time into a "tube."</b> Take that same window across <b>every</b> latent frame of v*. That spatio-temporal column is the tube.</li>
+      <li><b>Replace the tube with pure noise</b> in the video input <code>x</code>. With a nested probability <code>p_tube^cond</code>, blank the same tube in the conditioning <code>y</code> too, so the model can't peek at the answer there.</li>
+      <li><b>Keep the true target and up-weight it.</b> The model must still reproduce the real content of the tube, and its loss there is multiplied by <code>λ_mask</code> to push harder. With no within-view frames left to copy, recovery must route through the other <code>N_v − 1</code> cameras.</li>
+    </ol>
+  </div>
+
+  <!-- ===== WHY WHOLE TUBE ===== -->
+  <div class="kbox">
+    <strong>Why the whole tube, and not just one frame?</strong> If you masked the window in only <i>one</i> frame, the model would happily copy it from the neighbouring frames of the same camera (they barely change frame-to-frame) — a temporal shortcut, and it would never learn to use the other views. Masking the window across <b>all</b> frames kills that shortcut, leaving cross-view attention as the only path. Try unchecking "whole tube" in the demo and watch the verdict flip.
+  </div>
+
+  <!-- ===== WHY SET U ===== -->
+  <div class="kbox" style="background:#ecf9f1;border-color:#bfe6cf;">
+    <strong style="color:#2a8a58;">Why sample only from the co-visible set U?</strong> If you blanked a region that <i>no</i> other camera can see, the information would exist nowhere — you'd be asking the model to hallucinate, which teaches nothing. Restricting the window to patches that another view <i>does</i> see (via the sight-cone mask) makes it a fair, solvable task: the answer really is available across views. This is exactly where the two masks connect.
+  </div>
+
+  <!-- ===== COMPLEMENTARY ===== -->
+  <h2>Sight-cone vs. Tube — a complementary pair</h2>
+  <div class="card">
+    <table>
+      <tr><th></th><th><span class="pill">Sight-cone mask</span></th><th><span class="pill">Tube mask</span></th></tr>
+      <tr><td><b>Acts on</b></td><td>attention <b>topology</b> — which links may exist</td><td>input <b>content</b> — what the model is allowed to see</td></tr>
+      <tr><td><b>Says</b></td><td>"you <i>may</i> attend across views only where geometry permits"</td><td>"you <i>must</i> attend across views to recover this"</td></tr>
+      <tr><td><b>Removes</b></td><td>geometrically impossible cross-view links</td><td>the within-view temporal shortcut</td></tr>
+      <tr><td><b>Without the other</b></td><td>cross-view is <i>allowed</i> but the model may ignore it</td><td>a demand exists, but might point at nonsense links</td></tr>
+    </table>
+    <p class="lead" style="margin-bottom:0;">Together: the model may attend across views <b>only where geometry permits</b>, and is <b>required to do so</b> to minimise the loss. Both are training-only — dropped at inference so rollout stays calibration-free.</p>
+  </div>
+
+</div>
+
+<script>
+const COLS=4, ROWS=3, FRAMES=3, VIEWS=3;
+const NAMES=['A','B','C'], COLORS=['#4A8ED4','#F79A38','#3DBD79'];
+let vStar=0;
+const $=id=>document.getElementById(id);
+
+// view buttons
+const vb=$('viewbtns');
+NAMES.forEach((n,i)=>{const b=document.createElement('button');b.textContent='View '+n;
+  b.onclick=()=>{vStar=i;render();};vb.appendChild(b);});
+
+function inWindow(r,c,col,k){ return c>=col && c<col+k && r>=0 && r<k; }
+
+function render(){
+  const k=+$('k').value, col=Math.min(+$('col').value, COLS-k), tube=$('tube').checked,
+        masky=$('masky').checked, covis=$('covis').checked;
+  $('kv').textContent=k+'×'+k; $('colv').textContent=col;
+  $('col').max=COLS-k;
+  // view buttons state
+  [...vb.children].forEach((b,i)=>b.className=(i===vStar)?'on':'');
+
+  const partner=(vStar+1)%VIEWS; // the co-visible source view
+  const stage=$('stage'); stage.innerHTML='';
+
+  for(let vi=0; vi<VIEWS; vi++){
+    const view=document.createElement('div');
+    view.className='view'+(vi===vStar?' target':'');
+    let role='';
+    if(vi===vStar) role='← hole punched here (v*)';
+    else if(vi===partner && covis) role='sees the region (source)';
+    view.innerHTML=`<div class="vlabel"><span style="color:${COLORS[vi]}">View ${NAMES[vi]} (camera ${vi+1})</span><span class="role">${role}</span></div>`;
+
+    const frames=document.createElement('div');frames.className='frames';
+    for(let fi=0; fi<FRAMES; fi++){
+      const fb=document.createElement('div');fb.className='frameblock';
+      fb.innerHTML=`<div class="ft">t${fi?'+'+fi:''}</div>`;
+      const g=document.createElement('div');g.className='grid';
+      for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+        const cell=document.createElement('div');cell.className='cell';
+        const inWin=inWindow(r,c,col,k);
+        if(vi===vStar && inWin){
+          cell.classList.add('tube');
+          const maskedThisFrame = tube ? true : (fi===1); // tube=all frames; else only middle
+          if(maskedThisFrame) cell.classList.add('noise');
+        }
+        if(vi===partner && inWin && covis && !(false)){ cell.classList.add('source'); }
+        g.appendChild(cell);
+      }
+      fb.appendChild(g);frames.appendChild(fb);
+    }
+    view.appendChild(frames);
+
+    // conditioning y strip (single, represents the InP channel)
+    const ys=document.createElement('div');ys.className='ystrip';
+    ys.innerHTML='<span>cond&nbsp;y</span>';
+    const yg=document.createElement('div');yg.className='ygrid';
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      const cell=document.createElement('div');cell.className='cell';
+      if(vi===vStar && inWindow(r,c,col,k) && masky) cell.classList.add('noise');
+      yg.appendChild(cell);
+    }
+    ys.appendChild(yg);view.appendChild(ys);
+    stage.appendChild(view);
+  }
+
+  // routes + verdict
+  const temporalOpen = !tube;            // single-frame leaves other frames visible
+  const crossOpen = covis;               // another view sees it
+  const routes=$('routes');
+  routes.innerHTML=
+    `<div class="route ${temporalOpen?'open':'blocked'}"><span class="tag">${temporalOpen?'OPEN ✓':'BLOCKED ✗'}</span><b>Within-view (temporal)</b>copy from same camera's other frames</div>`+
+    `<div class="route ${crossOpen?'open':'blocked'}"><span class="tag">${crossOpen?'OPEN ✓':'BLOCKED ✗'}</span><b>Cross-view</b>borrow from another camera that sees it</div>`;
+
+  const v=$('verdict');
+  if(!crossOpen){
+    v.className='verdict warn';
+    v.innerHTML='⚠ No other view sees this region → recovery <b>impossible</b>.<br><small>That is why the window is sampled from the co-visible set U.</small>';
+  } else if(temporalOpen){
+    v.className='verdict no';
+    v.innerHTML='✗ Temporal shortcut OPEN — model can cheat within-view and <b>won\'t learn cross-view</b>.<br><small>Mask the whole tube to fix this.</small>';
+  } else {
+    v.className='verdict ok';
+    v.innerHTML='✓ Only cross-view attention can recover the tube — <b>exactly the goal</b>.'+(masky?'<br><small>y also masked → cannot peek at the hint either.</small>':'');
+  }
+}
+['k','col','tube','masky','covis'].forEach(id=>$(id).addEventListener('input',render));
+render();
+</script>
+</body>
+</html>

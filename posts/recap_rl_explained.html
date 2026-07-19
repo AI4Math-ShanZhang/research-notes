@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RECAP (π0.6): RL for VLAs — Explained for Newcomers</title>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['\\(','\\)']], displayMath: [['\\[','\\]']] },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'base', themeVariables:{
+  primaryColor:'#eef4ff', primaryBorderColor:'#4A6FD4', primaryTextColor:'#1a2b4a',
+  lineColor:'#8aa0c8', fontSize:'15px'}});</script>
+<style>
+  :root{
+    --ink:#1c2333; --muted:#5a6785; --line:#e2e8f4; --bg:#f7f9fc;
+    --blue:#4A6FD4; --blue-bg:#eef3ff;
+    --green:#2EAF8E; --green-bg:#e8f8f2;
+    --amber:#E8900D; --amber-bg:#fff5e4;
+    --red:#E0567A; --red-bg:#fdeef2;
+    --purple:#8A64C8; --purple-bg:#f2ecfb;
+  }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); background:var(--bg); line-height:1.62; margin:0; padding:0;}
+  .wrap{max-width:920px; margin:0 auto; padding:44px 26px 90px;}
+  header{border-bottom:3px solid var(--blue); padding-bottom:20px; margin-bottom:14px;}
+  h1{font-size:31px; margin:0 0 8px; letter-spacing:-.3px;}
+  .sub{color:var(--muted); font-size:16px;}
+  .tag{display:inline-block; background:var(--blue-bg); color:var(--blue); font-size:12.5px;
+    font-weight:600; padding:3px 10px; border-radius:20px; margin:2px 4px 2px 0;}
+  h2{font-size:23px; margin:46px 0 6px; padding-top:14px; border-top:1px solid var(--line); letter-spacing:-.2px;}
+  h2 .n{color:var(--blue); font-weight:800; margin-right:8px;}
+  h3{font-size:18px; margin:26px 0 6px; color:#243154;}
+  p{margin:10px 0;}
+  code{background:#eef1f6; padding:1px 6px; border-radius:5px; font-size:14px;
+    font-family:"SF Mono",Consolas,Menlo,monospace;}
+  .lead{font-size:17px; color:#33405c;}
+  /* character cards */
+  .cast{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:20px 0;}
+  .cast .c{border:1px solid var(--line); border-radius:12px; padding:16px; background:#fff;}
+  .cast .c b{display:block; font-size:16px; margin-bottom:2px;}
+  .cast .c .sym{font-size:15px; color:var(--blue); margin:4px 0 8px;}
+  .cast .c1{border-top:4px solid var(--blue);}
+  .cast .c2{border-top:4px solid var(--green);}
+  .cast .c3{border-top:4px solid var(--amber);}
+  /* formula block */
+  .fx{background:#fff; border:1px solid var(--line); border-left:5px solid var(--blue);
+    border-radius:10px; padding:6px 20px; margin:18px 0;}
+  .fx .read{color:var(--muted); font-size:14.5px; margin:-2px 0 12px; padding-left:2px;}
+  .fx .read b{color:var(--ink);}
+  /* callouts */
+  .box{border-radius:10px; padding:14px 18px; margin:16px 0; font-size:15.5px;}
+  .case{background:var(--green-bg); border:1px solid #bfe8da;}
+  .case b.h{color:#1c7a5e;}
+  .why{background:var(--amber-bg); border:1px solid #f4dcae;}
+  .why b.h{color:#9a6100;}
+  .warn{background:var(--red-bg); border:1px solid #f5cdd8;}
+  .warn b.h{color:#b23a5c;}
+  .note{background:var(--purple-bg); border:1px solid #ddcef2;}
+  .note b.h{color:#6a44a8;}
+  .box .h{display:block; font-size:13px; letter-spacing:.4px; text-transform:uppercase; margin-bottom:4px;}
+  /* table */
+  table{border-collapse:collapse; width:100%; margin:18px 0; font-size:14.5px; background:#fff;}
+  th,td{border:1px solid var(--line); padding:9px 12px; text-align:left; vertical-align:top;}
+  th{background:#eef2f9; font-weight:700;}
+  tr:nth-child(even) td{background:#fafbfe;}
+  .pos{color:#1c7a5e; font-weight:700;}
+  .neg{color:#c23a5c; font-weight:700;}
+  .mermaid{background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px; margin:20px 0; text-align:center;}
+  .step{display:flex; gap:14px; margin:14px 0; align-items:flex-start;}
+  .step .num{flex:0 0 34px; height:34px; background:var(--blue); color:#fff; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px;}
+  .step .body{flex:1;}
+  .step .body b{color:#243154;}
+  .pill{display:inline-block; font-size:12px; font-weight:700; padding:1px 8px; border-radius:12px;}
+  .pill.g{background:var(--green-bg); color:#1c7a5e;}
+  .pill.r{background:var(--red-bg); color:#c23a5c;}
+  footer{margin-top:50px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:13.5px;}
+  .keyline{border-left:3px solid var(--blue); padding-left:14px; margin:16px 0; color:#33405c;}
+  /* Q&A summary */
+  .qagroup{margin:22px 0;}
+  .qagroup > .glabel{font-size:13px; letter-spacing:.5px; text-transform:uppercase; color:var(--blue);
+    font-weight:700; margin:0 0 8px;}
+  .qa{background:#fff; border:1px solid var(--line); border-radius:10px; padding:13px 16px; margin:9px 0;}
+  .qa .q{font-weight:700; color:#243154; margin:0 0 5px; font-size:15px;}
+  .qa .q::before{content:"Q"; display:inline-block; background:var(--blue-bg); color:var(--blue);
+    font-size:12px; font-weight:800; width:20px; height:20px; line-height:20px; text-align:center;
+    border-radius:5px; margin-right:8px;}
+  .qa .a{color:#3a4763; font-size:14.7px; margin:0;}
+  .qa .a::before{content:"A"; display:inline-block; background:var(--green-bg); color:#1c7a5e;
+    font-size:12px; font-weight:800; width:20px; height:20px; line-height:20px; text-align:center;
+    border-radius:5px; margin-right:8px;}
+  .qa .a b{color:var(--ink);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>RL for VLAs, unpacked: the RECAP method (π<sub>0.6</sub>)</h1>
+  <div class="sub">A beginner's walkthrough of the Preliminaries &amp; Method — every formula paired with a plain reading and a concrete case.</div>
+  <div style="margin-top:12px;">
+    <span class="tag">Physical Intelligence · arXiv 2511.14759</span>
+    <span class="tag">RL · advantage conditioning</span>
+    <span class="tag">flow-matching VLA</span>
+  </div>
+</header>
+
+<p class="lead">The paper's core idea is one sentence: <b>train a <span style="color:var(--green)">critic</span> with reinforcement-learning ideas, but train the <span style="color:var(--blue)">policy</span> with plain supervised imitation</b> — feeding the critic's judgment in as an extra label. This page builds up to that, starting from zero RL knowledge.</p>
+
+<!-- ============================================================ -->
+<h2><span class="n">0</span>The three characters</h2>
+<p>Every RL setup for a robot has three roles. Hold these in your head; all the math just formalizes their conversation.</p>
+
+<div class="cast">
+  <div class="c c1">
+    <b>The Policy</b>
+    <div class="sym">\(\pi(a\mid o)\)</div>
+    The VLA itself. "Given what I see (\(o\)), what action (\(a\)) do I take?" This is the thing we ultimately deploy on the robot.
+  </div>
+  <div class="c c2">
+    <b>The Value function</b>
+    <div class="sym">\(V(o)\)</div>
+    A <i>critic</i>. "From this situation, how well is it going to go?" It never controls the robot — it only judges.
+  </div>
+  <div class="c c3">
+    <b>The Reward</b>
+    <div class="sym">\(r\)</div>
+    The score. In π<sub>0.6</sub>: did the task succeed / how fast is it progressing? Sparse and outcome-based.
+  </div>
+</div>
+
+<div class="box why"><span class="h">Why the split matters</span>
+The <b>policy</b> is a giant flow-matching VLA — hard and unstable to optimize with reward directly. The <b>value function</b> is smaller and trained with a clean classification loss. RECAP puts all the "RL" into the value function, then lets the policy learn by imitation. That is the whole game.
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">1</span>Preliminaries — the standard RL vocabulary</h2>
+
+<h3>1.1 &nbsp; Policy and trajectory</h3>
+<div class="fx">
+\[ \pi(a_t \mid o_t) \qquad\qquad \tau = (o_0, a_0, o_1, a_1, \dots, o_T) \]
+<div class="read"><b>Read:</b> the policy picks action \(a_t\) from observation \(o_t\). A <b>trajectory</b> \(\tau\) is one full rollout — "one complete attempt at the task."</div>
+</div>
+
+<div class="fx">
+\[ \rho_\pi(\tau) = p(o_0)\;\prod_{t=0}^{T-1} \underbrace{\pi(a_t\mid o_t)}_{\text{you act}}\;\underbrace{p(o_{t+1}\mid o_t,a_t)}_{\text{world reacts}} \]
+<div class="read"><b>Read:</b> the probability of a whole attempt = <b>start somewhere</b> × repeatedly (<b>your policy acts</b> × <b>physics responds</b>). Two sources of randomness: your policy and the world.</div>
+</div>
+
+<h3>1.2 &nbsp; Reward and return</h3>
+<div class="fx">
+\[ r_t = r(o_t, a_t) \qquad\qquad R(\tau) = \sum_{t=0}^{T} r_t \]
+<div class="read"><b>Read:</b> \(r_t\) is the score at each step (\(r_T\) is the final outcome). The <b>return</b> \(R(\tau)\) is the total score over the whole attempt.</div>
+</div>
+<div class="box case"><span class="h">Concrete case — folding laundry</span>
+An episode of "fold the t-shirt." <b>Return \(R(\tau)\)</b> is high if the shirt ends up neatly folded, low if it stays crumpled. (π<sub>0.6</sub> actually uses a shaped signal — <i>steps-to-success</i> — so progress is rewarded, not just the final frame. More in §3.)
+</div>
+
+<h3>1.3 &nbsp; The goal of RL</h3>
+<div class="fx">
+\[ J(\pi) = \mathbb{E}_{\tau\sim\rho_\pi}\big[\,R(\tau)\,\big] \]
+<div class="read"><b>Read:</b> find a policy that, <b>on average across attempts</b>, gets a high return. That average (expectation \(\mathbb E\)) is the entire objective of RL.</div>
+</div>
+
+<h3>1.4 &nbsp; The Value function — "what is this moment worth?"</h3>
+<div class="fx">
+\[ V^\pi(o_t) = \mathbb{E}\Big[\, \sum_{t'=t}^{T} r_{t'} \,\Big] \]
+<div class="read"><b>Read:</b> the expected <b>return-to-go</b> from state \(o_t\), if you keep acting with policy \(\pi\). <b>This is "the value" you asked about</b> — a single number saying "how good is this exact situation."</div>
+</div>
+<div class="box case"><span class="h">Concrete case — the value curve (paper Fig. 4)</span>
+Play back a successful fold: the value <b>rises steadily toward 0</b> (their convention: 0 = done, negative = steps still remaining). Play back a failure where the robot tips over a water filter: the value <b>drops sharply</b> at that instant. The critic reads the episode like a progress bar.
+</div>
+
+<h3>1.5 &nbsp; The Advantage — "was <i>this</i> action better than average?"</h3>
+<div class="fx">
+\[ A^\pi(o_t,a_t) = \underbrace{\mathbb{E}\Big[\textstyle\sum_{t'=t}^{t+N-1} r_{t'} + V^\pi(o_{t+N})\Big]}_{\text{what actually happened + value after}} \;-\; \underbrace{V^\pi(o_t)}_{\text{what you expected}} \]
+<div class="read"><b>Read:</b> take the reward you <b>actually collected</b> over the next \(N\) steps, plus the value of where you ended up, then subtract the value you <b>expected</b> before acting. This is an "n-step" estimate.</div>
+</div>
+<table>
+  <tr><th>Sign of \(A\)</th><th>Meaning</th><th>What we do with it</th></tr>
+  <tr><td class="pos">A &gt; 0</td><td>this action did <b>better</b> than the policy's average</td><td>reinforce it — mark it "good"</td></tr>
+  <tr><td class="neg">A &lt; 0</td><td>this action did <b>worse</b> than average — a mistake</td><td>suppress it — mark it "bad"</td></tr>
+</table>
+<div class="box case"><span class="h">Concrete case — the fridge / water filter</span>
+Robot reaches for the fridge and tips over the water filter. The real future got worse than expected → <b class="neg">advantage goes negative</b> exactly at that move. It recovers and completes the task → advantage climbs back positive. <b>Advantage is a per-action verdict:</b> did this specific move help or hurt?
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">2</span>Regularized RL &amp; "the reference" \(\pi_{\text{ref}}\)</h2>
+
+<p>Pure reward-chasing is dangerous when you train many gradient steps on a <b>fixed, pre-collected dataset</b> (the "offline" setting). The policy drifts toward strange actions the data never shows, where the critic's estimates are unreliable. The fix: <b>keep the new policy close to a reference policy</b> \(\pi_{\text{ref}}\) — usually the behavior that <i>collected</i> the data.</p>
+
+<div class="fx">
+\[ J(\pi,\pi_{\text{ref}}) = \mathbb{E}\Big[\textstyle\sum_t \gamma^t r_t\Big] \;-\; \beta\,\mathbb{E}_{o}\big[\,D\big(\pi(\cdot\mid o)\,\|\,\pi_{\text{ref}}(\cdot\mid o)\big)\big] \]
+<div class="read"><b>Read:</b> maximize reward, <b>minus a penalty</b> \(D\) for straying from \(\pi_{\text{ref}}\). \(\beta\) sets the leash length; \(D\) is a divergence (e.g. KL).</div>
+</div>
+
+<h3>2.1 &nbsp; The classic closed-form solution</h3>
+<p>With KL as the divergence, there is a famous exact answer for the best regularized policy:</p>
+<div class="fx">
+\[ \hat\pi(a\mid o) \;\propto\; \pi_{\text{ref}}(a\mid o)\,\exp\!\big(A^{\pi_{\text{ref}}}(o,a)/\beta\big) \]
+<div class="read"><b>Read:</b> the optimal policy = <b>the reference, re-weighted by advantage</b>. Actions with high advantage get their probability multiplied up; low-advantage actions get pushed down. This one line is the seed of everything that follows.</div>
+</div>
+
+<h3>2.2 &nbsp; The variant RECAP actually uses</h3>
+<p>RECAP swaps the exponential for an <b>"improvement probability"</b> \(p(I\mid A)\) — the chance that action \(a\) improves over \(\pi_{\text{ref}}\), via a monotonically increasing function \(g\):</p>
+<div class="fx">
+\[ \hat\pi(a\mid o) \;\propto\; \pi_{\text{ref}}(a\mid o)\;\Big(\,p\big(I\mid A^{\pi_{\text{ref}}}(o,a)\big)\Big)^{\beta} \]
+<div class="read"><b>Read:</b> same shape as above, but the multiplier is now "how likely is this action to be an improvement?" There's a theorem: this \(\hat\pi\) is <b>guaranteed to be at least as good as</b> \(\pi_{\text{ref}}\) — \(J(\hat\pi)\ge J(\pi_{\text{ref}})\). Guaranteed improvement, no policy-gradient needed.</div>
+</div>
+<div class="box note"><span class="h">The pivot to a trainable policy</span>
+Instead of computing that ratio at test time, they turn it into a <b>learning target</b>: fit a network \(\pi_\theta\) so it matches \(\hat\pi\) — <code>min<sub>θ</sub> KL(π̂, π<sub>θ</sub>)</code>. Next section shows how this collapses into a shockingly simple supervised loss.
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">3</span>The RECAP method itself</h2>
+
+<h3>3.1 &nbsp; The loop</h3>
+<div class="mermaid">
+flowchart LR
+  A["① Data collection<br/>run VLA on the task<br/>label outcomes (reward)<br/>+ optional human interventions"]
+  B["② Value-function training<br/>fit critic V^πref<br/>detects failures, judges<br/>steps-to-success"]
+  C["③ Advantage-conditioned<br/>policy training<br/>imitate data, labeled by<br/>whether A &gt; threshold"]
+  A --> B --> C --> A
+  style A fill:#fff5e4,stroke:#E8900D
+  style B fill:#e8f8f2,stroke:#2EAF8E
+  style C fill:#eef3ff,stroke:#4A6FD4
+</div>
+<p>Pre-training runs steps ②③ on tens of thousands of hours of demos. Then ①②③ repeat on the robot's <b>own</b> autonomous attempts (plus expert corrections) to keep improving.</p>
+
+<h3>3.2 &nbsp; Step ② — the value function, concretely (Eq. 1)</h3>
+<p>They don't regress a single number. They predict a <b>distribution over 201 value bins</b> (a distributional critic) and train it with cross-entropy — treating "how good is this?" as a classification problem, which is far more stable.</p>
+<div class="fx">
+\[ \min_{\phi}\; \mathbb{E}_{\tau\in\mathcal D}\Big[\,\textstyle\sum_{o_t\in\tau} H\big(R_t^{B}(\tau),\, p_\phi(V\mid o_t,\ell)\big)\Big] \]
+<div class="read"><b>Read:</b> for each frame, take the <b>actual return-to-go</b> \(R_t\), bin it (\(R^B_t\), \(B{=}201\) bins), and train the critic \(p_\phi\) to predict that bin via cross-entropy \(H\). \(\ell\) = the language command (multi-task). Recover a scalar value by \(V=\sum_b p_\phi(b)\,v(b)\).</div>
+</div>
+<div class="box case"><span class="h">Why "steps-to-success" as the target</span>
+They normalize the return so <b>0 = task complete</b> and more-negative = more steps still to go. So the critic literally learns to answer "how many steps until this is done?" — which naturally spikes downward at mistakes (a mistake adds steps). This is a <b>Monte-Carlo</b> estimate: it just uses what actually happened in the logged trajectory, no bootstrapping. Simple and reliable.
+</div>
+
+<h3>3.3 &nbsp; Step ③ — policy extraction via advantage conditioning</h3>
+<p>Here's the clever collapse. Using Bayes' rule they rewrite the improvement probability as a <b>ratio of two versions of the same reference policy</b> — one that sees an "improvement indicator" \(I\), one that doesn't:</p>
+<div class="fx">
+\[ \hat\pi(a\mid o,\ell) \;\propto\; \pi_{\text{ref}}(a\mid o,\ell)\left(\frac{\pi_{\text{ref}}(a\mid I,o,\ell)}{\pi_{\text{ref}}(a\mid o,\ell)}\right)^{\!\beta} \tag{2} \]
+<div class="read"><b>Read:</b> the improved policy is built from \(\pi_{\text{ref}}\) <b>with</b> and <b>without</b> a conditioning flag \(I\) ("this action is an improvement"). For the special case \(\beta{=}1\), it simplifies to just \(\hat\pi = \pi_{\text{ref}}(a\mid I,o,\ell)\) — i.e. "the reference policy, told to be good."</div>
+</div>
+<div class="box note"><span class="h">This is exactly classifier-free guidance (CFG), reused</span>
+Just like a diffusion image model is trained both <i>with</i> and <i>without</i> a text prompt, here the policy is trained both <b>with</b> and <b>without</b> the optimality flag \(I\). So you never need to build \(p(I\mid A)\) explicitly — you just train one model that can do both. (Their method is closest to <b>CFGRL</b>.)</div>
+</div>
+
+<p>The flag \(I\) is a simple <b>binarized</b> advantage — is the advantage above a task-specific threshold \(\epsilon_\ell\)?</p>
+<div class="fx">
+\[ I_t \;=\; \mathbb{1}\!\left[\,A^{\pi_{\text{ref}}}(o_t,a_t,\ell) > \epsilon_\ell\,\right] \]
+<div class="read"><b>Read:</b> \(I_t = 1\) ("good") if this action's advantage clears the bar, else 0 ("meh"). Turning advantage into a single bit is what makes the whole thing a clean supervised label.</div>
+</div>
+
+<h3>3.4 &nbsp; The final training objective (Eq. 3)</h3>
+<div class="fx">
+\[ \min_{\theta}\; \mathbb{E}_{\mathcal D_{\pi_{\text{ref}}}}\Big[\, -\log\pi_\theta(a_t\mid o_t,\ell)\;-\;\alpha\,\log\pi_\theta(a_t\mid I_t,o_t,\ell)\,\Big] \]
+<div class="read"><b>Read:</b> <b>two imitation terms</b>. Term 1: predict the action <i>without</i> the flag (learn general behavior). Term 2: predict the action <i>with</i> the flag \(I_t\) (learn "what does a GOOD action look like here?"). \(\alpha\) balances them. That's it — <b>it's just weighted behavior cloning with a goodness bit attached.</b></div>
+</div>
+
+<div class="box case"><span class="h">How the pieces click together at deploy time</span>
+Training taught the model the mapping <i>flag → behavior</i>. At deployment you <b>hard-set the flag to "good"</b> (\(I=1\)) and the policy emits the high-advantage actions while suppressing the mediocre ones it also saw. The RL lived entirely in the critic and the advantage bit; the policy stayed a stable supervised problem.
+</div>
+
+<div class="box why"><span class="h">Where human corrections plug in</span>
+When a human teleoperates a fix mid-rollout, RECAP simply <b>forces \(I=\text{True}\)</b> for those actions — "expert corrections are, by assumption, always improvements." No separate machinery: demos, autonomous rollouts, and interventions all flow through the same one-bit objective.
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">4</span>Traditional PPO vs the proposed method</h2>
+
+<h3>4.1 &nbsp; How traditional PPO trains a policy</h3>
+<p>PPO (Proximal Policy Optimization) is the standard on-policy RL workhorse. It directly pushes up the probability of high-advantage actions, with a "trust region" clip so each update stays small:</p>
+<div class="fx">
+\[ \mathcal L^{\text{PPO}} = \mathbb{E}\Big[\min\big(\rho_t A_t,\;\text{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t\big)\Big],\qquad \rho_t=\frac{\pi_\theta(a_t\mid o_t)}{\pi_{\text{old}}(a_t\mid o_t)} \]
+<div class="read"><b>Read:</b> raise the action's probability in proportion to its advantage \(A_t\), but <b>clip</b> the probability ratio \(\rho_t\) so the policy can't lurch too far in one step. It needs the <b>likelihood ratio</b> \(\rho_t\) to work.</div>
+</div>
+
+<div class="box warn"><span class="h">Why PPO is painful for a flow-matching VLA</span>
+PPO needs a tractable action <b>log-likelihood</b> \(\log\pi_\theta(a\mid o)\) to form \(\rho_t\). But flow-matching / diffusion action experts <b>don't give you one cheaply</b> — they define actions through an iterative denoising process, not a closed-form density. People bolt on approximations (DPPO/FPO), and to keep off-policy training stable they must shrink the trust region so hard (η = 0.01 in the paper) that <b>the policy barely moves</b>.
+</div>
+
+<h3>4.2 &nbsp; Side-by-side</h3>
+<table>
+  <tr><th></th><th>Traditional PPO</th><th>RECAP (advantage conditioning)</th></tr>
+  <tr><td><b>How the policy learns</b></td><td>gradient ascent on reward (policy gradient)</td><td>supervised imitation + a goodness bit</td></tr>
+  <tr><td><b>Needs action log-likelihood?</b></td><td><span class="pill r">yes</span> — hard for flow matching</td><td><span class="pill g">no</span> — just reuses the FM training loss</td></tr>
+  <tr><td><b>Uses "bad" data?</b></td><td>yes, but unstably</td><td>yes — labeled \(I=0\), still informative</td></tr>
+  <tr><td><b>On-policy required?</b></td><td>essentially yes (fresh rollouts)</td><td>no — happily off-policy / mixed data</td></tr>
+  <tr><td><b>Stability on big VLAs</b></td><td>fragile; tiny trust region needed</td><td>stable (it's just BC under the hood)</td></tr>
+  <tr><td><b>Result in paper</b></td><td>stable but <b>barely improves</b> over the baseline</td><td><b>&gt;2× throughput, ~½ failure</b> on hard tasks</td></tr>
+</table>
+
+<h3>4.3 &nbsp; What the experiments found</h3>
+<div class="keyline">
+On the T-shirts/Shorts task, both <b>PPO</b> and <b>AWR</b> (a weighted-regression alternative) were given the <i>same</i> data RECAP used. PPO stayed stable only with a tiny trust region and then <b>failed to improve</b> over the offline-RL+SFT starting point. AWR reached a reasonable success rate but produced <b>slow</b> policies (low throughput) because it throws away much of the data. RECAP's keep-all-data, one-bit-label recipe beat both — and on a hard adversarial fold, two RECAP iterations (600 trajectories each) drove success to <b>97%</b>.
+</div>
+
+<div class="box why"><span class="h">The one-line takeaway</span>
+PPO tries to make a hard optimization (reward maximization on a density-free model) work. RECAP <b>sidesteps it</b>: push the RL into a stable distributional critic, distill its verdict into a single "is this action good?" bit, and let the VLA learn that bit by ordinary imitation. Same RL benefit, none of the policy-gradient fragility.
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">5</span>Q&amp;A — the sticking points we worked through</h2>
+<p>These are the exact questions that came up while unpacking the paper, in the order they arose. Each one was a real point of confusion worth pinning down.</p>
+
+<div class="qagroup">
+  <div class="glabel">A · Online vs offline, and the value function</div>
+  <div class="qa"><p class="q">Does offline learning skip training the policy?</p><p class="a">No — <b>both</b> online and offline train the policy. The split is only about <b>where the data comes from</b>: offline = a fixed saved log; online = fresh data the policy collects itself. RECAP uses both (offline pre-train, then online rollouts + corrections).</p></div>
+  <div class="qa"><p class="q">Does V judge the observation or the action?</p><p class="a">V judges the <b>observation</b> (the situation), not the action. It scores "how well is it going from here." To judge an <b>action</b> you difference two observation-scores → that's the advantage.</p></div>
+  <div class="qa"><p class="q">Are "critic" and "value function" the same thing?</p><p class="a">Yes — one network, two names. "Value function" is the object <b>V</b>; "critic" is its job (judging). There is no separate critic network.</p></div>
+  <div class="qa"><p class="q">V vs Q?</p><p class="a"><b>V(o)</b> scores a situation only; <b>Q(o,a)</b> would score a situation + action. π<sub>0.6</sub> deliberately uses <b>V</b> (cheap to fit by replaying logs) and recovers action-quality via the advantage subtraction.</p></div>
+  <div class="qa"><p class="q">Is a "situation" the same as a trajectory?</p><p class="a">No. A <b>situation = one observation o<sub>t</sub></b> (a single frame). A <b>trajectory τ</b> = the whole ordered sequence of all frames in one attempt. V eats one situation at a time.</p></div>
+</div>
+
+<div class="qagroup">
+  <div class="glabel">B · The observation and the action (robot I/O)</div>
+  <div class="qa"><p class="q">What's the format of o — just an image?</p><p class="a">A bundle: <b>o<sub>t</sub> = [3 camera images + robot config q<sub>t</sub>]</b> plus the language command ℓ. Three cameras = one base + one per wrist. Multimodal, not a single image.</p></div>
+  <div class="qa"><p class="q">Is q<sub>t</sub> (joint angles + gripper) fixed?</p><p class="a">The <b>values change every step</b> (re-sensed from encoders as the arm moves). The <b>structure</b> (how many numbers) is fixed for one robot, but differs across robots — the cross-embodiment challenge.</p></div>
+  <div class="qa"><p class="q">Are q and a both just ~a handful of numbers?</p><p class="a">Yes — both are short float vectors, one number per joint + gripper (π<sub>0.6</sub>'s two-arm robot ≈ 14). But the action <b>output</b> is a <b>chunk</b> = many such vectors stacked (H future steps).</p></div>
+  <div class="qa"><p class="q">Is q the result of the action?</p><p class="a">q is a <b>sensor measurement</b>; a is a <b>motor command</b>. The result of action a<sub>t</sub> is the <b>next</b> config q<sub>t+1</sub> — and only approximately, because physics (contact, lag) intervenes. q<sub>t</sub> itself is an <i>input</i> read to <i>choose</i> a<sub>t</sub>.</p></div>
+  <div class="qa"><p class="q">So current state + action = next state?</p><p class="a">Right idea — that's the dynamics. But π<sub>0.6</sub>'s action is an <b>absolute target</b>, so q<sub>t+1</sub> ≈ a<sub>t</sub> (not q<sub>t</sub> + a<sub>t</sub>). "q<sub>t</sub> + a<sub>t</sub>" would be a <i>delta</i> action. Either way "=" is really "≈" (physics).</p></div>
+  <div class="qa"><p class="q">What does "@ 50 Hz" mean?</p><p class="a">The arms get a fresh command <b>50 times per second</b> (every 20 ms) → smooth motion. The model doesn't think that fast: it predicts an <b>action chunk</b> once, then that chunk is streamed to the motors at 50 Hz. "Slow brain, fast body."</p></div>
+</div>
+
+<div class="qagroup">
+  <div class="glabel">C · Computing the advantage (the n-step formula)</div>
+  <div class="qa"><p class="q">What are t+N and T?</p><p class="a"><b>t+N</b> = a nearby frame N steps ahead — the <b>handoff point</b> where you stop counting real rewards and let V estimate the rest. <b>T</b> = the actual <b>end</b> of the episode (far away). n-step deliberately stops at t+N, never walks to T.</p></div>
+  <div class="qa"><p class="q">Does the model infer the N steps, simultaneously or one-by-one?</p><p class="a">Neither — it doesn't infer them at all. The N steps <b>already happened</b> and are saved on disk. Computing advantage = <b>reading recorded rewards</b> + running V twice. (Don't confuse with the action <b>chunk</b>, which <i>is</i> live prediction.)</p></div>
+  <div class="qa"><p class="q">How many times do we call V?</p><p class="a"><b>Exactly twice</b>: V(o<sub>t+N</sub>) and V(o<sub>t</sub>). The "N" (e.g. 3) refers to <b>reward numbers read from the log</b>, not V calls. Demo: A = [r<sub>t</sub>+r<sub>t+1</sub>+r<sub>t+2</sub> + V(o<sub>t+3</sub>)] − V(o<sub>t</sub>) = (−3 + −1) − (−5) = <b>+1</b> (good action).</p></div>
+  <div class="qa"><p class="q">When we call V, do we save the reward?</p><p class="a">No. Reward is <b>saved earlier</b>, when the robot ran (from the task outcome — no model involved). V is called <b>later</b>, at training time. Two separate moments; V never produces reward.</p></div>
+</div>
+
+<div class="qagroup">
+  <div class="glabel">D · The reward, and what V learns</div>
+  <div class="qa"><p class="q">Is the reward −1 each step and +1 on the last?</p><p class="a">Not +1 — it's <b>−1 per working step, 0 at success</b>. Success = the countdown <i>reaching</i> 0 (you stop paying −1), not a bonus.</p></div>
+  <div class="qa"><p class="q">Does the reward ignore the final success?</p><p class="a">No — success is the <b>anchor</b>. Steps-to-go is measured toward the success frame, so a <b>success</b> makes the countdown reach 0, a <b>failure</b> never reaches it. Steps-to-go IS success, spread across every frame (plus it locates mistakes).</p></div>
+  <div class="qa"><p class="q">Does V learn action accuracy?</p><p class="a">No. V is a <b>progress estimator</b>: situation → predicted steps-to-success. It never sees an action or compares to a "correct" move. Action-accuracy is an <i>imitation</i> idea; RL grades <b>outcomes/progress</b>.</p></div>
+  <div class="qa"><p class="q">Why train V with Eq. 1?</p><p class="a">Eq. 1 <b>builds</b> the progress estimator: it teaches V to match the recorded steps-to-go via cross-entropy. (Eq. 1 trains <b>V</b>; Eq. 3 trains the <b>policy</b> — two networks, two formulas.)</p></div>
+</div>
+
+<div class="qagroup">
+  <div class="glabel">E · The two losses &amp; flow matching</div>
+  <div class="qa"><p class="q">Why Eq. 3 (log-likelihood) and not plain MSE on the action?</p><p class="a">Plain MSE <b>averages</b> multiple good actions into a bad one (go-left + go-right → go-straight → crash). A distribution keeps both as separate modes. Eq. 3 also needs a distribution to attach the good/bad flag to.</p></div>
+  <div class="qa"><p class="q">So is Eq. 3 the MSE / the flow matching?</p><p class="a">Three zoom levels of one thing: <b>Eq. 3</b> = the goal (make the good action likely); <b>flow matching</b> = how the continuous part is trained; <b>velocity-MSE</b> = the arithmetic inside flow matching. The −log π <i>becomes</i> a velocity-MSE when implemented.</p></div>
+  <div class="qa"><p class="q">Why can't we compute −log π directly for continuous actions?</p><p class="a">Flow matching outputs a <b>velocity</b>, and the action is the end of a multi-step denoising journey — there's no direct probability, and recovering one needs an expensive volume-change integral along the whole path. Cheap to <b>sample</b>, not to get a density.</p></div>
+  <div class="qa"><p class="q">Are the continuous actions the same as action tokens?</p><p class="a">Opposite representations. <b>Continuous actions</b> = raw numbers (flow matching, no easy log π). <b>Action tokens</b> = discrete symbols (next-token, easy log π). π<sub>0.6</sub> <b>deploys the continuous action</b>; the discrete tokens are a <b>training-only helper</b> ("knowledge insulation").</p></div>
+  <div class="qa"><p class="q">How does training use both if flow matching only touches continuous actions?</p><p class="a">Two losses, <b>added</b>: cross-entropy on the discrete tokens + flow-matching velocity-MSE on the continuous actions. They share a backbone, so the discrete loss keeps the backbone healthy, which helps the action expert.</p></div>
+</div>
+
+<div class="qagroup">
+  <div class="glabel">F · Deployment</div>
+  <div class="qa"><p class="q">How is the action sampled at deployment?</p><p class="a">(1) <b>Set the flag to "good"</b> (I=1). (2) <b>Flow-matching sample</b>: start from noise, follow the predicted velocity for a few ODE steps → an action <b>chunk</b>. (3) Execute the chunk at <b>50 Hz</b>, re-plan before it runs out. Few steps = real-time; no probabilities, just follow the velocity.</p></div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">6</span>Good next materials (to go deeper)</h2>
+<ul>
+  <li><b>CFGRL</b> — the closest ancestor; RECAP's Eq. 2 is essentially CFGRL. Read this to fully "get" the with/without-flag trick.</li>
+  <li><b>Advantage-Weighted Regression (AWR)</b> — the weighted-imitation alternative RECAP compares against; clarifies why "keep all data" beats "filter to good data."</li>
+  <li><b>Decision Transformer / RvS ("RL via Supervised learning")</b> — the broader family of "condition the policy on how good the outcome should be," which RECAP belongs to.</li>
+  <li><b>Distributional RL (C51)</b> — where the "201 value bins + cross-entropy" critic comes from.</li>
+  <li><b>Offline RL survey (Levine et al. 2020)</b> — the setting (learn from a fixed log without exploration) that RECAP's policy-extraction criteria are designed for.</li>
+</ul>
+
+<footer>
+  Built from the π<sub>0.6</sub> paper (arXiv 2511.14759), Sections III–IV and VI. Formulas transcribed from the paper; plain-language readings and cases added for teaching. Math rendered with MathJax; pipeline with Mermaid.
+</footer>
+</div>
+</body>
+</html>

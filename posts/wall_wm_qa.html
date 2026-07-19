@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WALL-WM — Q&A from our discussion</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --chunk:#4A8ED4;--stair:#38BDB8;--mask:#E8900D;--world:#9B72CF;--act:#3DBD79;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;}
+  header{background:linear-gradient(135deg,#3D5A9B,#38BDB8);color:#fff;padding:36px 20px;text-align:center;}
+  header h1{margin:0 0 6px;font-size:1.6rem;}
+  header p{margin:0;opacity:.95;}
+  .wrap{max-width:860px;margin:0 auto;padding:24px 18px 70px;}
+  .toc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 20px;margin:16px 0;}
+  .toc a{color:var(--chunk);text-decoration:none;margin-right:14px;font-size:.9rem;white-space:nowrap;}
+  .toc a:hover{text-decoration:underline;}
+  h2{font-size:1.3rem;margin-top:34px;display:flex;align-items:center;gap:9px;border-bottom:2px solid var(--line);padding-bottom:6px;}
+  .dot{width:13px;height:13px;border-radius:50%;display:inline-block;}
+  details{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:9px 0;padding:2px 16px;box-shadow:0 1px 6px rgba(30,50,90,.03);}
+  details[open]{box-shadow:0 2px 12px rgba(30,50,90,.06);}
+  summary{cursor:pointer;font-weight:700;padding:12px 0;list-style:none;position:relative;padding-right:26px;}
+  summary::-webkit-details-marker{display:none;}
+  summary::after{content:"+";position:absolute;right:2px;top:10px;font-size:1.3rem;color:var(--muted);font-weight:400;}
+  details[open] summary::after{content:"–";}
+  .a{padding:0 0 14px;color:var(--ink);}
+  .a .one{background:#f7f9fc;border-left:3px solid var(--chunk);border-radius:0 8px 8px 0;padding:8px 12px;margin-top:8px;font-size:.92rem;}
+  .a .one b{color:var(--chunk);}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:.88rem;}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:#f0f4fa;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.85em;}
+  .sh{font-family:ui-monospace,Menlo,Consolas,monospace;}
+  ul{margin:6px 0;padding-left:20px;} li{margin:4px 0;}
+  .links{background:#ecf9f1;border:1px solid #bfe6cf;border-radius:12px;padding:14px 18px;margin:22px 0;font-size:.9rem;}
+  .links b{color:#2a8a58;}
+  .links a{color:#2a8a58;}
+</style>
+</head>
+<body>
+<header>
+  <h1>WALL-WM — Q&amp;A from our walkthrough</h1>
+  <p>The clarifying questions, distilled. Click any question to expand.</p>
+</header>
+
+<div class="wrap">
+  <div class="toc">
+    <a href="#chunks">① Chunks &amp; Events</a>
+    <a href="#stair">② Staircase decoding</a>
+    <a href="#mask">③ Cross-view masking</a>
+    <a href="#world">④ World model &amp; y</a>
+    <a href="#act">⑤ Actions &amp; tokens</a>
+  </div>
+
+  <!-- ============ CHUNKS ============ -->
+  <h2 id="chunks"><span class="dot" style="background:var(--chunk)"></span> ① Chunks &amp; Events</h2>
+
+  <details open><summary>What is a "chunk"?</summary>
+    <div class="a">A robot is driven by tiny commands, ~10–50 per second (move hand a few mm, move gripper). A <b>chunk</b> is a fixed-length block of these consecutive steps predicted all at once — e.g. the next 16 steps (~half a second) in one shot, instead of one-at-a-time.
+    <div class="one"><b>One line:</b> a chunk = a short pre-planned burst of movement.</div></div>
+  </details>
+
+  <details><summary>Why use chunks at all?</summary>
+    <div class="a"><ul>
+      <li><b>Speed</b> — one model call covers many steps, instead of querying per step.</li>
+      <li><b>Smoothness</b> — committing to a burst avoids the jitter of re-deciding every step.</li>
+      <li><b>Less error pile-up</b> — a coherent short plan drifts less than step-by-step choices.</li>
+    </ul></div>
+  </details>
+
+  <details><summary>Chunk vs. event — what's the difference?</summary>
+    <div class="a">A <b>fixed chunk</b> is cut by the clock (always the same length) — so a boundary can land mid-behavior and mix "reach" + "grasp" in one unit. An <b>event</b> is cut where the behavior changes (variable length), so each unit holds exactly one nameable behavior.
+    <div class="one"><b>One line:</b> chunk = equal slices that ignore what's happening; event = whatever length holds one coherent behavior. WALL-WM cuts at events.</div></div>
+  </details>
+
+  <details><summary>How are chunks connected? Fed sequentially in training?</summary>
+    <div class="a"><b>At run-time:</b> a rolling loop — predict a chunk → execute → re-observe the new scene → predict the next. They connect <i>through the real world</i>, not as one long pre-planned stream.<br><br>
+    <b>In training:</b> events are learned as mostly-independent units. Fixed-chunk (unified) mode adds a short <b>history window</b> so a chunk isn't ambiguous under one global instruction. Multiple events may be packed into one sequence for GPU efficiency, but an attention mask blocks them from seeing each other.</div>
+  </details>
+
+  <details><summary>If a chunk mixes two behaviors, can the model still imagine/act?</summary>
+    <div class="a">Yes — generation still works. The video model can draw the reach→grasp transition, and the action model can output the blended motion. Mixing doesn't break it; it just costs you: <ul>
+      <li><b>no clean label</b> → muddy word→motion mapping (weaker generalization),</li>
+      <li><b>ambiguity</b> about where you are in the task (needs a history window),</li>
+      <li><b>delicate contact moments</b> cut through and pre-committed → fumbles.</li>
+    </ul>Events are cleaner on all three.</div>
+  </details>
+
+  <!-- ============ STAIRCASE ============ -->
+  <h2 id="stair"><span class="dot" style="background:var(--stair)"></span> ② Staircase decoding</h2>
+
+  <details><summary>What is staircase decoding, in one picture?</summary>
+    <div class="a">A way to produce the reasoning "thoughts" fast. Instead of climbing the whole network once per thought (serial), it computes the <b>bottom layers once</b> (shared grounding) and <b>staggers the top layers like a pipeline</b>, so thoughts overlap in time.
+    <div class="one"><b>One line:</b> share the bottom flight, stagger the top — most of the reasoning of serial, most of the speed of parallel.</div></div>
+  </details>
+
+  <details><summary>What does "reach the top" mean?</summary>
+    <div class="a">A network is a stack of layers; information climbs from the bottom (input) to the top (output). "Reaching the top" = <b>finishing the forward pass</b> = one thought is fully computed. Serial finishes them far apart; staircase finishes them in one wave.</div>
+  </details>
+
+  <details><summary>Why not just parallelize all thoughts across all layers?</summary>
+    <div class="a">Two reasons: <ul>
+      <li>the <b>bottom layers do identical grounding</b> for every thought — recomputing it K times is wasteful;</li>
+      <li>fully-independent parallel <b>deletes the thought-to-thought dependency</b> that reasoning needs (thought 2 could never see thought 1).</li>
+    </ul>Staircase shares the bottom and staggers the top to keep the dependency while overlapping in time.</div>
+  </details>
+
+  <details><summary>Does thought 2 depend on thought 1? (correcting the earlier code)</summary>
+    <div class="a"><b>Yes it does</b> — the earlier <code>parallel_for … return z</code> was misleading. z₂ depends on z₁, but on z₁'s <b>in-progress intermediate states</b> (ready just-in-time thanks to the one-step stagger), not on z₁'s <b>finished</b> output.
+    <div class="one"><b>One line:</b> same dependency as serial, minus the hard wait.</div></div>
+  </details>
+
+  <details><summary>If nothing is sampled, how is the world generated?</summary>
+    <div class="a">The staircase makes a <b>plan</b> (continuous latents), <i>not</i> the world. The <b>video model</b> and <b>action model</b> generate the world/actions by <b>denoising</b> (diffusion / flow matching), guided by those latents. No <code>sample()</code> anywhere → the whole path stays continuous and trainable ("gradient-continuous").</div>
+  </details>
+
+  <!-- ============ MASKING ============ -->
+  <h2 id="mask"><span class="dot" style="background:var(--mask)"></span> ③ Cross-view masking</h2>
+
+  <details><summary>Sight-cone masking — the idea?</summary>
+    <div class="a">Each image patch is a <b>cone of vision</b> from its camera. Two patches from different cameras may attend to each other <b>only if their cones overlap in 3D</b> (they could see the same spot). Impossible pairs get a −∞ attention bias → blocked. Training-only.</div>
+  </details>
+
+  <details><summary>How is co-visibility computed? What parameters?</summary>
+    <div class="a"><ol>
+      <li>Build each cone from camera <b>calibration</b> (position, orientation, lens).</li>
+      <li>March along each axis in the depth band <code>[d_min, d_max]</code>.</li>
+      <li>Find the closest approach of the two axes.</li>
+      <li>Cone radius grows with depth (<code>r = t·tan γ</code>).</li>
+      <li>Co-visible if <code>gap ≤ r₁ + r₂</code>.</li>
+    </ol>Tunable knobs: cone width <code>γ·l</code> and depth band <code>[d_min, d_max]</code> (both control leniency). Everything else is fixed by calibration.</div>
+  </details>
+
+  <details><summary>What is "depth" here?</summary>
+    <div class="a">The unknown distance from a camera to the object along a patch's ray. A single RGB camera can't measure it, so co-visibility uses a plausible <b>near–far band</b> instead of the exact value. No depth sensor needed — just calibration + the band.</div>
+  </details>
+
+  <details><summary>Tube patch masking — what and why?</summary>
+    <div class="a">Take a k×k window on <b>one</b> view, held across <b>all</b> frames (a "tube"), and replace it with noise. Now the model can't recover it from that camera's other frames (no temporal shortcut) — the <b>only</b> path left is to attend to the other cameras. This <i>forces</i> cross-view attention to be learned. The window is sampled from the <b>co-visible set U</b> so recovery is actually possible.
+    <div class="one"><b>Pair:</b> sight-cone says <i>which</i> cross-view links are allowed; tube creates a <i>need</i> to use them.</div></div>
+  </details>
+
+  <details><summary>What is p_tube?</summary>
+    <div class="a">A <b>hyperparameter</b>: the probability that a training sample gets a tube mask. A dial for <i>how often</i> the model faces the cross-view challenge (with <code>p_tube^cond</code> = chance of also masking the conditioning y, <code>k</code> = hole size, <code>λ_mask</code> = how hard the tube is weighted).</div>
+  </details>
+
+  <!-- ============ WORLD MODEL ============ -->
+  <h2 id="world"><span class="dot" style="background:var(--world)"></span> ④ World model &amp; the conditioning y</h2>
+
+  <details><summary>What is y?</summary>
+    <div class="a">The <b>conditioning channel</b> — the known/observed current frames, fed inpainting-style to guide generation. It's the <i>visual</i> condition (what the scene looks like now), separate from the <i>text</i> condition (what task to do).</div>
+  </details>
+
+  <details><summary>Is y the previous frame — like t₀ for predicting t₁?</summary>
+    <div class="a"><b>Yes, exactly.</b> y = the current observed frame(s) — one keyframe per camera (t₀) — and the model generates the following frames (t₁, t₂, …). In the rolling loop, after acting, the new observation becomes the next y. It's the anchor, given, never generated.</div>
+  </details>
+
+  <details><summary>Why does y have the same shape as the noisy video tokens?</summary>
+    <div class="a">So they <b>line up position-by-position</b>. The timeline is <span class="sh">[observed │ future │ future …]</span>. y carries content only where something is <b>known</b> (t₀) and is blank/masked at the future slots; the noisy tokens are noise everywhere. Same shape = every generated token has a matching "what do I know here?" token.</div>
+  </details>
+
+  <details><summary>What does "inpainting channel" mean?</summary>
+    <div class="a">Generating the future from the present <b>is inpainting across time</b> (fill the "hole" of the future using the known present). "Channel" = the known content is <b>appended as extra channels</b> onto each token — a sticky-note per position saying "here's what's observed here (or: nothing)." Blanking those channels in the tube = "can't peek at the answer."</div>
+  </details>
+
+  <details><summary>What are the per-layer video features h^V, and why "× depth"?</summary>
+    <div class="a"><b>h^V</b> = the video DiT's <b>hidden states</b> — the partly-processed video at a given layer. <b>Depth</b> = the number of stacked layers, so there's one h^V set <b>per layer</b> ("× depth"). The action tower reads them at <b>matching depths</b> (layer-wise coupling), giving it video understanding at all levels of abstraction — not just the final output.</div>
+  </details>
+
+  <!-- ============ ACTIONS ============ -->
+  <h2 id="act"><span class="dot" style="background:var(--act)"></span> ⑤ Actions &amp; tokens</h2>
+
+  <details><summary>The proprio state s — is it just numbers?</summary>
+    <div class="a">Yes — a small vector read from the robot's <b>own joint sensors</b>: hand positions, orientations, gripper openings (e.g. <span class="sh">[14]</span> floats). It's the robot's sense of <i>where its body is now</i> — an <b>input</b>, measured — versus the action trajectory it <b>outputs</b> to say where to move next.</div>
+  </details>
+
+  <details><summary>What is an "action token"? Is it an embedding like the video tokens?</summary>
+    <div class="a"><b>Yes</b> — a <span class="sh">D</span>-dimensional embedding, the action twin of a video token. <span class="sh">[T_a, D]</span> = T_a movement-vectors. An encoder lifts the raw action numbers <span class="sh">[T_a, A]</span> up into token space; the MLP head brings them back down. Both towers share the same width D so they can cross-attend.</div>
+  </details>
+
+  <details><summary>Are the "noisy action tokens" the same as [MASK] tokens?</summary>
+    <div class="a"><b>No.</b> A <code>[MASK]</code> token is a discrete placeholder symbol (BERT/MaskGIT style). A noisy action token is a <b>continuous vector = real action + noise</b> (pure noise at the start), which the model <b>denoises</b> rather than "unmasks."
+    <table>
+      <tr><th></th><th>[MASK] token</th><th>Noisy token (here)</th></tr>
+      <tr><td>What it is</td><td>a discrete blank symbol</td><td>a continuous noised vector</td></tr>
+      <tr><td>Model's job</td><td>predict which token fills it</td><td>predict how to denoise it</td></tr>
+      <tr><td>Family</td><td>masked modeling</td><td>diffusion / flow matching</td></tr>
+    </table>
+    Even the tube mask uses <i>noise</i>, not a <code>[MASK]</code> symbol — because it's a continuous model.</div>
+  </details>
+
+  <div class="links">
+    <b>Companion demos in this folder:</b><br>
+    <a href="pipeline_dataflow_demo.html">pipeline_dataflow_demo.html</a> — input→output tensor flow ·
+    <a href="chunk_vs_event_demo.html">chunk_vs_event_demo.html</a> ·
+    <a href="staircase_decoding_demo.html">staircase_decoding_demo.html</a> ·
+    <a href="sight_cone_masking_demo.html">sight_cone_masking_demo.html</a> ·
+    <a href="tube_masking_demo.html">tube_masking_demo.html</a> ·
+    <a href="wall_wm_analysis.html">wall_wm_analysis.html</a> (full paper walkthrough)
+  </div>
+
+</div>
+</body>
+</html>

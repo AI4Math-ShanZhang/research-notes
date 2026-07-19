@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VLA &amp; World-Model Papers — Comparative Review</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --pi:#E8555F;--ant:#4A8ED4;--qwen:#7B4FBF;--nv:#76B900;--xsq:#F79A38;--phys:#38BDB8;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.55;}
+  header{background:linear-gradient(135deg,#3D5A9B,#38BDB8);color:#fff;padding:38px 20px;text-align:center;}
+  header h1{margin:0 0 6px;font-size:1.7rem;}
+  header p{margin:0 auto;max-width:680px;opacity:.95;}
+  .wrap{max-width:1160px;margin:0 auto;padding:24px 18px 80px;}
+  h2{font-size:1.4rem;margin-top:38px;border-bottom:2px solid var(--line);padding-bottom:6px;}
+  h3{margin:16px 0 6px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 20px;margin:14px 0;box-shadow:0 2px 10px rgba(30,50,90,.04);}
+  .lead{color:var(--muted);font-size:1.06rem;}
+  .toc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 20px;margin:14px 0;font-size:.9rem;}
+  .toc a{color:var(--ant);text-decoration:none;margin-right:16px;white-space:nowrap;}
+  /* design map grid */
+  .mapwrap{overflow-x:auto;}
+  .map{display:grid;grid-template-columns:130px repeat(5,1fr);gap:6px;min-width:920px;margin:10px 0;}
+  .map .colh{background:#3D5A9B;color:#fff;border-radius:8px;padding:8px 6px;font-size:.76rem;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;}
+  .map .rowh{border-radius:8px;padding:8px;font-size:.82rem;font-weight:700;color:#fff;display:flex;align-items:center;}
+  .map .cell{background:#f7f9fc;border:1px dashed var(--line);border-radius:8px;padding:6px;min-height:52px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;}
+  .chip{border-radius:14px;padding:3px 9px;font-size:.76rem;font-weight:600;color:#fff;white-space:nowrap;}
+  .r-pi{background:var(--pi);} .r-ant{background:var(--ant);} .r-qwen{background:var(--qwen);}
+  .r-nv{background:var(--nv);} .r-xsq{background:var(--xsq);} .r-phys{background:var(--phys);}
+  /* paper cards */
+  .pcard{border-left:5px solid; border-radius:10px;background:#fff;border:1px solid var(--line);padding:14px 18px;margin:12px 0;}
+  .pcard h3{margin:0 0 3px;font-size:1.12rem;}
+  .pcard .org{font-size:.78rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
+  .tags{margin:8px 0;}
+  .tag{display:inline-block;background:#eef1f6;color:#3d4a5a;border-radius:6px;padding:2px 9px;font-size:.77rem;margin:2px 4px 2px 0;}
+  .tag b{color:#23303e;}
+  .pcard p{margin:6px 0;font-size:.92rem;}
+  .bd-pi{border-color:var(--pi);} .bd-ant{border-color:var(--ant);} .bd-qwen{border-color:var(--qwen);}
+  .bd-nv{border-color:var(--nv);} .bd-xsq{border-color:var(--xsq);} .bd-phys{border-color:var(--phys);}
+  /* wiring diagrams */
+  .wires{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0;}
+  .wire{flex:1 1 300px;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;}
+  .wire h4{margin:0 0 4px;font-size:1rem;}
+  .wire .sub{font-size:.78rem;color:var(--muted);margin-bottom:10px;}
+  .wdiag{display:flex;flex-direction:column;align-items:center;gap:2px;margin:12px 0;min-height:150px;justify-content:center;}
+  .wrow{display:flex;align-items:center;gap:8px;justify-content:center;}
+  .wbox{border:2px solid;border-radius:8px;padding:8px 10px;text-align:center;font-size:.8rem;font-weight:600;line-height:1.2;background:#fff;}
+  .wb-wm{border-color:var(--nv);color:#3d6b00;} .wb-vid{border-color:var(--ant);color:#2c5c8f;}
+  .wb-act{border-color:var(--phys);color:#1f6f6a;} .wb-pol{border-color:var(--qwen);color:#5a3a95;}
+  .warr{color:var(--muted);font-size:1.15rem;font-weight:700;}
+  .wlab{font-size:.68rem;color:var(--muted);text-align:center;line-height:1.1;}
+  .wtag{display:inline-block;border-radius:14px;padding:3px 10px;font-size:.76rem;font-weight:700;margin-top:6px;}
+  .wtag.no{background:#fff2f5;color:#c0435a;} .wtag.yes{background:#ecf9f1;color:#2a8a58;}
+  .wire .ex{font-size:.78rem;color:var(--muted);margin-top:4px;}
+  .dashed{border-style:dashed!important;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:.82rem;}
+  th,td{padding:7px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:#f0f4fa;position:sticky;top:0;}
+  .tblwrap{overflow-x:auto;}
+  .yes{color:#2a8a58;font-weight:700;} .no{color:#c0435a;font-weight:700;}
+  .kbox{background:#ecf9f1;border:1px solid #bfe6cf;border-radius:10px;padding:13px 18px;margin:12px 0;}
+  .kbox strong{color:#2a8a58;}
+  .qbox{background:#f3eefb;border:1px solid #c9b6e6;border-radius:10px;padding:13px 18px;margin:12px 0;}
+  .qbox strong{color:#6b4a9a;}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.82rem;margin:8px 0;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:13px;height:13px;border-radius:4px;display:inline-block;}
+  ul.clean{padding-left:20px;} ul.clean li{margin:5px 0;font-size:.92rem;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Vision-Language-Action &amp; World Models — a Comparative Review</h1>
+  <p>12 recent papers, read against the design questions you've been probing: <b>event vs chunk</b>, <b>world-model coupling</b>, <b>discrete vs continuous actions</b>, <b>reasoning</b>, <b>training</b>, and <b>deployment tricks</b>.</p>
+</header>
+
+<div class="wrap">
+
+  <div class="toc">
+    <b>Jump to:</b>
+    <a href="#fork">The central debate</a>
+    <a href="#map">Design-space map</a>
+    <a href="#papers">The 12 papers</a>
+    <a href="#table">Master table</a>
+    <a href="#joint">Joint-training camp</a>
+    <a href="#yours">Mapped to your questions</a>
+    <a href="#trends">Trends</a>
+  </div>
+
+  <!-- ============ THE FORK ============ -->
+  <h2 id="fork">The central debate these papers are arguing about</h2>
+  <div class="card">
+    <p class="lead">Almost every paper here is taking a position on <b>one big question</b>: <i>should a robot policy be built around a generative world model (imagine the future, then act), or should it map observations straight to actions (a direct policy)?</i> And if it uses a world model, <b>how tightly is action coupled to it?</b></p>
+    <ul class="clean">
+      <li><b>Direct policy (no world model):</b> observation → action, learned by imitation/RL. Bets on scale, data, and reasoning — not on imagining futures. <span style="color:var(--pi)">π0.6</span>, <span style="color:var(--qwen)">Qwen-VLA</span>, <span style="color:var(--qwen)">Qwen-RobotNav</span>, <span style="color:var(--phys)">PhysBrain</span>.</li>
+      <li><b>World model as context (one-way, optional):</b> a generator produces goal images/hints that a direct policy consumes. <span style="color:var(--pi)">π0.7</span>.</li>
+      <li><b>One-way world-action model (video→action):</b> imagine the future video, read the action off it; action does <i>not</i> feed back into the video. Protects the video prior. <span style="color:var(--xsq)">WALL-WM</span>.</li>
+      <li><b>Bidirectional / action-conditioned world model:</b> video and action interleaved; past actions feed <i>into</i> the world model. <span style="color:var(--ant)">LingBot-VA(2)</span>, <span style="color:var(--nv)">DreamZero</span>.</li>
+      <li><b>Omnimodal world model:</b> one model does forward-dynamics + inverse-dynamics + policy + generation across all modalities. <span style="color:var(--nv)">Cosmos 3</span>.</li>
+    </ul>
+    <div class="kbox"><strong>The second axis — granularity:</strong> where do you cut the action stream? <b>Semantic events</b> (WALL-WM) vs <b>fixed-length chunks</b> (nearly everyone else) vs <b>waypoints</b> (navigation). This is the exact "carve at the joints" debate you studied.</div>
+  </div>
+
+  <!-- ============ MAP ============ -->
+  <h2 id="map">Design-space map</h2>
+  <div class="card">
+    <p class="lead">Rows = research groups. Columns = how much world-modeling, from pure direct-policy (left) to omnimodal world model (right).</p>
+    <div class="legend">
+      <span><i class="sw r-pi"></i>Physical Intelligence</span>
+      <span><i class="sw r-ant"></i>Ant / LingBot</span>
+      <span><i class="sw r-qwen"></i>Qwen</span>
+      <span><i class="sw r-nv"></i>NVIDIA</span>
+      <span><i class="sw r-xsq"></i>X Square</span>
+      <span><i class="sw r-phys"></i>PhysBrain</span>
+    </div>
+    <div class="mapwrap"><div class="map">
+      <div class="colh" style="background:transparent"></div>
+      <div class="colh">Direct policy<br>(no world model)</div>
+      <div class="colh">World model<br>as context</div>
+      <div class="colh">One-way WM<br>(video→action)</div>
+      <div class="colh">Bidirectional /<br>action-conditioned</div>
+      <div class="colh">Omnimodal<br>world model</div>
+
+      <div class="rowh r-pi">Physical<br>Intelligence</div>
+      <div class="cell"><span class="chip r-pi">π0.6 (RL exp.)</span></div>
+      <div class="cell"><span class="chip r-pi">π0.7 (subgoal img)</span></div>
+      <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+
+      <div class="rowh r-ant">Ant /<br>LingBot</div>
+      <div class="cell"><span class="chip r-ant">LingBot-Vision*</span></div>
+      <div class="cell"></div>
+      <div class="cell"><span class="chip r-ant">LingBot-Video</span></div>
+      <div class="cell"><span class="chip r-ant">LingBot-VA</span><span class="chip r-ant">LingBot-VA2</span></div>
+      <div class="cell"></div>
+
+      <div class="rowh r-qwen">Qwen</div>
+      <div class="cell"><span class="chip r-qwen">Qwen-VLA</span><span class="chip r-qwen">Qwen-RobotNav</span></div>
+      <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+
+      <div class="rowh r-nv">NVIDIA</div>
+      <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="cell"><span class="chip r-nv">DreamZero</span></div>
+      <div class="cell"><span class="chip r-nv">Cosmos 3</span></div>
+
+      <div class="rowh r-xsq">X Square</div>
+      <div class="cell"></div><div class="cell"></div>
+      <div class="cell"><span class="chip r-xsq">WALL-WM</span></div>
+      <div class="cell"></div><div class="cell"></div>
+
+      <div class="rowh r-phys">PhysBrain</div>
+      <div class="cell"><span class="chip r-phys">PhysBrain 1.0</span></div>
+      <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    </div></div>
+    <p style="font-size:.8rem;color:var(--muted)">* LingBot-Vision is a perception backbone (no action/world model) — placed left as it feeds the stack. LingBot-Video is a video/world-model backbone (its A2V variant is one-way action→video).</p>
+  </div>
+
+  <!-- ============ WIRING DIAGRAMS ============ -->
+  <h2>How the imaginer &amp; the doer are wired</h2>
+  <div class="card">
+    <p class="lead">The three middle columns of the map differ in <b>one thing</b>: how tightly the world model (imaginer) and the action (doer) are connected, and <b>whether the action feeds back into the world model</b>.</p>
+    <div class="wires">
+
+      <!-- Context -->
+      <div class="wire">
+        <h4>① World model as <i>context</i></h4>
+        <div class="sub">loose · separate module · one-way</div>
+        <div class="wdiag">
+          <div class="wbox wb-wm dashed">World model<br>(separate)</div>
+          <div class="warr">↓</div>
+          <div class="wlab">goal / subgoal image</div>
+          <div class="warr">↓</div>
+          <div class="wbox wb-pol">Policy<br>(obs + goal → action)</div>
+          <div class="warr">↓</div>
+          <div class="wlab">action</div>
+        </div>
+        <span class="wtag no">action feeds into WM? ✗</span>
+        <p class="ex"><b>π0.7</b> — a separate generator makes goal images the policy conditions on. Remove it → still a direct policy.</p>
+      </div>
+
+      <!-- One-way -->
+      <div class="wire">
+        <h4>② One-way (video→action)</h4>
+        <div class="sub">tight · one model · one direction</div>
+        <div class="wdiag">
+          <div class="wrow">
+            <div class="wbox wb-vid">Video<br>tower</div>
+            <div style="display:flex;flex-direction:column;align-items:center">
+              <div class="warr">→</div>
+              <div class="wlab">reads features<br>(every layer)</div>
+            </div>
+            <div class="wbox wb-act">Action<br>tower</div>
+          </div>
+          <div class="wlab" style="margin-top:6px">✗ no arrow back (action never touches video)</div>
+          <div class="warr">↓</div>
+          <div class="wlab">action</div>
+        </div>
+        <span class="wtag no">action feeds into WM? ✗</span>
+        <p class="ex"><b>WALL-WM</b> — action reads the video tower's per-layer features; video is shielded from action (protects the visual prior).</p>
+      </div>
+
+      <!-- Bidirectional -->
+      <div class="wire">
+        <h4>③ Bidirectional / action-conditioned</h4>
+        <div class="sub">tight · one model · both directions</div>
+        <div class="wdiag">
+          <div class="wrow">
+            <div class="wbox wb-vid">Video<br>tower</div>
+            <div style="display:flex;flex-direction:column;align-items:center">
+              <div class="warr">⇄</div>
+              <div class="wlab">mutual</div>
+            </div>
+            <div class="wbox wb-act">Action<br>tower</div>
+          </div>
+          <div class="wlab" style="margin-top:6px">video conditions on action · action from predicted video</div>
+          <div class="warr">↓</div>
+          <div class="wlab">action</div>
+        </div>
+        <span class="wtag yes">action feeds into WM? ✓</span>
+        <p class="ex"><b>LingBot-VA, DreamZero</b> — the imagined future depends on the action (physically faithful, but riskier for the prior).</p>
+      </div>
+
+    </div>
+    <p style="font-size:.82rem;color:var(--muted);margin:6px 0 0"><b>The discriminator:</b> does the action feed <i>into</i> the world model? Context ✗ · One-way ✗ · Bidirectional ✓ — with integration going loose → tight left to right.</p>
+  </div>
+
+  <!-- ============ PAPERS ============ -->
+  <h2 id="papers">The 12 papers, by camp</h2>
+
+  <h3>① World-Action Models (imagine the future + act)</h3>
+
+  <div class="pcard bd-xsq">
+    <div class="org">X Square Robot · arXiv 2606.01955</div>
+    <h3>WALL-WM — event-grounded world-action model</h3>
+    <div class="tags"><span class="tag"><b>Granularity:</b> semantic EVENTS (variable length)</span><span class="tag"><b>Coupling:</b> one-way video→action</span><span class="tag"><b>Action:</b> continuous flow-matching</span><span class="tag"><b>Reason:</b> Staircase latent CoT (Qwen)</span><span class="tag"><b>Deploy:</b> distill + FP8 → 10Hz</span></div>
+    <p><b>Unique:</b> "carve at the joints" — the atomic unit is an action-grounded semantic event, not a fixed clock chunk. Video tower (from Wan) coupled one-way into an action tower; cross-view sight-cone + tube masking; two inference modes (event / unified).</p>
+    <p><b>vs prior:</b> argues event-centric pretraining preserves the video prior and generalizes better than chunk-centric VLAs; beats π0.5, DreamZero, LingBot-VA on real-robot generalization.</p>
+  </div>
+
+  <div class="pcard bd-ant">
+    <div class="org">Ant / Robbyant · arXiv 2601.21998</div>
+    <h3>LingBot-VA — causal autoregressive video-action world model</h3>
+    <div class="tags"><span class="tag"><b>Granularity:</b> fixed chunks</span><span class="tag"><b>Coupling:</b> bidirectional (action-conditioned)</span><span class="tag"><b>Action:</b> continuous flow-matching</span><span class="tag"><b>Train:</b> teacher forcing + causal mask</span><span class="tag"><b>Deploy:</b> KV cache + FDM-grounded async</span></div>
+    <p><b>Unique:</b> interleaves video &amp; action into one causal autoregressive sequence (MoT); video conditions on <i>past actions</i>, action via inverse dynamics on predicted video. Teacher forcing works because robots retrieve real observations at test time. FDM re-grounds async predictions on reality.</p>
+    <p><b>vs prior:</b> the action-conditioned counterpoint to WALL-WM — feeds action INTO the world model (this is the Figure-2 design you flagged). A WALL-WM baseline.</p>
+  </div>
+
+  <div class="pcard bd-ant">
+    <div class="org">Ant / Robbyant</div>
+    <h3>LingBot-VA 2 — native-from-scratch video-action pretraining</h3>
+    <div class="tags"><span class="tag"><b>Granularity:</b> fixed chunks</span><span class="tag"><b>Coupling:</b> bidirectional (action-conditioned)</span><span class="tag"><b>Action:</b> continuous flow-matching</span><span class="tag"><b>Arch:</b> sparse MoE video stream</span><span class="tag"><b>Deploy:</b> distill 2-step + FP8 → up to 225Hz</span></div>
+    <p><b>Unique:</b> pretrains the whole stack from scratch (vs v1's retrofit of a video generator): semantic visual-action tokenizer aligned to a vision foundation model, MoE capacity, hierarchical VLM planner (~2Hz) + "Foresight Reasoning" async. Multi-Chunk Prediction fights myopic supervision.</p>
+    <p><b>vs prior:</b> direct successor to LingBot-VA v1; beats π0.5 and v1 (RoboTwin 93.6 avg). Still chunk-centric &amp; action-conditioned — opposite of WALL-WM on both axes.</p>
+  </div>
+
+  <div class="pcard bd-nv">
+    <div class="org">NVIDIA · arXiv 2602.15922</div>
+    <h3>DreamZero — "World Action Models are Zero-shot Policies"</h3>
+    <div class="tags"><span class="tag"><b>Granularity:</b> fixed chunks</span><span class="tag"><b>Coupling:</b> joint/bidirectional (pixel+action denoise)</span><span class="tag"><b>Action:</b> continuous flow-matching</span><span class="tag"><b>Train:</b> joint video+action flow matching, teacher forcing</span><span class="tag"><b>Deploy:</b> 38× speedup → ~7Hz, GT KV replacement</span></div>
+    <p><b>Unique:</b> a 14B I2V diffusion model that <i>jointly denoises video and action</i> in one DiT; keeps imagination at test time but optimizes it hard (async, CFG-parallel, velocity caching, NVFP4, Flash 1-step). Ground-truth observations replace predicted frames in the KV cache to stop drift.</p>
+    <p><b>vs prior:</b> breadth-over-repetition data; beats GR00T N1.6 &amp; π0.5 (2×+ on unseen). A WALL-WM baseline. Chunk-centric &amp; action-coupled.</p>
+  </div>
+
+  <div class="pcard bd-nv">
+    <div class="org">NVIDIA · arXiv 2606.02800</div>
+    <h3>Cosmos 3 — omnimodal world model for Physical AI</h3>
+    <div class="tags"><span class="tag"><b>Granularity:</b> chunks (32-step policy)</span><span class="tag"><b>Coupling:</b> bidirectional, all directions (FD+ID+policy)</span><span class="tag"><b>Action:</b> continuous flow-matching</span><span class="tag"><b>Reason:</b> AR VLM reasoner (Qwen3-VL)</span><span class="tag"><b>Deploy:</b> 4-step diffusion, skip video decode</span></div>
+    <p><b>Unique:</b> one Mixture-of-Transformers that is simultaneously a VLM, video/audio generator, forward+inverse dynamics simulator, and robot policy — action is a first-class modality. The most general "everything in one model" bet.</p>
+    <p><b>vs prior:</b> unifies the fragmented VLA+WM+dynamics pipelines; benchmarks against &amp; beats LingBot-World, WALL-OSS, π0.5, DreamZero on RoboLab/RoboArena. The superset design.</p>
+  </div>
+
+  <h3>② Generative backbones that feed the stack</h3>
+
+  <div class="pcard bd-ant">
+    <div class="org">Ant / Robbyant · arXiv 2607.07675</div>
+    <h3>LingBot-Video — MoE video foundation model for embodiment</h3>
+    <div class="tags"><span class="tag"><b>Type:</b> video world model (base = video-only)</span><span class="tag"><b>Coupling:</b> A2V variant = one-way action→video</span><span class="tag"><b>Train:</b> flow matching + GRPO RL, 6 rewards</span><span class="tag"><b>Deploy:</b> DMD2 few-step distill, MoE</span></div>
+    <p><b>Unique:</b> first large open-source sparse-MoE video diffusion model built for embodiment, with a physics-aware 6-reward RL post-train. The generative/world-simulator layer the LingBot family builds on.</p>
+    <p><b>vs prior:</b> tops open-source embodied video-gen (RBench 0.620, Physics-IQ 40.4), beating Cosmos 3 &amp; Wan on embodied/physics scores. It's the backbone, not a policy.</p>
+  </div>
+
+  <div class="pcard bd-ant">
+    <div class="org">Ant / Robbyant</div>
+    <h3>LingBot-Vision — spatial-perception vision backbone</h3>
+    <div class="tags"><span class="tag"><b>Type:</b> SSL vision encoder (no action/WM)</span><span class="tag"><b>Method:</b> masked boundary modeling</span><span class="tag"><b>Train:</b> DINO/iBOT self-distillation + boundary loss</span></div>
+    <p><b>Unique:</b> a ~1B ViT pretrained with "masked boundary modeling" — the teacher's predicted boundaries decide which tokens the student reconstructs, making geometry the native signal. The perception substrate of the stack.</p>
+    <p><b>vs prior:</b> beats 7B DINOv3 on dense depth (NYUv2 RMSE 0.296); powers LingBot-Depth 2.0. Not a policy — perception only.</p>
+  </div>
+
+  <h3>③ Direct policies (no / decoupled world model)</h3>
+
+  <div class="pcard bd-pi">
+    <div class="org">Physical Intelligence · arXiv 2511.14759</div>
+    <h3>π0.6 — a VLA that learns from experience (RECAP)</h3>
+    <div class="tags"><span class="tag"><b>WM:</b> NONE (direct policy)</span><span class="tag"><b>Granularity:</b> fixed chunks (50Hz)</span><span class="tag"><b>Action:</b> flow-matching expert + discrete FAST tokens</span><span class="tag"><b>Train:</b> offline RL via advantage conditioning</span></div>
+    <p><b>Unique:</b> RECAP — improves itself from real deployment data (demos + autonomous rollouts + human corrections) using advantage conditioning (not policy gradients). Learns a value/critic to score outcomes. >2× throughput, ~½ failure on hard tasks.</p>
+    <p><b>vs prior:</b> the "learn from experience via RL" bet — the opposite philosophy to world-model imagination. Bets on real interaction, not dreamed futures.</p>
+  </div>
+
+  <div class="pcard bd-pi">
+    <div class="org">Physical Intelligence · arXiv 2604.15483</div>
+    <h3>π0.7 — steerable generalist with rich context conditioning</h3>
+    <div class="tags"><span class="tag"><b>WM:</b> decoupled (subgoal-image generator, one-way)</span><span class="tag"><b>Granularity:</b> fixed chunks + subtask events</span><span class="tag"><b>Action:</b> continuous flow-matching</span><span class="tag"><b>Deploy:</b> real-time chunking + async subgoals</span></div>
+    <p><b>Unique:</b> diversifies the <i>prompt/context</i> — expressive subtask language, episode metadata (speed/quality/mistake), and multi-view subgoal images (from a separate BAGEL generator). Steer at test time via CFG toward fast/high-quality behavior; learns cleanly from mixed-quality data.</p>
+    <p><b>vs prior:</b> has a world model but decoupled (one-way context hints), so philosophically direct-policy. Matches RL-finetuned specialists out-of-the-box.</p>
+  </div>
+
+  <div class="pcard bd-qwen">
+    <div class="org">Qwen · arXiv 2605.30280</div>
+    <h3>Qwen-VLA — unified manipulation + navigation + egocentric</h3>
+    <div class="tags"><span class="tag"><b>WM:</b> NONE (direct policy)</span><span class="tag"><b>Granularity:</b> fixed chunks/waypoints</span><span class="tag"><b>Action:</b> continuous flow-matching DiT</span><span class="tag"><b>Interface:</b> embodiment via text prompt only</span></div>
+    <p><b>Unique:</b> one shared DiT action expert for manipulation, navigation, and egocentric human motion — embodiment is specified purely by a text prompt (no per-robot heads). Staged "text-to-action" pretraining bootstraps the decoder from language alone.</p>
+    <p><b>vs prior:</b> unifies tasks/embodiments a single generalist; beats π0.5 on RoboCasa. Continuous, direct policy; RL via PPO on flow-matching log-probs.</p>
+  </div>
+
+  <div class="pcard bd-qwen">
+    <div class="org">Qwen · Qwen-RobotNav</div>
+    <h3>Qwen-RobotNav — configurable navigation VLA</h3>
+    <div class="tags"><span class="tag"><b>Domain:</b> navigation (waypoints)</span><span class="tag"><b>WM:</b> NONE</span><span class="tag"><b>Output:</b> 8 waypoints (regression)</span><span class="tag"><b>Reason:</b> Qwen3-VL, spatial reasoning in-LLM</span></div>
+    <p><b>Unique:</b> reframes multi-task nav as "observation-context modeling": one model + one trajectory head, with an inference-time reconfigurable observation interface (token budget, temporal decay, per-camera weights) an upper planner can switch mid-episode.</p>
+    <p><b>vs prior:</b> a configurable executor inside an agentic system; SOTA on VLN-CE RxR, EQA. Nav differs from manipulation — outputs paths, no world model.</p>
+  </div>
+
+  <div class="pcard bd-phys">
+    <div class="org">PhysBrain Team · arXiv 2605.15298</div>
+    <h3>PhysBrain 1.0 — physics-commonsense-first VLA</h3>
+    <div class="tags"><span class="tag"><b>WM:</b> NONE (direct policy)</span><span class="tag"><b>Action:</b> continuous flow-matching DiT</span><span class="tag"><b>Idea:</b> physics as QA, not action imitation</span><span class="tag"><b>Arch:</b> dual-pathway (frozen general + trainable embodied)</span></div>
+    <p><b>Unique:</b> builds a physically-grounded VLM from human egocentric video (structured meta-info → physics QA) <i>before</i> robot adaptation; robot trajectories become a thin adaptation layer. "Understanding first, action next."</p>
+    <p><b>vs prior:</b> beats π0.5 on SimplerEnv &amp; real Franka; bets on physical commonsense from human video, not learned dynamics.</p>
+  </div>
+
+  <!-- ============ MASTER TABLE ============ -->
+  <h2 id="table">Master comparison table</h2>
+  <div class="tblwrap"><table>
+    <tr><th>Paper</th><th>Camp</th><th>Granularity</th><th>World-model coupling</th><th>Action rep.</th><th>Reasoning</th><th>Training</th><th>Deployment trick</th></tr>
+    <tr><td><b style="color:var(--xsq)">WALL-WM</b></td><td>WA model</td><td>semantic <b>events</b></td><td><b>one-way</b> video→action</td><td>continuous FM</td><td>Staircase latent CoT</td><td>flow matching (staged)</td><td>distill+FP8, 10Hz</td></tr>
+    <tr><td><b style="color:var(--ant)">LingBot-VA</b></td><td>WA model</td><td>chunks</td><td><b>bidirectional</b> (action-cond.)</td><td>continuous FM</td><td>VLM planner</td><td>teacher forcing + FM</td><td>FDM-grounded async</td></tr>
+    <tr><td><b style="color:var(--ant)">LingBot-VA2</b></td><td>WA model</td><td>chunks</td><td><b>bidirectional</b> (action-cond.)</td><td>continuous FM</td><td>hier. VLM planner</td><td>from-scratch, MoE, MCP</td><td>2-step distill, 225Hz</td></tr>
+    <tr><td><b style="color:var(--nv)">DreamZero</b></td><td>WA model</td><td>chunks</td><td><b>joint</b> pixel+action denoise</td><td>continuous FM</td><td>none (System 1)</td><td>joint video+action FM</td><td>38×, GT KV replace, 7Hz</td></tr>
+    <tr><td><b style="color:var(--nv)">Cosmos 3</b></td><td>Omnimodal</td><td>chunks</td><td><b>all</b> (FD+ID+policy)</td><td>continuous FM</td><td>AR VLM reasoner</td><td>next-token + FM</td><td>4-step, skip decode</td></tr>
+    <tr><td><b style="color:var(--ant)">LingBot-Video</b></td><td>Video backbone</td><td>N/A (A2V chunks)</td><td>video-only / A2V one-way</td><td>N/A / cond.</td><td>JSON captions</td><td>FM + GRPO RL</td><td>DMD2 distill, MoE</td></tr>
+    <tr><td><b style="color:var(--ant)">LingBot-Vision</b></td><td>Perception</td><td>N/A</td><td>none</td><td>N/A</td><td>none (SSL ViT)</td><td>self-distill + boundary</td><td>distill to ViT-L/B/S</td></tr>
+    <tr><td><b style="color:var(--pi)">π0.6</b></td><td>Direct policy</td><td>chunks (50Hz)</td><td><b>none</b></td><td>FM expert + FAST discrete</td><td>subtask text</td><td><b>offline RL</b> (advantage)</td><td>50Hz, small critic</td></tr>
+    <tr><td><b style="color:var(--pi)">π0.7</b></td><td>Direct policy</td><td>chunks + events</td><td>decoupled context (one-way)</td><td>continuous FM</td><td>hi-level policy, coaching</td><td>imitation + KI</td><td>real-time chunking, async</td></tr>
+    <tr><td><b style="color:var(--qwen)">Qwen-VLA</b></td><td>Direct policy</td><td>chunks/waypoints</td><td><b>none</b></td><td>continuous FM DiT</td><td>Qwen3.5 VLM</td><td>FM + next-token, PPO</td><td>few-step Euler</td></tr>
+    <tr><td><b style="color:var(--qwen)">Qwen-RobotNav</b></td><td>Nav policy</td><td>8 waypoints</td><td><b>none</b></td><td>waypoint regression</td><td>in-LLM spatial</td><td>MSE + next-token</td><td>reconfig. obs interface</td></tr>
+    <tr><td><b style="color:var(--phys)">PhysBrain</b></td><td>Direct policy</td><td>chunks</td><td><b>none</b></td><td>continuous FM DiT</td><td>physics QA reasoning</td><td>QA pretrain + FM</td><td>not addressed</td></tr>
+  </table></div>
+  <p style="font-size:.82rem;color:var(--muted)">FM = flow matching. KI = knowledge insulation. FDM = forward dynamics model. MCP = multi-chunk prediction.</p>
+
+  <!-- ============ JOINT-TRAINING CAMP ============ -->
+  <h2 id="joint">The joint-training camp — all "joint", but over different scope</h2>
+  <div class="card">
+    <p class="lead">LingBot-VA, DreamZero, and Cosmos 3 all train video and action <b>together</b> (unlike WALL-WM, which freezes the video and trains in stages). But "joint" spans very different <b>scope</b> — how many modalities, and whether reasoning lives in the <i>same</i> weights.</p>
+    <div class="tblwrap"><table>
+      <tr><th></th><th>Modalities jointly trained</th><th>Understanding in same model?</th><th>Architecture</th><th>Objective</th><th>Role</th></tr>
+      <tr>
+        <td><b style="color:var(--ant)">LingBot-VA</b></td>
+        <td>video + action <b>(2)</b></td>
+        <td class="no">✗ (separate VLM planner)</td>
+        <td>dual-stream causal AR</td>
+        <td>flow matching</td>
+        <td>policy</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--nv)">DreamZero</b></td>
+        <td>pixels + action <b>(2)</b></td>
+        <td class="no">✗ (System 1, no reasoning)</td>
+        <td>one unified diffusion DiT</td>
+        <td>flow matching</td>
+        <td>policy</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--nv)">Cosmos 3</b></td>
+        <td>lang + img + video + audio + action <b>(5)</b></td>
+        <td class="yes">✅ (reasoner + generator share blocks)</td>
+        <td>omnimodal MoT</td>
+        <td><b>AR + diffusion (hybrid)</b></td>
+        <td>backbone</td>
+      </tr>
+    </table></div>
+    <div class="kbox"><strong>The ladder of generality:</strong> LingBot-VA &amp; DreamZero jointly train just <b>video + action</b> (focused policies) — reasoning is separate or absent. Cosmos 3 jointly trains <b>five modalities + understanding</b> in one omnimodal backbone with a hybrid AR+diffusion objective — a general foundation model, not a single policy.</div>
+    <p style="font-size:.88rem;color:var(--muted);margin:6px 0 0"><b>Contrast — WALL-WM is the odd one out:</b> it does <b>not</b> train jointly. It trains the video tower first, then <b>freezes</b> it and trains action on top (staged) to protect the video prior. Same MoT-style separate parameters as the others, but freezing instead of joint optimization.</p>
+  </div>
+
+  <!-- ============ MAPPED TO YOUR QUESTIONS ============ -->
+  <h2 id="yours">Mapped to the questions you asked</h2>
+  <div class="card">
+    <p class="lead">Every concept you probed during our WALL-WM / LingBot-VA deep dives shows up as a <b>design axis</b> across these papers. Here's where each lands:</p>
+  </div>
+
+  <div class="qbox"><strong>"Chunk vs. event — where do you cut?"</strong><br>
+    <b>Events:</b> only WALL-WM. <b>Fixed chunks:</b> everyone else (LingBot-VA/2, DreamZero, Cosmos 3, π0.6/0.7, Qwen-VLA, PhysBrain). <b>Waypoints:</b> Qwen-RobotNav. → WALL-WM is the lone dissenter on granularity; the field is overwhelmingly chunk-centric.</div>
+
+  <div class="qbox"><strong>"Is action fed INTO the world model (action-conditioned) or one-way?"</strong><br>
+    <b>One-way (video→action):</b> WALL-WM. <b>Action-conditioned / bidirectional:</b> LingBot-VA, LingBot-VA2, DreamZero (joint denoise), Cosmos 3 (all directions). <b>No world model:</b> π0.6, Qwen-VLA, Qwen-RobotNav, PhysBrain. → This is exactly the Figure-2 contrast you spotted: WALL-WM protects the video prior by NOT feeding action in; the LingBot/NVIDIA camp deliberately does.</div>
+
+  <div class="qbox"><strong>"Discrete vs. continuous action tokens?"</strong><br>
+    <b>Continuous (flow matching)</b> dominates — all 8 policies use it. <b>Discrete tokens</b> appear only as an <i>auxiliary</i> signal: π0.6 &amp; π0.7 also predict FAST discrete tokens for "knowledge insulation," but deploy the continuous action. → The field has converged on continuous; discrete (RT-2/OpenVLA style) is now mostly a training-side helper.</div>
+
+  <div class="qbox"><strong>"Teacher forcing &amp; the deployment latency trick?"</strong><br>
+    <b>Teacher forcing + causal AR:</b> LingBot-VA/2, DreamZero. <b>Async + real-obs re-grounding (FDM):</b> LingBot-VA/2 (Foresight), DreamZero (GT KV replacement), π0.7 (async subgoals + real-time chunking). <b>Distillation for real-time:</b> WALL-WM (10Hz), LingBot-VA2 (225Hz), DreamZero (7Hz), Cosmos 3 (4-step). → Everyone who imagines at test time needs an async + re-grounding trick to stay closed-loop and fast.</div>
+
+  <div class="qbox"><strong>"Language-guided reasoning — is it a loop?"</strong><br>
+    <b>VLM planner loop (re-invoked per event/subtask):</b> WALL-WM (Staircase), LingBot-VA2 (~2Hz planner), π0.7 (high-level policy + coaching), π0.6 (subtask tokens). <b>In-LLM reasoning, no explicit loop:</b> Qwen-VLA, Qwen-RobotNav, PhysBrain (physics QA), Cosmos 3 (AR reasoner). → Hierarchical slow-reason / fast-act is now standard.</div>
+
+  <div class="qbox"><strong>"Multi-view / cross-view handling?"</strong><br>
+    <b>Dedicated cross-view mechanism:</b> WALL-WM (sight-cone + tube masking, Camera RoPE) — the most sophisticated. <b>Multi-view subgoals:</b> π0.7. <b>Simple tiling/concatenation:</b> Cosmos 3, DreamZero. <b>View tags in token stream:</b> Qwen-VLA. → WALL-WM's geometry-aware masking is unusually deep; most others just concatenate views.</div>
+
+  <!-- ============ TRENDS ============ -->
+  <h2 id="trends">Big-picture trends</h2>
+  <div class="card">
+    <ul class="clean">
+      <li><b>Continuous flow matching has won</b> the action-representation debate — all 8 policies use it; discrete tokens survive only as an auxiliary training signal.</li>
+      <li><b>Two philosophies are actively competing:</b> "imagine to act" (world-action models: WALL-WM, LingBot-VA/2, DreamZero, Cosmos 3) vs "learn from experience / scale the policy" (π0.6, Qwen-VLA, PhysBrain). Both post strong numbers — it's genuinely unsettled.</li>
+      <li><b>Within world models, the coupling is contested:</b> WALL-WM stands almost alone on <i>one-way + events</i>; the LingBot/NVIDIA camp goes <i>bidirectional + chunks</i>. Your instinct ("the future depends on action") aligns with the larger camp; WALL-WM is the principled dissenter.</li>
+      <li><b>Deployment is now a first-class research problem:</b> async execution + real-observation re-grounding (FDM / GT-KV) + few-step distillation appear everywhere imagination is kept at test time.</li>
+      <li><b>The stack is modularizing:</b> the LingBot family shows a full stack — Vision (perception) → Video (world model) → VA (policy). Cosmos 3 bets the opposite way: collapse everything into one omnimodal model.</li>
+      <li><b>Reasoning is going hierarchical:</b> a slow VLM planner (events/subtasks) over a fast action generator is now the default across camps.</li>
+    </ul>
+    <div class="kbox"><strong>Where WALL-WM sits:</strong> it is the most <i>opinionated</i> design here — the only one betting on <b>semantic events</b> + <b>one-way coupling</b> + <b>geometry-aware cross-view masking</b> together. Whether that principled stance beats the simpler chunk-centric, action-conditioned mainstream (LingBot-VA/2, DreamZero) is exactly the open question the benchmarks are still fighting over.</div>
+  </div>
+
+  <p style="font-size:.82rem;color:var(--muted);margin-top:24px;">All 12 PDFs are saved in this folder. Reviews synthesized from full-paper reads. "Not addressed" fields omitted for brevity.</p>
+
+</div>
+</body>
+</html>

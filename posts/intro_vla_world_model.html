@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A Gentle Introduction: VLA, World Models & World Action Models</title>
+<style>
+  :root {
+    --vla: #4A8ED4;
+    --wm: #9B72CF;
+    --wam: #3DBD79;
+    --ink: #23303e;
+    --muted: #5f6b78;
+    --bg: #f7f9fc;
+    --card: #ffffff;
+    --line: #e4e9f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.65;
+  }
+  header {
+    background: linear-gradient(135deg, #3D5A9B, #4A8ED4);
+    color: #fff;
+    padding: 56px 24px 48px;
+    text-align: center;
+  }
+  header h1 { margin: 0 0 12px; font-size: 2.1rem; letter-spacing: -0.5px; }
+  header p { margin: 0 auto; max-width: 640px; font-size: 1.08rem; opacity: 0.95; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 24px 80px; }
+  section { margin: 40px 0; }
+  h2 { font-size: 1.55rem; margin-bottom: 6px; display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 1.15rem; margin: 24px 0 6px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 22px 26px;
+    margin: 18px 0;
+    box-shadow: 0 2px 10px rgba(30,50,90,0.04);
+  }
+  .lead { font-size: 1.12rem; color: var(--muted); }
+  .analogy {
+    border-left: 4px solid var(--vla);
+    background: #eef5fc;
+    padding: 14px 18px;
+    border-radius: 0 10px 10px 0;
+    margin: 16px 0;
+  }
+  .analogy.wm { border-color: var(--wm); background: #f3eefb; }
+  .analogy.wam { border-color: var(--wam); background: #ecf9f1; }
+  .analogy strong { display: block; margin-bottom: 4px; }
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 20px 0;
+  }
+  .flow .box {
+    background: #fff;
+    border: 2px solid var(--vla);
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    text-align: center;
+  }
+  .flow .arrow { color: var(--muted); font-size: 1.4rem; }
+  .flow.wm .box { border-color: var(--wm); }
+  .flow.wam .box { border-color: var(--wam); }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 0.96rem; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #f0f4fa; font-weight: 600; }
+  .timeline { list-style: none; padding: 0; margin: 16px 0; }
+  .timeline li {
+    padding: 12px 0 12px 96px;
+    position: relative;
+    border-left: 2px solid var(--line);
+    margin-left: 70px;
+  }
+  .timeline li .yr {
+    position: absolute;
+    left: -70px;
+    top: 12px;
+    width: 120px;
+    font-weight: 700;
+    color: var(--vla);
+    font-size: 0.9rem;
+  }
+  .pill {
+    display: inline-block;
+    background: #eef5fc;
+    color: #2c5c8f;
+    border-radius: 20px;
+    padding: 3px 12px;
+    font-size: 0.82rem;
+    margin: 3px 4px 3px 0;
+  }
+  .glossary dt { font-weight: 700; margin-top: 12px; }
+  .glossary dd { margin: 2px 0 0; color: var(--muted); }
+  .why {
+    background: #fffaf0;
+    border: 1px solid #f5e2bf;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 14px 0;
+  }
+  .why strong { color: #b9791a; }
+  ul.clean { padding-left: 20px; }
+  ul.clean li { margin: 6px 0; }
+  .next { background: #f0f4fa; border-radius: 12px; padding: 20px 24px; }
+  .divider {
+    text-align: center;
+    margin: 56px 0 8px;
+    font-size: 0.8rem;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .qa { margin: 22px 0; }
+  .qa .q {
+    font-weight: 700;
+    color: var(--ink);
+    background: #eef5fc;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 6px;
+  }
+  .qa .q::before { content: "❓ "; }
+  .keybox {
+    background: #ecf9f1;
+    border: 1px solid #bfe6cf;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 16px 0;
+  }
+  .keybox strong { color: #2a8a58; }
+  .twocol { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
+  .twocol .col {
+    flex: 1 1 260px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+    background: #fff;
+  }
+  .twocol .col h4 { margin: 0 0 6px; font-size: 1rem; }
+  .col.built { border-top: 4px solid #c08a2e; }
+  .col.learned { border-top: 4px solid var(--wm); }
+  .steps { counter-reset: s; list-style: none; padding: 0; }
+  .steps li {
+    counter-increment: s;
+    position: relative;
+    padding: 8px 0 8px 40px;
+    margin: 4px 0;
+  }
+  .steps li::before {
+    content: counter(s);
+    position: absolute;
+    left: 0; top: 8px;
+    width: 26px; height: 26px;
+    background: var(--wam);
+    color: #fff;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 26px;
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 24px; }
+  .tag-row { margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Robots That See, Understand, and Act</h1>
+  <p>A friendly first look at <b>Vision-Language-Action models</b>, <b>World Models</b>, and <b>World Action Models</b> — no prior background needed.</p>
+</header>
+
+<div class="wrap">
+
+  <p class="lead">Imagine you want a robot to do something simple, like "pick up the red cup and put it in the sink." For a human this is trivial. For a machine, it quietly requires three hard things at once: <b>seeing</b> the scene, <b>understanding</b> the instruction, and <b>moving</b> the right way. The three ideas below are recent attempts to give machines exactly those abilities. Let's meet them one at a time.</p>
+
+  <!-- ============ VLA ============ -->
+  <section>
+    <h2><span class="dot" style="background:var(--vla)"></span> 1. Vision-Language-Action (VLA) models</h2>
+    <p class="lead">The doer. A model that looks, reads an instruction, and produces movement.</p>
+
+    <div class="card">
+      <h3>The plain-language idea</h3>
+      <p>Think about the AI chatbots you already know. You type words, they read the words and type words back. A <b>VLA model</b> is the same idea, but with two upgrades:</p>
+      <ul class="clean">
+        <li><b>Vision</b> — instead of only reading text, it also <i>looks at a camera image</i> of the world.</li>
+        <li><b>Action</b> — instead of replying with words, it <i>replies with movements</i>: turn this motor, move the arm here, close the gripper.</li>
+      </ul>
+      <p>So the name is literally the recipe: it takes in <b>Vision</b> (what the camera sees) + <b>Language</b> (what you asked for) and outputs <b>Action</b> (what the robot does).</p>
+
+      <div class="flow">
+        <span class="box">📷 Camera image</span>
+        <span class="arrow">+</span>
+        <span class="box">💬 "Pick up the red cup"</span>
+        <span class="arrow">→</span>
+        <span class="box" style="border-color:#333">🤖 VLA model</span>
+        <span class="arrow">→</span>
+        <span class="box">🦾 Move arm, grip, lift</span>
+      </div>
+
+      <div class="analogy">
+        <strong>Everyday analogy</strong>
+        A VLA model is like a new employee on their first day. You show them the workbench (vision), tell them what you need (language), and they use their hands to do it (action). The clever part is that a single model learned to connect all three, instead of needing a separate specialist for each step.
+      </div>
+
+      <div class="why">
+        <strong>Why people are excited:</strong> Older robots needed an engineer to hand-code every task. A VLA model can be <i>told</i> a new task in plain words — and because it was trained on huge amounts of internet images and text first, it already "knows" what a cup, a sink, or the color red is before it ever touches a robot.
+      </div>
+    </div>
+
+    <h3>How the progress has gone (the short story)</h3>
+    <ul class="timeline">
+      <li><span class="yr">~2022</span> Researchers show that big language models can help robots <i>plan</i> tasks in words ("first walk to the fridge, then open it"). Seeing and moving were still separate pieces.</li>
+      <li><span class="yr">2023</span> The breakthrough idea: treat a robot's <b>action as just another kind of language</b>. If a model can predict the next word, it can predict the next movement the same way. Early well-known examples came from Google's robotics work. This is when "VLA" became a named thing.</li>
+      <li><span class="yr">2024</span> Open models arrive so anyone can experiment, not just big labs. Focus shifts to making them faster and able to handle many different robots and tasks.</li>
+      <li><span class="yr">2025–now</span> The race is about <b>generalization</b> (working in kitchens the robot never saw), <b>speed</b> (acting smoothly in real time), and <b>dexterity</b> (delicate two-handed tasks). VLAs also start borrowing from World Models — which is our next topic.</li>
+    </ul>
+
+    <div class="tag-row">
+      <span class="pill">Keywords you'll see: robot learning</span>
+      <span class="pill">generalist policy</span>
+      <span class="pill">embodied AI</span>
+      <span class="pill">action tokens</span>
+    </div>
+  </section>
+
+  <!-- ============ World Model ============ -->
+  <section>
+    <h2><span class="dot" style="background:var(--wm)"></span> 2. World Models</h2>
+    <p class="lead">The imaginer. A model that predicts what happens next.</p>
+
+    <div class="card">
+      <h3>The plain-language idea</h3>
+      <p>Before you pour a full glass of water, you already <i>picture</i> in your head that it might overflow — so you stop early. You never actually spilled anything; you <b>imagined</b> the outcome and adjusted. That mental movie of "what will happen if…" is exactly what a <b>World Model</b> tries to give a machine.</p>
+      <p>Formally (but gently): a World Model learns the rules of an environment well enough to <b>predict the next situation</b> from the current one. Show it "here's the scene, and here's the action I'm about to take," and it answers "here's what the scene will look like afterward."</p>
+
+      <div class="flow wm">
+        <span class="box">Current scene</span>
+        <span class="arrow">+</span>
+        <span class="box">An action</span>
+        <span class="arrow">→</span>
+        <span class="box" style="border-color:#333">🔮 World Model</span>
+        <span class="arrow">→</span>
+        <span class="box">Predicted next scene</span>
+      </div>
+
+      <div class="analogy wm">
+        <strong>Everyday analogy</strong>
+        A World Model is like a flight simulator inside the machine's head. A pilot can practice a risky landing hundreds of times in a simulator without ever crashing a real plane. Likewise, a robot with a good World Model can "practice" and test ideas in imagination — cheaply and safely — before doing anything in the real world.
+      </div>
+
+      <div class="why">
+        <strong>Why people are excited:</strong> Real-world practice is slow, expensive, and sometimes dangerous. If a machine can dream accurate outcomes, it can learn far faster — trying thousands of "what if" plans in imagination and only doing the best one for real.
+      </div>
+    </div>
+
+    <h3>How the progress has gone (the short story)</h3>
+    <ul class="timeline">
+      <li><span class="yr">2018</span> The phrase "World Model" gets popular through research showing an agent can learn to play a game by first learning to <i>dream</i> the game.</li>
+      <li><span class="yr">2019–2023</span> A series of models (the "Dreamer" line) show agents can learn almost entirely inside their own imagined worlds, then act well in the real game.</li>
+      <li><span class="yr">2024</span> Video-generation AI (models that create realistic video clips) turns out to be a powerful kind of World Model — if you can generate a convincing video of the future, you've effectively predicted it. Big "these look like real playable worlds" demos appear.</li>
+      <li><span class="yr">2025–now</span> World Models grow into <b>general simulators</b> of reality that robots and self-driving cars can practice inside, and they start being fused directly with the action-takers from Part 1.</li>
+    </ul>
+
+    <div class="tag-row">
+      <span class="pill">Keywords you'll see: prediction</span>
+      <span class="pill">imagination / rollout</span>
+      <span class="pill">video generation</span>
+      <span class="pill">simulation</span>
+      <span class="pill">planning</span>
+    </div>
+  </section>
+
+  <!-- ============ World Action Model ============ -->
+  <section>
+    <h2><span class="dot" style="background:var(--wam)"></span> 3. World Action Models</h2>
+    <p class="lead">The combination. An imaginer and a doer working as one.</p>
+
+    <div class="card">
+      <h3>The plain-language idea</h3>
+      <p>Now put Parts 1 and 2 together. The VLA is great at <b>acting</b> but can be short-sighted — it reacts moment to moment. The World Model is great at <b>foreseeing</b> but doesn't, by itself, do anything. A <b>World Action Model</b> joins them: it can <i>imagine the consequences of its choices</i> and <i>then act</i> on the best one.</p>
+
+      <div class="flow wam">
+        <span class="box">See + Understand</span>
+        <span class="arrow">→</span>
+        <span class="box">Imagine outcomes</span>
+        <span class="arrow">→</span>
+        <span class="box">Pick the best</span>
+        <span class="arrow">→</span>
+        <span class="box">Act</span>
+      </div>
+
+      <div class="analogy wam">
+        <strong>Everyday analogy</strong>
+        It's the difference between a beginner chess player who grabs the first move that looks okay, and an experienced one who thinks "if I move here, then they'll probably do that…" a few steps ahead before committing. A World Action Model is the robot version of thinking ahead before it moves.
+      </div>
+
+      <div class="why">
+        <strong>Why this is the exciting frontier:</strong> Pure reaction breaks in unfamiliar situations. Pure imagination never gets anything done. Fusing them promises robots that are both <i>thoughtful</i> and <i>capable</i> — the direction a lot of 2025 research is heading. You'll also see terms like "unified" or "interactive world model" pointing at this same fusion.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ How they relate ============ -->
+  <section>
+    <h2>How the three fit together</h2>
+    <table>
+      <tr><th>Model</th><th>One-line job</th><th>Input → Output</th><th>Weakness alone</th></tr>
+      <tr>
+        <td><b style="color:var(--vla)">VLA</b></td>
+        <td>Turn seeing + instructions into movement</td>
+        <td>Image + words → action</td>
+        <td>Can be short-sighted / reactive</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--wm)">World Model</b></td>
+        <td>Predict what happens next</td>
+        <td>Scene + action → next scene</td>
+        <td>Foresees but doesn't act</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--wam)">World Action Model</b></td>
+        <td>Imagine, then act on the best plan</td>
+        <td>Image + words → imagined futures → action</td>
+        <td>Newer, harder to train</td>
+      </tr>
+    </table>
+    <p class="lead">A simple way to remember it: <b>the World Model dreams, the VLA does, and the World Action Model dreams before it does.</b></p>
+  </section>
+
+  <!-- ============ Mini glossary ============ -->
+  <section>
+    <h2>Mini-glossary (only the words you'll keep bumping into)</h2>
+    <dl class="glossary">
+      <dt>Embodied AI</dt>
+      <dd>AI that lives in a physical (or simulated) body and acts in a world — as opposed to a chatbot that only talks.</dd>
+      <dt>Policy</dt>
+      <dd>The part of the system that decides "given what I see, what do I do?" A VLA <i>is</i> a policy.</dd>
+      <dt>Action tokens</dt>
+      <dd>The trick of writing a movement as a little chunk of "vocabulary," so a language-style model can predict actions the same way it predicts words.</dd>
+      <dt>Rollout / imagination</dt>
+      <dd>Letting a World Model run forward in its head to see how a sequence of actions might play out.</dd>
+      <dt>Generalization</dt>
+      <dd>Doing well in a new place or task the model was never explicitly trained on. The big prize everyone chases.</dd>
+      <dt>Foundation model</dt>
+      <dd>A large model pre-trained on huge general data (internet images/text/video), later adapted to robotics. Gives the model common sense "for free."</dd>
+    </dl>
+  </section>
+
+  <div class="divider">— Going deeper: questions we worked through —</div>
+
+  <!-- ============ Deep dive from discussion ============ -->
+  <section>
+    <h2><span class="dot" style="background:var(--wm)"></span> A closer look at World Models</h2>
+    <p class="lead">The intro gave the big picture. These are the follow-up questions a curious newcomer actually asks next — and the answers that make the ideas click.</p>
+
+    <!-- Q1: knowledge not decision -->
+    <div class="card">
+      <div class="qa">
+        <div class="q">"If the model can generate the next scene, doesn't it already know how to act?"</div>
+        <p>It feels that way, but there's a gap hiding in it. Two things sound the same and aren't:</p>
+        <div class="twocol">
+          <div class="col">
+            <h4>Predicting a consequence</h4>
+            <p style="margin:0;color:var(--muted)">"<i>If</i> I steer left, here's what the road looks like in 2 seconds."</p>
+          </div>
+          <div class="col">
+            <h4>Making a decision</h4>
+            <p style="margin:0;color:var(--muted)">"Out of everything I could do, steering left is the <i>right</i> choice."</p>
+          </div>
+        </div>
+        <p>A world model gives you the first. But on its own it has three blind spots:</p>
+        <ul class="clean">
+          <li><b>It doesn't know your goal.</b> "If I do nothing, I rear-end the truck" can be a perfectly <i>accurate</i> prediction — and useless until something says crashing is bad.</li>
+          <li><b>It doesn't rank choices.</b> It answers "what happens if X" one X at a time; it never says X beats Y.</li>
+          <li><b>A predicted scene is not a command.</b> A picture of the future road isn't a steering angle your wheels can follow.</li>
+        </ul>
+      </div>
+      <div class="keybox">
+        <strong>Key idea — knowledge vs. decision:</strong> A World Model is for <b>knowledge</b> ("what would happen"), not <b>decision</b> ("what should I do"). Like a weather forecast: knowing it will rain doesn't decide whether you cancel the picnic — that needs to know what you care about.
+      </div>
+    </div>
+
+    <!-- Q2: world model is a simulator -->
+    <div class="card">
+      <div class="qa">
+        <div class="q">"So a World Model is a simulator?"</div>
+        <p>Yes — with one important detail: it's a <b>learned</b> simulator, not a hand-built one.</p>
+      </div>
+      <div class="twocol">
+        <div class="col built">
+          <h4>🛠️ Traditional simulator (hand-built)</h4>
+          <p style="margin:0;color:var(--muted)">A human writes the rules — gravity, tire grip, physics equations. Like a game engine. Exact for what was programmed, blind to everything else.</p>
+        </div>
+        <div class="col learned">
+          <h4>🧠 World Model (learned)</h4>
+          <p style="margin:0;color:var(--muted)">Nobody writes the rules. It watches enormous real footage and figures out how the world behaves on its own. Broad and messy-world-ready, but approximate.</p>
+        </div>
+      </div>
+      <p>Same <i>job</i> (predict what happens next), opposite <i>origin</i> (written by hand vs. learned from data). And the most useful ones are <b>action-conditioned</b>: you don't just press play, you say "here's the move I'm considering," and it shows the future <i>for that move</i>.</p>
+    </div>
+  </section>
+
+  <!-- ============ Self-driving demo ============ -->
+  <section>
+    <h2><span class="dot" style="background:var(--wam)"></span> Demo: a self-driving World Action Model at a tricky merge</h2>
+    <div class="card">
+      <p>This is where "imagine first, then act" stops being abstract. Watch the loop, which repeats a few times every second:</p>
+      <ol class="steps">
+        <li><b>See</b> the road — cameras spot the truck on your right, cars ahead.</li>
+        <li><b>Propose a few candidate moves</b> — merge now, wait one second, brake gently.</li>
+        <li><b>Imagine each one</b> in the world model — "where is that truck in 3 seconds under each choice?"</li>
+        <li><b>Score the imagined futures</b> against the goal — safe? smooth? still making progress?</li>
+        <li><b>Pick the best, take one small step, then repeat</b> the whole loop.</li>
+      </ol>
+      <div class="analogy wam">
+        <strong>Why this isn't "backwards"</strong>
+        Imagine-then-act is just <i>thinking before moving</i> — exactly what a good driver does. The "act directly" alternative (a pure VLA reacting moment to moment) is the impulsive version. For driving, where a mistake is a collision, thinking a few steps ahead is the whole point.
+      </div>
+      <h3>Why not just generate the future and copy it?</h3>
+      <ul class="clean">
+        <li><b>The future is not single.</b> Other drivers are unpredictable — there are many possible next scenes. You must choose a move that's safe across most of them, not blindly follow the single most-likely dream.</li>
+        <li><b>Accurate ≠ desirable.</b> The most likely future at your current speed might be a crash. The model can be right about the physics and still need a separate "don't crash" preference to pick differently.</li>
+        <li><b>You'd still need to extract the action.</b> A great video of "the road in 2 seconds" doesn't hand you the steering command that produces it.</li>
+      </ul>
+      <div class="why">
+        <strong>Nice twist — imagine during training, act fast when driving:</strong> Some systems do the imagining while <i>practicing</i> (millions of situations inside the world model, like a flight simulator). The reactive part learns from that practice, so at drive-time it acts fast without pausing to imagine every frame — the foresight is already baked in.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Why learn a simulator ============ -->
+  <section>
+    <h2><span class="dot" style="background:var(--wm)"></span> Two questions that trip up every newcomer</h2>
+
+    <!-- Q3: games already have a simulator -->
+    <div class="card">
+      <div class="qa">
+        <div class="q">"Games already have a perfect simulator (the game engine). Why train a World Model to imitate it?"</div>
+        <p>Right — nobody actually cares about the game. <b>The game is a laboratory, not the destination.</b> The real target is driving and robots, where you <i>can't unzip "reality.exe."</i></p>
+        <ul class="clean">
+          <li><b>It's practice where you can grade the homework.</b> Researchers go into a game <i>because</i> a perfect simulator exists — then hide it from the agent on purpose. The agent gets only screen pixels, like a camera, and must learn to predict the future from watching. Because the true engine exists, you can measure exactly how wrong the learned model is — something you can never do in reality.</li>
+          <li><b>Even in a game, the agent doesn't get the engine.</b> The engine knows the hidden state; the agent sees only pixels. Forcing it to predict the next frame forces it to figure out the hidden rules itself — the actual skill we want.</li>
+          <li><b>A learned model can do things the real engine can't</b> — imagine thousands of futures at once on a GPU, and let training signals flow backward through it (a real engine is a sealed box).</li>
+        </ul>
+      </div>
+      <div class="keybox">
+        <strong>The answer-key analogy:</strong> The game engine is the answer key. A World Model is a student learning to <i>derive</i> the answers — because in the real exam (the physical world) there <b>is</b> no answer key.
+      </div>
+    </div>
+
+    <!-- Q4: why not predict engine parameters -->
+    <div class="card">
+      <div class="qa">
+        <div class="q">"Then why not predict the engine's parameters (positions, velocities) and let the engine render, instead of generating pixels?"</div>
+        <p>Great instinct — predicting a handful of numbers <i>is</i> far cheaper than painting a million pixels. Two problems, then the clever fix the field actually uses.</p>
+        <h3>Problem 1 — at deployment there's no engine to render with</h3>
+        <p>Predict "truck here, velocity that" — fine, but <i>what draws the resulting scene?</i> In a game the engine does. On a real street, <b>nothing does</b>. Reality has no render button. So "predict parameters, then render" works only in the place you don't care about.</p>
+        <h3>Problem 2 — you'd need to know the engine's exact variables, and reality has none</h3>
+        <p>What are "the variables" of a rainy intersection? Car positions, sure — but also puddle reflections, a cyclist's hesitation, a bag blowing across the road. Nobody can write reality's variable list, because reality wasn't built from one.</p>
+      </div>
+      <div class="keybox">
+        <strong>The clever compromise (what modern World Models actually do):</strong> Your instinct is right — the field just changes one word. Instead of predicting <i>the engine's</i> parameters, the model predicts <b>its own invented</b> ones. It learns to squeeze each frame into a small bundle of numbers — its private summary of "what matters" — <b>predicts the future in that compact number-space</b> (cheap, like you wanted), and only <b>paints pixels when it needs to look</b>. Efficient like state-prediction, but needs no real engine and no known variable list. (This is the famous "Dreamer" design.)
+      </div>
+    </div>
+
+    <div class="keybox" style="background:#fff8ec;border-color:#f0d79a;">
+      <strong style="color:#b9791a;">The one line to carry away:</strong> A World Model is a <b>learned simulator</b> for <b>knowledge</b>, not decision. The World Action Model puts a <b>decision-maker</b> inside that simulator — it imagines a few options, scores them against a goal, and picks. <i>The World Model dreams, the VLA does, and the World Action Model dreams before it does.</i>
+    </div>
+  </section>
+
+  <!-- ============ Next steps ============ -->
+  <section>
+    <h2>Where to go from here</h2>
+    <div class="next">
+      <p>Now that the big picture is clear, here's how we can work together in this folder as you read papers:</p>
+      <ul class="clean">
+        <li><b>Drop papers in</b> — send me PDFs or arXiv links on VLA / World Models, and I'll store them here.</li>
+        <li><b>Per-paper deep dives</b> — I can turn any single paper into a structured breakdown (summary → method → diagrams → insights).</li>
+        <li><b>Pick a lane</b> — once you know which sub-topic excites you (dexterity? planning? video-based world models?), we can go deeper there.</li>
+        <li><b>Map the landscape</b> — I can build a comparison of the major models so you see who does what.</li>
+      </ul>
+      <p style="margin-bottom:0;">You don't need to master everything. Skim, follow your curiosity, and we'll go deeper wherever you point.</p>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  A gentle introduction · built to invite you in, not to overwhelm · expand any section into a full analysis anytime.
+</footer>
+</body>
+</html>

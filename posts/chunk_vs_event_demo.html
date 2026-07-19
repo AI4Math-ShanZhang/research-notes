@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chunk vs. Event — a concrete demo</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --reach:#4A8ED4;--grasp:#F79A38;--lift:#9B72CF;--move:#3DBD79;--release:#F06B7F;
+    --chunk:#8a94a3;--evt:#2a8a58;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;}
+  header{background:linear-gradient(135deg,#3D5A9B,#3DBD79);color:#fff;padding:40px 24px;text-align:center;}
+  header h1{margin:0 0 8px;font-size:1.7rem;}
+  header p{margin:0;opacity:.95;}
+  .wrap{max-width:1000px;margin:0 auto;padding:26px 20px 70px;}
+  h2{font-size:1.35rem;border-bottom:2px solid var(--line);padding-bottom:6px;margin-top:36px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;box-shadow:0 2px 10px rgba(30,50,90,.04);}
+  .lead{color:var(--muted);font-size:1.05rem;}
+  /* action step strip */
+  .strip{display:flex;gap:2px;overflow-x:auto;padding:6px 0;}
+  .cell{min-width:30px;flex:1 0 30px;text-align:center;border-radius:4px;padding:6px 2px;color:#fff;font-size:.72rem;font-variant-numeric:tabular-nums;}
+  .reach{background:var(--reach);} .grasp{background:var(--grasp);} .lift{background:var(--lift);}
+  .move{background:var(--move);} .release{background:var(--release);}
+  .steplabel{display:flex;gap:2px;}
+  .steplabel .cell{background:transparent;color:var(--muted);padding:2px;font-size:.65rem;}
+  /* cut rows */
+  .cutrow{display:flex;gap:2px;margin-top:6px;}
+  .block{border-radius:6px;padding:8px 4px;text-align:center;font-size:.75rem;font-weight:600;color:#fff;position:relative;border:2px solid rgba(255,255,255,.6);}
+  .block small{display:block;font-weight:400;font-size:.68rem;opacity:.95;}
+  .block.mixed{background:repeating-linear-gradient(45deg,#b06a6a,#b06a6a 8px,#c98a8a 8px,#c98a8a 16px);}
+  .block.clean{}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0;font-size:.85rem;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:.9rem;}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;}
+  th{background:#f0f4fa;}
+  .bad{background:#fff2f2;border-left:4px solid var(--release);padding:12px 16px;border-radius:0 8px 8px 0;margin:12px 0;}
+  .good{background:#ecf9f1;border-left:4px solid var(--evt);padding:12px 16px;border-radius:0 8px 8px 0;margin:12px 0;}
+  .bad strong{color:#c0435a;} .good strong{color:#2a8a58;}
+  .note{color:var(--muted);font-size:.9rem;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.85em;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Chunk vs. Event — one task, cut two ways</h1>
+  <p>Task: <b>"Pick up the red cup and put it in the sink."</b> · Robot runs at 10 commands/sec · 30 steps ≈ 3 seconds</p>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <p class="lead">The robot's whole task is really just a <b>stream of tiny commands</b> — one every 0.1 s. Each command says how far to nudge the hand (x/y/z) and how much to move the gripper. Below is the <b>entire</b> task as 30 of these steps, colored by what the robot is actually doing at that moment.</p>
+    <div class="legend">
+      <span><i class="sw reach"></i> Reach</span>
+      <span><i class="sw grasp"></i> Grasp (close fingers)</span>
+      <span><i class="sw lift"></i> Lift</span>
+      <span><i class="sw move"></i> Move to sink</span>
+      <span><i class="sw release"></i> Release</span>
+    </div>
+
+    <div class="steplabel" id="steplabels"></div>
+    <div class="strip" id="strip"></div>
+    <p class="note">Each little box is one action step. The number is a rough "how big is the motion" for that step. Notice the task naturally has <b>5 phases of different lengths</b> — reaching is long, grasping is short.</p>
+  </div>
+
+  <h2>Way 1 — Fixed-length CHUNKS (cut by the clock)</h2>
+  <div class="card">
+    <p class="lead">A <b>chunk</b> = always the same number of steps, no matter what's happening. Here: cut every <b>6 steps</b> (0.6 s). The model predicts one whole chunk at a time, then looks and predicts the next.</p>
+    <div class="strip" id="strip2"></div>
+    <div class="cutrow" id="chunks"></div>
+    <div class="bad">
+      <strong>The problem — boundaries fall in the middle of a behavior.</strong>
+      Chunk 2 is half "grasp" and half "lift." Chunk 4 is half "move" and half "release." The clock doesn't care what the robot is doing, so a single chunk often <b>mixes two different behaviors</b> — which makes it harder for the model to learn a clean "this is what grasping looks like."
+    </div>
+    <p class="note"><b>Good side:</b> simple, every chunk is the same size, easy to batch. <b>Bad side:</b> the cut is blind.</p>
+  </div>
+
+  <h2>Way 2 — EVENTS (cut at the joints)</h2>
+  <div class="card">
+    <p class="lead">An <b>event</b> = one coherent behavior, however long it takes. The cut happens where the behavior actually changes. Lengths differ: grasp is 4 steps, move is 9 steps.</p>
+    <div class="strip" id="strip3"></div>
+    <div class="cutrow" id="events"></div>
+    <div class="good">
+      <strong>The win — every segment is one clean, nameable thing.</strong>
+      Each event holds exactly one behavior you can put in words: "reach," "grasp," "lift," "move," "release." Nothing is mixed. The model learns a crisp mapping from <i>a word</i> → <i>a coherent motion</i>, and the segment length follows the task instead of a timer.
+    </div>
+    <p class="note"><b>Good side:</b> clean, meaningful units that match language and vision. <b>Trade-off:</b> segments are variable length, so the training machinery has to handle that (which is a lot of what WALL-WM's engineering is about).</p>
+  </div>
+
+  <h2>Side-by-side</h2>
+  <div class="card">
+    <table>
+      <tr><th></th><th>Fixed-length chunk</th><th>Event (WALL-WM)</th></tr>
+      <tr><td><b>How it cuts</b></td><td>Every N steps by the clock</td><td>When the behavior changes</td></tr>
+      <tr><td><b>Length</b></td><td>Always the same</td><td>Varies with the task</td></tr>
+      <tr><td><b>What's inside one unit</b></td><td>Whatever happens to fall there — often 2 behaviors mixed</td><td>Exactly one coherent behavior</td></tr>
+      <tr><td><b>Matches language?</b></td><td>Not really — no clean name for "the 3rd half-second"</td><td>Yes — "grasp the cup" names one event</td></tr>
+      <tr><td><b>Easy to train?</b></td><td>Very (uniform size)</td><td>Harder (needs variable-length handling)</td></tr>
+    </table>
+    <p class="note">Both still run as a <b>rolling loop</b> at run-time: predict one unit → execute → look at the new camera view → predict the next. The only difference is <b>where the boundaries sit</b> — by the clock, or at the joints of behavior.</p>
+  </div>
+
+</div>
+
+<script>
+// 30 action steps: [phase, magnitude]
+const steps = [
+  // reach (1-8) - long
+  ['reach',3],['reach',4],['reach',5],['reach',5],['reach',4],['reach',4],['reach',3],['reach',2],
+  // grasp (9-12) - short, hand still, fingers close
+  ['grasp',1],['grasp',1],['grasp',2],['grasp',1],
+  // lift (13-18)
+  ['lift',3],['lift',4],['lift',4],['lift',3],['lift',2],['lift',2],
+  // move to sink (19-27) - long
+  ['move',4],['move',5],['move',5],['move',5],['move',4],['move',4],['move',3],['move',3],['move',2],
+  // release (28-30)
+  ['release',1],['release',1],['release',1]
+];
+const phaseName={reach:'Reach',grasp:'Grasp',lift:'Lift',move:'Move',release:'Release'};
+
+function paintStrip(id){
+  const el=document.getElementById(id);
+  steps.forEach((s,i)=>{
+    const d=document.createElement('div');
+    d.className='cell '+s[0];
+    d.textContent=s[1];
+    el.appendChild(d);
+  });
+}
+// step number labels
+const lab=document.getElementById('steplabels');
+steps.forEach((s,i)=>{const d=document.createElement('div');d.className='cell';d.textContent=(i+1);lab.appendChild(d);});
+paintStrip('strip');paintStrip('strip2');paintStrip('strip3');
+
+// Fixed chunks of 6
+const chunkSize=6;
+const chunksEl=document.getElementById('chunks');
+for(let c=0;c<steps.length;c+=chunkSize){
+  const slice=steps.slice(c,c+chunkSize);
+  const phases=[...new Set(slice.map(x=>x[0]))];
+  const mixed=phases.length>1;
+  const d=document.createElement('div');
+  d.className='block '+(mixed?'mixed':'clean');
+  if(!mixed) d.classList.add(slice[0][0]);
+  d.style.flex=slice.length+' 0 0';
+  const label=phases.map(p=>phaseName[p]).join(' + ');
+  d.innerHTML='Chunk '+(c/chunkSize+1)+'<small>steps '+(c+1)+'–'+(c+slice.length)+'<br>'+label+(mixed?' ⚠️':'')+'</small>';
+  chunksEl.appendChild(d);
+}
+
+// Events at behavior boundaries
+const eventsEl=document.getElementById('events');
+let start=0;
+for(let i=1;i<=steps.length;i++){
+  if(i===steps.length || steps[i][0]!==steps[start][0]){
+    const slice=steps.slice(start,i);
+    const p=steps[start][0];
+    const d=document.createElement('div');
+    d.className='block '+p;
+    d.style.flex=slice.length+' 0 0';
+    d.innerHTML=phaseName[p]+'<small>steps '+(start+1)+'–'+i+' ('+slice.length+' steps)</small>';
+    eventsEl.appendChild(d);
+    start=i;
+  }
+}
+</script>
+</body>
+</html>
