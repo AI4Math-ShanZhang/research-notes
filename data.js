@@ -39,11 +39,6 @@ const BLOG = {
           link:    "https://arxiv.org/abs/2412.06769",
           summary: "Lets a model reason in continuous 'thought' vectors instead of words by feeding the last hidden state straight back as the next input embedding.",
         },
-        {
-          name:    "Universal Transformers (looped-Transformer origin)",
-          link:    "https://arxiv.org/abs/1807.03819",
-          summary: "Applies the same Transformer block recurrently with adaptive depth — the architecture the latent-thought line builds on for extra expressivity with fewer parameters.",
-        },
       ],
     },
 
