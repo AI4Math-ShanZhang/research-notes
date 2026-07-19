@@ -99,7 +99,7 @@ const BLOG = {
           summary: "How LingBot-VA trains with teacher forcing and the trick that bridges training and deployment.",
         },
         {
-          title:   "Chunk vs. Event — a concrete demo",
+          title:   "WALL-WM — Chunk vs. Event (demo)",
           file:    "posts/chunk_vs_event_demo.html",
           date:    "2026-07-19",
           paper:   "Action representation",
@@ -107,7 +107,7 @@ const BLOG = {
           summary: "Concrete demo contrasting chunk-based vs event-based action representations.",
         },
         {
-          title:   "Staircase Decoding vs. Next-Token (animated)",
+          title:   "WALL-WM — Staircase Decoding vs. Next-Token (animated)",
           file:    "posts/staircase_decoding_demo.html",
           date:    "2026-07-19",
           paper:   "Decoding",
@@ -115,7 +115,7 @@ const BLOG = {
           summary: "Animated comparison of staircase decoding against plain next-token decoding.",
         },
         {
-          title:   "Tube Patch Masking (interactive)",
+          title:   "WALL-WM — Tube Patch Masking (interactive)",
           file:    "posts/tube_masking_demo.html",
           date:    "2026-07-19",
           paper:   "Masking",
@@ -123,7 +123,7 @@ const BLOG = {
           summary: "Interactive demo of tube patch masking over video frames.",
         },
         {
-          title:   "Sight-Cone Masking (interactive)",
+          title:   "WALL-WM — Sight-Cone Masking (interactive)",
           file:    "posts/sight_cone_masking_demo.html",
           date:    "2026-07-19",
           paper:   "Masking",
