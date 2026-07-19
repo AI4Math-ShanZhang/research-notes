@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Papers — Research Notes</title>
+<link rel="stylesheet" href="assets/blog.css">
+<style>
+  .paper{ padding:.7rem 0 .8rem; border-bottom:1px solid var(--line); }
+  .paper .name{ font-size:1.05rem; font-weight:bold; }
+  .paper .name a{ color:var(--accent); text-decoration:none; }
+  .paper .name a:hover{ text-decoration:underline; }
+  .paper .nolink{ color:var(--ink); }
+  .paper .summary{ margin:.25rem 0 0; font-size:.96rem; color:#33404d; }
+  .paper .ext{ font-family:-apple-system,system-ui,sans-serif; font-size:.72rem;
+    color:#fff; background:var(--accent2); border-radius:9px; padding:1px 7px; margin-left:.4rem; }
+</style>
+</head>
+<body>
+
+<header class="site-head">
+  <h1 id="site-title">Research Notes</h1>
+  <p>Reading list — papers by topic. <a href="index.html" style="color:var(--accent);">See written notes →</a></p>
+  <nav class="nav" id="site-nav"></nav>
+</header>
+
+<div class="filters" id="filters"></div>
+<main id="categories"></main>
+
+<footer>Static site · hosted on GitHub Pages · edit <code>data.js</code> to add papers</footer>
+
+<script src="data.js"></script>
+<script>
+  document.getElementById('site-title').textContent = BLOG.title;
+  document.getElementById('site-nav').innerHTML =
+    BLOG.links.map(l => `<a href="${l.href}">${l.text}</a>`).join('');
+
+  const filters = document.getElementById('filters');
+  const chips = [{id:'all', name:'All'}].concat(BLOG.categories);
+  filters.innerHTML = chips.map((c,i) =>
+    `<button data-cat="${c.id}" class="${i===0?'active':''}">${c.name}</button>`).join('');
+
+  function paperHTML(p){
+    const title = p.link
+      ? `<a href="${p.link}" target="_blank" rel="noopener">${p.name}</a><span class="ext">arXiv ↗</span>`
+      : `<span class="nolink">${p.name}</span>`;
+    return `<div class="paper">
+      <div class="name">${title}</div>
+      <div class="summary">${p.summary||''}</div>
+    </div>`;
+  }
+
+  function render(active){
+    const wrap = document.getElementById('categories');
+    wrap.innerHTML = BLOG.categories
+      .filter(c => active==='all' || c.id===active)
+      .map(c => {
+        const papers = c.papers || [];
+        return `<section class="category" data-cat="${c.id}">
+          <h2>${c.name} <span class="count">${papers.length}</span></h2>
+          <p class="blurb">${c.blurb||''}</p>
+          ${papers.length ? papers.map(paperHTML).join('')
+                          : '<p class="blurb"><em>No papers listed yet.</em></p>'}
+        </section>`;
+      }).join('');
+  }
+  render('all');
+
+  filters.addEventListener('click', e => {
+    if(e.target.tagName!=='BUTTON') return;
+    filters.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    render(e.target.dataset.cat);
+  });
+</script>
+</body>
+</html>
