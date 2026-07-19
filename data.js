@@ -71,7 +71,7 @@ const BLOG = {
         { name:"Qwen-VLA — unified manipulation + navigation + egocentric", link:"https://arxiv.org/abs/2605.30280", summary:"One VLA covering manipulation, navigation, and egocentric tasks in a single model." },
         { name:"PhysBrain 1.0 — physics-commonsense-first VLA", link:"https://arxiv.org/abs/2605.15298", summary:"A VLA that puts physical commonsense first, grounding action in physical reasoning." },
         { name:"LingBot-Video — MoE video foundation model for embodiment", link:"https://arxiv.org/abs/2607.07675", summary:"A mixture-of-experts video foundation model built as a backbone for embodied policies." },
-        { name:"LingBot-VA 2 — native-from-scratch video-action pretraining", link:"", summary:"Pretrains a video-action model natively from scratch rather than adapting a language backbone. (Local PDF.)" },
+        { name:"LingBot-VA 2 — native-from-scratch video-action pretraining", link:"https://arxiv.org/abs/2607.08639", summary:"Pretrains a video-action model natively from scratch rather than adapting a language backbone." },
         { name:"LingBot-Vision — spatial-perception vision backbone", link:"", summary:"A vision backbone specialized for spatial perception in embodied settings. (Local PDF.)" },
         { name:"Qwen-RobotNav — configurable navigation VLA", link:"", summary:"A configurable, navigation-focused VLA. (Local PDF.)" },
       ],
