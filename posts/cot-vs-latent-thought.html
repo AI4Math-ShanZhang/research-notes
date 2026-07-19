@@ -77,6 +77,12 @@ follows from whether a paradigm pays that toll.</div>
 <p>Normal CoT thinks in <em>words</em>; Coconut lets the model think in <em>vectors</em>. It deletes the
 "pick a word" step and feeds the raw hidden vector straight back, so it can carry "60% A, 40% B" forward
 instead of collapsing to "A". It's the bridge: continuous like the loop, but grows in length like CoT.</p>
+<p>Continuous CoT (Coconut) is powerful because a continuous thought vector can be a <b>superposition</b> — it
+holds many possible reasoning paths at once instead of committing to one. Concurrent work
+(<a href="https://arxiv.org/abs/2505.12514">Zhu et al., 2025</a>) makes this precise: on directed graph
+reachability, a continuous thought encodes a parallel breadth-first search (all frontiers alive at once),
+solving it in <em>D</em> (graph diameter) steps, whereas discrete CoT must sample a single path per step and
+needs ~<em>n²</em> steps.</p>
 
 <h3>Claim A — parallel reasoning (tournament analogy)</h3>
 <div class="analogy">8 players, find the champion.
