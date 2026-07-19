@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>World Models (Ha & Schmidhuber) — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .mem{ font-weight:600; color:#b56b00; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>World Models</h1>
+<p class="paper-meta">Paper: <em>World Models</em> — David Ha &amp; Jürgen Schmidhuber (2018),
+<a href="https://arxiv.org/abs/1803.10122">arXiv:1803.10122</a>.
+Interactive version: <a href="https://worldmodels.github.io">worldmodels.github.io</a>.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p>An RL agent is split into a large, unsupervised <b>world model</b> and a tiny <b>controller</b>. The world
+model learns to compress and predict the environment; the controller just reads from it to pick actions. Three
+components:</p>
+
+<table>
+  <tr><th>Part</th><th>Name</th><th>What it does</th></tr>
+  <tr><td><b>V</b></td><td>Vision (VAE)</td><td>Compresses each raw frame into a small latent vector <code>z</code>.</td></tr>
+  <tr><td><b>M</b></td><td class="mem">Memory (MDN-RNN)</td><td>A recurrent net that predicts the <em>next</em> latent <code>z</code> from the current <code>z</code>, the action, and its own hidden state <code>h</code>. This is the temporal model of the world.</td></tr>
+  <tr><td><b>C</b></td><td>Controller</td><td>A tiny linear model mapping <code>[z, h]</code> → action. Trained by evolution (CMA-ES).</td></tr>
+</table>
+
+<div class="mermaid">
+flowchart LR
+  frame[raw frame] --> V[V: VAE]
+  V -->|z| M[M: MDN-RNN memory]
+  V -->|z| C[C: controller]
+  M -->|h| C
+  C -->|action| env[environment]
+  env --> frame
+</div>
+
+<p><b>Headline result:</b> because M is a full predictive model of the environment, the agent can train its
+controller <em>entirely inside M's own imagined rollouts</em> — a "dream" — and then transfer the learned policy
+back to the real environment. Shown on CarRacing and the VizDoom "Take Cover" task, where the controller was
+trained purely inside the hallucinated world and still worked in the real game.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes — focus on memory</h2>
+
+<h3>Why memory (the M model) is the heart of the paper</h3>
+<p>The authors' framing is cognitive: humans don't act on raw sensory input, we act on an <b>internal predictive
+model</b> built from experience. That model is spatial <em>and</em> temporal — it remembers how things tend to
+unfold and predicts what comes next. In the paper, <span class="mem">M is exactly that memory</span>:</p>
+<ul>
+  <li><b>It remembers history in <code>h</code>.</b> The RNN's hidden state <code>h</code> is a compressed summary
+  of everything seen so far. The current frame <code>z</code> alone is not enough (the world is partially
+  observable); <code>h</code> supplies the context — velocity, momentum, what just happened off-screen.</li>
+  <li><b>It predicts the future, not just recalls the past.</b> M's job is to output the distribution of the
+  <em>next</em> latent <code>z</code>. Memory here means a <em>generative</em> model of dynamics, so the agent can
+  "run the world forward" in its head.</li>
+  <li><b>It predicts a distribution, not a single frame.</b> M uses a Mixture Density Network (MDN) — it outputs a
+  mixture of Gaussians over the next <code>z</code>. The world is stochastic (a monster may or may not shoot), so a
+  point prediction would be wrong; a distribution captures the uncertainty honestly.</li>
+</ul>
+
+<div class="analogy"><strong>Baseball analogy (theirs).</strong> A batter has milliseconds to swing — faster than
+the visual signal even reaches the conscious brain. They can only hit the ball because an internal model
+<em>predicts</em> where and when it will arrive. The controller relying on M's <code>h</code> is the same idea:
+act on the predicted future, not the (already stale) present.</div>
+
+<h3>The authors' key insights for world models</h3>
+<ol>
+  <li><b>Put the intelligence in the model, keep the controller tiny.</b> V and M hold millions of parameters and
+  learn unsupervised (cheap, abundant data); C has only a few hundred. A small controller is why simple evolution
+  strategies can train it — credit assignment is easy when the policy is tiny and the hard representation work is
+  already done by memory.</li>
+  <li><b>You can train inside the dream.</b> Once M is a good enough memory of the world, its imagined rollouts are
+  a free, fast simulator. Learn the policy there, transfer to reality. Memory quality directly sets how far you can
+  train without touching the real environment.</li>
+  <li><b>A too-perfect dream is dangerous — add uncertainty on purpose.</b> If M is deterministic/overconfident, the
+  controller learns to exploit the model's flaws (adversarial policies that win in the dream but fail for real). The
+  temperature knob <code>τ</code> inflates M's predicted uncertainty, making the dream noisier and harder, which
+  forces a robust policy that survives the reality gap.</li>
+  <li><b>Iterative improvement.</b> Because memory and policy co-depend, you can loop: collect data with the current
+  policy → improve M → improve C → repeat, letting the world model grow with the agent's competence.</li>
+</ol>
+
+<div class="callout"><strong>Takeaway for me:</strong> "memory" in a world model isn't a lookup buffer — it's a
+learned, uncertainty-aware, <em>generative</em> model of how the world evolves. That single idea (M) is what lets
+the agent imagine, plan, and even train without the real environment. Everything downstream in modern world-model
+work (Dreamer, etc.) is a descendant of this M-as-predictive-memory framing.</div>
+</section>
+
+</body>
+</html>

@@ -140,8 +140,17 @@ const BLOG = {
     {
       id: "world-model",
       name: "World Model",
-      blurb: "World models — dynamics prediction, video generation, planning. (Not started yet.)",
-      notes: [],
+      blurb: "World models — dynamics prediction, memory, imagination, and planning.",
+      notes: [
+        {
+          title:   "World Models (Ha & Schmidhuber)",
+          file:    "posts/world-models-ha-schmidhuber.html",
+          date:    "2026-07-19",
+          paper:   "Ha & Schmidhuber · arXiv:1803.10122",
+          tags:    ["memory", "MDN-RNN", "imagination", "foundational"],
+          summary: "The V-M-C agent, focused on the memory model M: an MDN-RNN whose hidden state remembers history and predicts a distribution over the next latent. Memory is a generative model of dynamics — it lets the agent imagine and even train entirely inside the 'dream'.",
+        },
+      ],
     },
   ],
 };
