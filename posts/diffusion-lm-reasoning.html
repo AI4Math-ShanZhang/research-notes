@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reasoning Abilities of Masked Diffusion LMs — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .take{ background:#fff8ee; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take h4{ margin:.1rem 0 .4rem; color:#b56b00; }
+  .gloss th{ background:#3D5A9B; }
+  .dial{ color:#9B72CF; font-weight:600; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>On the Reasoning Abilities of Masked Diffusion Language Models</h1>
+<p class="paper-meta">Paper: <em>On the Reasoning Abilities of Masked Diffusion Language Models</em> —
+Anej Svete, William Merrill &amp; Ashish Sabharwal (2025),
+<a href="https://arxiv.org/abs/2510.13117">arXiv:2510.13117</a>. Cited as future work in the CoT-vs-Latent-Thought paper.</p>
+
+<!-- ===== Conclusion / TL;DR ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ In one line</h2>
+<p>A masked diffusion LM <b>is a looped transformer with a token scratchpad</b>, and its <span class="dial">number of
+denoising steps is a depth dial</span>: turn it up and you climb AC⁰ → regular languages → AC^d → NC. At any fixed
+step budget it is <b>provably faster than one-token-at-a-time CoT</b> on parallelizable problems — same computational
+power, fewer steps.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>What a masked diffusion model (MDM) does</h3>
+<p>Start with a sequence that is <b>all <code>[MASK]</code></b>. Then repeat for <em>T</em> denoising steps:
+run the transformer over the whole partly-filled sequence → predict the masked positions → <b>unmask a batch of
+them</b> (by confidence / schedule / randomness) → feed the sequence back in. Same weights applied over and over to
+a refining sequence — i.e. a loop.</p>
+
+<h3>The four models it relates</h3>
+<table>
+  <tr><th>Model</th><th>Definition</th></tr>
+  <tr><td><b>MDM</b></td><td>Masked diffusion model — the process above; unmasks many tokens per step, in any order.</td></tr>
+  <tr><td><b>PLT</b></td><td>Padded Looped Transformer — repeatedly applies a fixed block of layers (weight reuse → depth without extra parameters), plus <b>padding</b> positions that act as writable scratch memory.</td></tr>
+  <tr><td><b>CoT</b></td><td>Chain-of-thought transformer — writes scratchpad tokens <b>one per step</b> (any order, but one at a time).</td></tr>
+  <tr><td><b>pCoT</b></td><td>Parallel CoT — a CoT that emits <b>P′ tokens in parallel</b> each step; the interpolation between one-per-step CoT and full diffusion. (Not speculative decoding, which is about speed only.)</td></tr>
+</table>
+
+<h3>The core result</h3>
+<p><b>MDM ≡ PLT</b> (finite precision, log width). A diffusion LM and a padded looped transformer are the same
+object: each <b>denoising step = one loop iteration</b>, and the still-masked positions = the padding/scratchpad.
+This is the bridge that lets every looped-transformer result transfer to diffusion, and vice-versa.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section" style="background:#f4f6fb;border-left:5px solid #3D5A9B;">
+<h2 style="color:#2c3e50;">📐 Notation &amp; preliminaries</h2>
+<p>Everything is stated in terms of <b>circuit complexity classes</b>. The one idea running through all of them:
+<span class="dial">number of denoising steps = loop iterations = circuit depth = computational power.</span></p>
+
+<table class="gloss">
+  <tr><th>Symbol</th><th>Meaning</th></tr>
+  <tr><td><b>N</b></td><td>Sequence length (the input size).</td></tr>
+  <tr><td><b>fan-in</b></td><td>How many inputs one gate reads. <b>Unbounded</b> fan-in = one gate combines <em>all</em> inputs at once — massively parallel.</td></tr>
+  <tr><td><b>AC⁰</b></td><td>AND/OR/NOT circuits, <b>unbounded fan-in</b>, poly size, <b>constant depth</b>. Weakest rung. Can do OR/AND of all bits and integer addition; <b>cannot</b> do parity or multiplication.</td></tr>
+  <tr><td><b>AC^d</b></td><td>Same, but depth ≈ <b>(log N)^d</b>. The exponent <em>d</em> is the depth dial: more layers of unbounded AND/OR = more power.</td></tr>
+  <tr><td><b>AC</b></td><td>Union of all AC^d — the whole ladder.</td></tr>
+  <tr><td><b>NC^d</b></td><td>Like AC^d but with <b>bounded fan-in</b> (2-input gates), depth (log N)^d. Interleaves with AC: NC^d ⊆ AC^d ⊆ NC^(d+1).</td></tr>
+  <tr><td><b>NC</b></td><td>All problems <b>efficiently solvable in parallel</b> (polylog depth, poly work). Examples: sorting, matrix multiply, graph connectivity, formula evaluation. <b>NC = AC</b> overall (same ceiling). This is the top of the ladder diffusion reaches.</td></tr>
+  <tr><td><b>Regular languages</b></td><td>What a fixed finite-state machine recognizes (pattern matching, parity, bounded bracket-matching). Sits at the NC¹ level.</td></tr>
+</table>
+
+<p><b>The ladder (weak → strong):</b> AC⁰ &nbsp;⊂&nbsp; regular languages (≈NC¹) &nbsp;⊂&nbsp; AC^d &nbsp;⊂&nbsp; NC.</p>
+<div class="callout"><strong>Why circuits are the right lens:</strong> a transformer's <b>attention is an unbounded-fan-in
+operation</b> — one layer looks at all positions at once, exactly like one big AND/OR gate. So one forward pass ≈
+constant depth ≈ AC⁰, and looping/denoising <em>T</em> times stacks <em>T</em> such rounds → climbs the AC ladder.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Key Notes — figures &amp; takeaways</h2>
+
+<h3>Figure 1 — the "who-can-simulate-whom" map</h3>
+<p>An expressivity diagram of three boxes — <b>MDM</b>, <b>PLT</b>, <b>CoT</b> — with arrows meaning "can be
+simulated by / is included in." The <b>MDM ↔ PLT</b> double arrow (equivalence) is the anchor; the arrow to CoT shows
+MDM does everything CoT does. Edge labels (blue/orange backgrounds) mark the <em>conditions</em> — "with extra output
+space (padding)," "with stochasticity." <b>Red arrows = this paper's new results.</b> Message: diffusion sits
+<em>between</em> the loop and CoT — equal to the loop, at least as strong as CoT, given padding + randomness.</p>
+
+<h3>Figure 2 — the "steps → power" ladder</h3>
+<p>Maps how many denoising steps you run to which class you reach:</p>
+<table>
+  <tr><th>Denoising steps</th><th>Class reached</th><th>Meaning</th></tr>
+  <tr><td>constant O(1)</td><td><b>AC⁰</b></td><td>no stronger than a plain transformer — looping a fixed number of times buys nothing</td></tr>
+  <tr><td><b>log N</b></td><td><b>regular languages</b></td><td>enough depth to simulate a finite-state machine in parallel</td></tr>
+  <tr><td><b>log^d N</b></td><td><b>AC^d</b></td><td>each extra factor of log-depth climbs one rung</td></tr>
+  <tr><td>→ ∞ (union over d)</td><td><b>NC</b></td><td>reaches all efficiently-parallelizable problems</td></tr>
+</table>
+<p><b>Meaning:</b> power is a dial, and the dial is the number of denoising steps (= loop iterations = depth).</p>
+
+<h3>The five takeaways</h3>
+
+<div class="take">
+<h4>Takeaway 3 (anchor) — MDMs are equivalent to PLTs. [Thm 3.1]</h4>
+A diffusion model <em>is</em> a padded looped transformer: denoising step = loop iteration, masked positions = padding.
+<b>Why it matters:</b> the bridge — everything known about looped transformers transfers to diffusion and back.
+</div>
+
+<div class="take">
+<h4>Takeaway 1 — MDMs can do CoT (with overhead); CoT can simulate a diffusion run one symbol at a time. [Thm 3.3–3.4]</h4>
+Two directions: (a) diffusion reproduces any CoT computation — it keeps the scratchpad power; (b) CoT can imitate a
+diffusion run, but only by unmasking <b>one position per step</b>, in whatever order diffusion chose.
+<b>Meaning:</b> <em>same set of computable things — the difference is speed, not power.</em>
+<br><em>Example:</em> to spell MATH, diffusion unmasks {1,3} then {2,4} = <b>2 steps</b>; CoT does 1→3→2→4 =
+<b>4 steps</b>. Same answer "MATH," CoT slower. The gap is "how many per step," <b>not</b> which order — CoT already
+has the ordering freedom; it just can't parallelize.
+</div>
+
+<div class="take">
+<h4>Takeaway 2 — MDMs are provably more efficient than CoT on parallelizable problems. [Cor 3.7]</h4>
+The strict separation <b>CoT[log N] ⊊ MDM[log N, N]</b>: with the <em>same</em> log-N step budget, there are problems
+diffusion solves that sequential CoT cannot. <b>Meaning:</b> the "depth beats size" gap, now proven for diffusion vs
+CoT — many-tokens-per-step is fundamentally faster than one-token-per-step, not just a constant-factor speedup.
+</div>
+
+<div class="take">
+<h4>Takeaway 4 — MDMs with log N denoising steps recognize regular languages. [Thm 3.2]</h4>
+A concrete rung of the ladder. Regular (finite-state) languages need <b>N sequential steps</b> for CoT (walk the
+string left to right) but only <b>log N</b> steps for diffusion (resolve the automaton divide-and-conquer style).
+<b>Meaning:</b> a tangible log N vs N example.
+</div>
+
+<div class="take">
+<h4>Takeaway 5 — MDMs with O(log^d N) steps and poly(N) output = AC^d. [Cor 3.3–3.4]</h4>
+The exact characterization behind Figure 2. <b>"(log N)^d steps"</b> = the step budget (depth dial). <b>"poly(N)
+output"</b> = polynomially many scratch positions. <b>"= AC^d"</b> = the power is <em>exactly</em> depth-d parallel
+circuits — no more, no less. As d → ∞ this sweeps out all of <b>NC</b>. <b>Meaning:</b> the paper fully pins down the
+expressivity, giving both the ladder and its ceiling.
+</div>
+
+<h3>Where diffusion sits vs loop &amp; CoT</h3>
+<table>
+  <tr><th></th><th>Writes per step</th><th>Parallel?</th><th>Stochastic?</th></tr>
+  <tr><td><b>CoT</b></td><td>1 token</td><td>❌ sequential</td><td>✅ (samples tokens)</td></tr>
+  <tr><td><b>Looped TF</b></td><td>whole hidden state</td><td>✅ parallel</td><td>❌ deterministic</td></tr>
+  <tr><td><b>Diffusion LM</b></td><td>many tokens</td><td>✅ parallel</td><td>✅ (samples unmaskings)</td></tr>
+</table>
+<p>Diffusion is the <b>hybrid</b>: parallel like the loop <em>and</em> stochastic like CoT — potentially strong at
+<em>both</em> of the tasks the CoT-vs-Latent-Thought paper separated (parallel computation <em>and</em> approximate
+counting). That is exactly why that paper flagged diffusion as the natural next thing to analyze.</p>
+
+<div class="callout"><strong>Honest caveat.</strong> The parallelism isn't free — unmasking many tokens at once
+assumes they are roughly <em>conditionally independent</em> given what's revealed. When tokens are strongly coupled,
+aggressive parallel unmasking can produce inconsistent text, so real diffusion LMs still need enough denoising steps
+(enough depth) for tightly-coupled problems.</div>
+</section>
+
+</body>
+</html>

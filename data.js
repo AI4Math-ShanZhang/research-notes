@@ -27,12 +27,25 @@ const BLOG = {
           tags:    ["reasoning", "complexity", "looped TF"],
           summary: "All three paradigms reuse one Transformer block — they differ only in what is fed back each step. That single difference is why latent thought is good at parallel reasoning and CoT is good at approximate counting.",
         },
+        {
+          title:   "On the Reasoning Abilities of Masked Diffusion LMs",
+          file:    "posts/diffusion-lm-reasoning.html",
+          date:    "2026-07-19",
+          paper:   "Svete, Merrill & Sabharwal · arXiv:2510.13117",
+          tags:    ["diffusion LM", "complexity", "AC/NC", "PLT"],
+          summary: "A diffusion LM is a looped transformer with a token scratchpad (MDM ≡ PLT), and its denoising-step count is a depth dial climbing AC⁰ → regular → AC^d → NC. Includes notation (AC/NC/AC^d), both figures, and all five takeaways.",
+        },
       ],
       papers: [
         {
           name:    "A Formal Comparison Between Chain of Thought and Latent Thought",
           link:    "https://arxiv.org/abs/2509.25239",
           summary: "Proves latent/looped thought is stronger at parallel (depth-bound) computation, while CoT's token sampling uniquely enables approximate counting and sampling.",
+        },
+        {
+          name:    "On the Reasoning Abilities of Masked Diffusion Language Models",
+          link:    "https://arxiv.org/abs/2510.13117",
+          summary: "Proves masked diffusion LMs are equivalent to padded looped transformers; denoising steps map to circuit depth (AC⁰→AC^d→NC), and diffusion is strictly more step-efficient than CoT on parallelizable problems.",
         },
         {
           name:    "Coconut — Training LLMs to Reason in a Continuous Latent Space",
