@@ -155,6 +155,30 @@ expressivity, giving both the ladder and its ceiling.
 <em>both</em> of the tasks the CoT-vs-Latent-Thought paper separated (parallel computation <em>and</em> approximate
 counting). That is exactly why that paper flagged diffusion as the natural next thing to analyze.</p>
 
+<h3>Which real tasks are parallel vs sequential? (practical guide)</h3>
+<p><b>Deciding question:</b> does the next step <em>need the previous step's result</em>?
+<b>Yes → sequential</b> (a forced chain, depth grows with size) <b>→ CoT</b>.
+<b>No, parts are independent → parallelizable</b> (shallow, bushy, polylog depth) <b>→ diffusion / looped</b>.</p>
+<table>
+  <tr><th>Task</th><th>Shape</th><th>Verdict</th></tr>
+  <tr><td>Multi-step math word problem / proof (100→80→95→190…)</td><td>each step needs the last</td><td><b>Sequential → CoT</b></td></tr>
+  <tr><td>Evaluate one arithmetic expression (12+8)×(7−3)+5</td><td>independent branches, shallow tree</td><td><b>Parallel</b></td></tr>
+  <tr><td>Image perception (objects, edges, regions)</td><td>spatial grid, local &amp; independent</td><td><b>Parallel</b></td></tr>
+  <tr><td><b>Image description / captioning</b></td><td>independent facts + thin fluency layer</td><td><b>Mostly parallel</b></td></tr>
+  <tr><td>Path-tracing / maze / spatial planning</td><td>each hop needs the last</td><td><b>Sequential → CoT</b></td></tr>
+</table>
+
+<div class="callout"><strong>Worked example — image description is mostly parallel.</strong>
+"A <b>brown dog</b> runs across a <b>grassy field</b> under a <b>blue sky</b>." The three facts are
+<em>independent observations of different regions</em> — "blue sky" does not need "brown dog" to be computed first,
+so they could be filled in at once (parallel). Two reasons it leans parallel: (1) the whole image is available at
+once — information isn't revealed step-by-step; (2) the facts don't depend on each other. The <em>only</em>
+sequential part is <b>grammar/fluency</b> (word order, agreement) — a thin surface layer, not a logical dependency
+chain like a math proof. This is why non-autoregressive / diffusion text generation works reasonably for
+captioning and translation but struggles on step-by-step math reasoning.
+<br><br><b>Contrast:</b> text (a left-to-right chain) is sequential; an image (a grid of independent facts) is
+parallel — the deepest reason diffusion conquered images first but is still catching up on text.</div>
+
 <div class="callout"><strong>Honest caveat.</strong> The parallelism isn't free — unmasking many tokens at once
 assumes they are roughly <em>conditionally independent</em> given what's revealed. When tokens are strongly coupled,
 aggressive parallel unmasking can produce inconsistent text, so real diffusion LMs still need enough denoising steps
