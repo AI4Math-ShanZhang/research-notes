@@ -74,6 +74,10 @@ const BLOG = {
         { name:"LingBot-VA 2 — native-from-scratch video-action pretraining", link:"https://arxiv.org/abs/2607.08639", summary:"Pretrains a video-action model natively from scratch rather than adapting a language backbone." },
         { name:"LingBot-Vision — spatial-perception vision backbone", link:"https://arxiv.org/abs/2607.05247", summary:"A vision backbone specialized for spatial perception in embodied settings." },
         { name:"Qwen-RobotNav — configurable navigation VLA", link:"https://arxiv.org/abs/2606.18112", summary:"A configurable, navigation-focused VLA." },
+        { name:"WALL-WM — event-grounded world-action model", link:"https://arxiv.org/abs/2606.01955", summary:"A world-action model grounded on events that imagines the future and acts on it. (arXiv id inferred from the folder PDF — verify.)" },
+        { name:"LingBot-VA — causal autoregressive video-action world model", link:"https://arxiv.org/abs/2601.21998", summary:"A causal, autoregressive video-action world model that predicts video and action together." },
+        { name:"DreamZero — World Action Models are Zero-shot Policies", link:"https://arxiv.org/abs/2602.15922", summary:"Argues that a good world-action model already behaves as a zero-shot policy." },
+        { name:"Cosmos 3 — omnimodal world model for Physical AI", link:"https://arxiv.org/abs/2606.02800", summary:"An omnimodal world model aimed at Physical AI, spanning multiple modalities of world dynamics." },
       ],
     },
 
@@ -86,10 +90,6 @@ const BLOG = {
       ],
       papers: [
         { name:"World Models — Ha & Schmidhuber", link:"https://arxiv.org/abs/1803.10122", summary:"The foundational V-M-C agent; the MDN-RNN memory predicts future latents, letting the controller train inside the agent's own imagined 'dream'." },
-        { name:"WALL-WM — event-grounded world-action model", link:"https://arxiv.org/abs/2606.01955", summary:"A world-action model grounded on events that imagines the future and acts on it. (arXiv id inferred from the folder PDF — verify.)" },
-        { name:"LingBot-VA — causal autoregressive video-action world model", link:"https://arxiv.org/abs/2601.21998", summary:"A causal, autoregressive video-action world model that predicts video and action together." },
-        { name:"DreamZero — World Action Models are Zero-shot Policies", link:"https://arxiv.org/abs/2602.15922", summary:"Argues that a good world-action model already behaves as a zero-shot policy." },
-        { name:"Cosmos 3 — omnimodal world model for Physical AI", link:"https://arxiv.org/abs/2606.02800", summary:"An omnimodal world model aimed at Physical AI, spanning multiple modalities of world dynamics." },
       ],
     },
   ],
