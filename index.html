@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Research Notes</title>
+<style>
+  :root { --accent:#3D5A9B; --ink:#1c2530; --muted:#6b7684; --line:#e3e7ec; }
+  body { font-family: Georgia, "Times New Roman", serif; line-height:1.7;
+         max-width:720px; margin:0 auto; padding:3rem 1.5rem; color:var(--ink); background:#fff; }
+  header { border-bottom:1px solid var(--line); padding-bottom:1.2rem; margin-bottom:2rem; }
+  header h1 { margin:0 0 .3rem; font-size:1.9rem; }
+  header p { margin:0; color:var(--muted); }
+  nav a { color:var(--accent); text-decoration:none; margin-right:1.1rem; font-size:.95rem; }
+  nav a:hover { text-decoration:underline; }
+  nav { margin-top:.8rem; }
+  .post { margin:1.6rem 0; padding-bottom:1.4rem; border-bottom:1px solid var(--line); }
+  .post a.title { font-size:1.25rem; color:var(--accent); text-decoration:none; font-weight:bold; }
+  .post a.title:hover { text-decoration:underline; }
+  .post .date { color:var(--muted); font-size:.9rem; margin:.2rem 0 .5rem; }
+  .post .summary { margin:.3rem 0 .6rem; }
+  .tag { display:inline-block; font-family:-apple-system,sans-serif; font-size:.72rem;
+         background:#eef1f6; color:#4a5568; border-radius:10px; padding:2px 9px; margin-right:.35rem; }
+  footer { margin-top:3rem; color:var(--muted); font-size:.85rem; text-align:center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Research Notes</h1>
+  <p>Plain-language breakdowns of ML papers I read.</p>
+  <nav>
+    <a href="index.html">Blog</a>
+    <a href="https://arxiv.org">arXiv</a>
+    <a href="https://github.com">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ===== POST LIST: add one .post block per new article ===== -->
+  <div class="post">
+    <a class="title" href="posts/cot-vs-latent-thought.html">Chain of Thought vs Latent Thought — Key Points</a>
+    <div class="date">July 19, 2026</div>
+    <p class="summary">Both reasoning paradigms reuse the same Transformer block in a loop — they differ
+      only in what gets fed back each step. That one difference is why latent thought is good at parallel
+      reasoning and CoT is good at approximate counting.</p>
+    <span class="tag">reasoning</span>
+    <span class="tag">looped transformer</span>
+    <span class="tag">complexity</span>
+  </div>
+  <!-- ========================================================== -->
+
+</main>
+
+<footer>Built as a static site · hosted on GitHub Pages</footer>
+
+</body>
+</html>

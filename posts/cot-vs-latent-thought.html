@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CoT vs Latent Thought — Key Points</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral' });</script>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         line-height: 1.65; max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem;
+         color: #1c2530; background: #fafbfc; }
+  h1 { color: #3D5A9B; border-bottom: 3px solid #3D5A9B; padding-bottom: .4rem; }
+  h2 { color: #2c3e50; margin-top: 2.2rem; border-left: 5px solid #4A8ED4; padding-left: .6rem; }
+  h3 { color: #34495e; margin-top: 1.4rem; }
+  code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; background: #fff; }
+  th, td { border: 1px solid #d5dbe0; padding: .55rem .7rem; text-align: left; vertical-align: top; }
+  th { background: #3D5A9B; color: #fff; font-weight: 600; }
+  tr:nth-child(even) td { background: #f4f7fa; }
+  .callout { background: #eaf3fb; border-left: 5px solid #4A8ED4; padding: .8rem 1rem;
+             margin: 1rem 0; border-radius: 0 6px 6px 0; }
+  .win-loop { color: #9B72CF; font-weight: 600; }
+  .win-cot  { color: #E8900D; font-weight: 600; }
+  .meta { color: #667; font-size: .95em; }
+  .mermaid { background: #fff; border: 1px solid #e0e5ea; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  .analogy { background: #fff8ee; border: 1px solid #f0d9b5; border-radius: 8px; padding: .8rem 1rem; margin: 1rem 0; }
+</style>
+</head>
+<body>
+
+<p style="font-family:-apple-system,sans-serif;font-size:.9rem;">
+  <a href="../index.html" style="color:#3D5A9B;text-decoration:none;">&larr; Back to blog</a>
+</p>
+
+<h1>Chain of Thought vs Latent Thought — Key Points</h1>
+<p class="meta">Paper: <em>A Formal Comparison Between Chain of Thought and Latent Thought</em> —
+Kevin Xu &amp; Issei Sato, <a href="https://arxiv.org/abs/2509.25239">arXiv:2509.25239</a>.
+Companion demo: <code>cot_loop_coconut_demo.py</code>.</p>
+
+<div class="callout">
+<strong>The whole story in one line:</strong> both paradigms reuse the same Transformer block in a loop —
+they differ only in <em>what gets fed back each step</em>, and that single difference gives each one a
+different superpower. <span class="win-loop">Latent thought → parallel reasoning.</span>
+<span class="win-cot">CoT → approximate counting by sampling.</span>
+</div>
+
+<h2>1. The three settings: one difference that matters</h2>
+<p>All three run the same block repeatedly. The only thing that changes is what crosses the loop boundary.</p>
+
+<table>
+  <tr><th>Setting</th><th>What is fed back each step</th><th>Discretized?</th><th>Sequence grows?</th></tr>
+  <tr><td><b>CoT</b></td><td>1 <b>token id</b> (argmax of the last hidden vector, then re-embedded)</td><td><b>Yes</b> — argmax bottleneck</td><td>yes (+1 token)</td></tr>
+  <tr><td><b>Looped TF</b> (latent thought)</td><td>the <b>whole hidden-state matrix</b></td><td>no</td><td>no (same width, deeper)</td></tr>
+  <tr><td><b>Coconut</b></td><td>the <b>last hidden vector</b>, appended as a raw vector</td><td>no</td><td>yes (+1 position)</td></tr>
+</table>
+
+<div class="callout">
+<strong>Coconut in plain terms</strong> (Hao et al., Meta 2024): normal CoT thinks in <em>words</em>;
+Coconut lets the model think in <em>vectors</em>. It deletes the "pick a word" step — instead of decoding the
+hidden vector into a token and re-embedding it, it feeds the raw vector straight back. This keeps the full
+information (a vector can hold "60% A, 40% B" instead of collapsing to just "A"), so it can carry several
+possibilities forward at once. It is the <b>bridge</b>: continuous like the loop, but grows in length like CoT.
+</div>
+
+<div class="mermaid">
+flowchart LR
+  subgraph CoT
+    A1[hidden vec] -->|argmax| A2[one token]
+    A2 -->|re-embed| A3[next input]
+  end
+  subgraph Coconut
+    B1[hidden vec] -->|append raw vector| B2[next input]
+  end
+  subgraph LoopedTF
+    C1[full hidden matrix] -->|feed all back| C2[next input, same width]
+  end
+</div>
+
+<p><b>Why the argmax matters:</b> CoT crushes a whole continuous vector into one of a few tokens each step
+(~17 bits for a real vocabulary). That is an information <b>bottleneck</b>. The two continuous methods skip it.</p>
+
+<h2>2. Claim A — Latent thought enables parallel reasoning</h2>
+<div class="analogy">
+<strong>Tournament analogy.</strong> 8 players, find the champion.
+<ul>
+  <li><b>CoT</b> must narrate every match one at a time — "A beats B", "C beats D"… → <b>7 statements</b> (the <em>number of matches</em> = the <em>size</em>).</li>
+  <li><b>Looped TF</b> plays a whole round at once: 4 matches, then 2, then 1 → <b>3 rounds</b> (the <em>depth</em> = log₂ 8).</li>
+</ul>
+</div>
+<p>The loop carries its <b>full state</b>, so it can finish a whole layer of work in one step. CoT can only utter
+<b>one token per step</b>, so it is stuck doing items one by one. Result: for wide, structured problems (adding
+many numbers, evaluating a big formula, graph connectivity), <span class="win-loop">the loop needs ≈ log(n) rounds
+while CoT needs ≈ n steps</span>. In the paper's terms, the loop reaches TC<sup>k</sup>; CoT with the same step
+budget lands one level weaker (TC<sup>k−1</sup>).</p>
+
+<h3>What log(n) buys you: scalability</h3>
+<table>
+  <tr><th>Problem size n</th><th>Sequential steps (n)</th><th>Parallel rounds (log₂ n)</th></tr>
+  <tr><td>8</td><td>8</td><td>3</td></tr>
+  <tr><td>1,000</td><td>1,000</td><td>10</td></tr>
+  <tr><td>1,000,000</td><td>1,000,000</td><td>20</td></tr>
+  <tr><td>1,000,000,000</td><td>1,000,000,000</td><td>30</td></tr>
+</table>
+<p>A <b>billion</b>-item problem finishes in <b>30 rounds</b>. Doubling the problem adds just <b>one</b> round.
+On parallel hardware, rounds ≈ actual wait time — so huge problems still finish fast.</p>
+
+<h2>3. Claim B — CoT enables approximate counting</h2>
+<div class="analogy">
+<strong>Marbles analogy.</strong> A jar with a million marbles — how many are red?
+Counting exactly means dumping all million out (hopeless). Instead grab a <b>random handful of 100</b>,
+see 30 are red → estimate ~30% → ~300,000. Fast and close — <em>but only if the handful is truly random.</em>
+</div>
+<p>Where do the dice come from? When CoT picks its next word it <b>samples</b> from a probability distribution
+— a weighted dice roll. So CoT naturally does random sampling and can run "grab a random sample and estimate"
+methods (Monte Carlo / approximate counting). <b>Latent thought is deterministic</b> — same input always gives the
+same output, no dice — so it cannot do this trick. <span class="win-cot">Both Coconut and looped TF are strictly
+weaker than CoT for approximate counting/sampling.</span></p>
+
+<h3>What randomness buys you: feasibility</h3>
+<p>Some counts are genuinely impossible to compute exactly — 2<sup>100</sup> possibilities would take longer than
+the age of the universe. Random sampling gives an answer within a few percent <b>in a fraction of a second</b>, and
+you can dial accuracy up with more samples. The benefit isn't "a bit faster" — it's <b>"possible at all."</b>
+For a whole class of problems, sampling is the <em>only</em> known way to get an answer in reasonable time.</p>
+
+<h2>4. The takeaway</h2>
+<table>
+  <tr><th>Paradigm</th><th>Superpower</th><th>Benefit</th><th>Good at</th></tr>
+  <tr><td class="win-loop">Latent thought (loop)</td><td>width — holds everything at once, works in parallel</td><td>scalability (log n rounds)</td><td>deep structured computation: formulas, graphs, arithmetic</td></tr>
+  <tr><td class="win-cot">CoT</td><td>randomness — every token is a dice roll</td><td>feasibility (answers the un-answerable)</td><td>estimating huge counts / sampling</td></tr>
+</table>
+<div class="callout">
+Neither dominates. One is a <b>team working in parallel</b>; the other is a <b>pollster who takes random samples</b>.
+Reach for <span class="win-loop">looped/latent</span> when the bottleneck is deep parallel structure; reach for
+<span class="win-cot">CoT</span> when the problem is hard to solve exactly but approximable by sampling.
+</div>
+
+</body>
+</html>
