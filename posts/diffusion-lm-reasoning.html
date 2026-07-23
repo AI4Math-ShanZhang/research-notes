@@ -56,6 +56,12 @@ a refining sequence — i.e. a loop.</p>
 <p><b>MDM ≡ PLT</b> (finite precision, log width). A diffusion LM and a padded looped transformer are the same
 object: each <b>denoising step = one loop iteration</b>, and the still-masked positions = the padding/scratchpad.
 This is the bridge that lets every looped-transformer result transfer to diffusion, and vice-versa.</p>
+
+<div class="callout"><strong>Confused how a token-writing MDM can equal a latent-passing PLT?</strong>
+The catch is <b>finite precision</b>: a “latent vector” only ever holds ~log N bits, which is just a few tokens’
+worth — so committing to tokens loses nothing. And CoT’s weakness was never the argmax; it was doing it
+<em>one position at a time</em>. Walk through it with sliders:
+<a href="finite_precision_demo.html"><b>Bits, Precision &amp; Tokens — a hands-on demo →</b></a></div>
 </section>
 
 <!-- ============================================================ -->
