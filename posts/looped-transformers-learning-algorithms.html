@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Looped Transformers Are Better at Learning Learning Algorithms — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take{ background:#fff8ee; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take h4{ margin:.1rem 0 .4rem; color:#b56b00; }
+  .mono{ font-family:ui-monospace,Menlo,Consolas,monospace; }
+  pre.box{ background:#f4f7fa;border:1px solid #e0e5ea;border-radius:6px;padding:.7rem 1rem;font-size:.88rem;overflow-x:auto; }
+  figure{ margin:1.2rem 0; text-align:center; } figure img{ max-width:100%; border:1px solid #e3e8ef; border-radius:8px; }
+  figcaption{ font-size:.85rem; color:#5a6b7b; margin-top:.4rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Looped Transformers Are Better at Learning Learning Algorithms</h1>
+<p class="paper-meta">Paper: <em>Looped Transformers are Better at Learning Learning Algorithms</em> —
+Yang, Lee, Nowak &amp; Papailiopoulos, ICLR 2024, <a href="https://arxiv.org/abs/2311.12424">arXiv:2311.12424</a>.
+The <b>empirical</b> companion to the expressivity posts in this category: not “what can a loop
+<em>express</em>,” but “can we actually <em>train</em> one, and does it pay off.”</p>
+
+<!-- ===== TL;DR ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ In one line</h2>
+<p>A <b>1-layer</b> transformer, run in a loop with the <b>prompt re-added every iteration</b> and trained with a
+<b>sliding loss window</b>, learns in-context learning (linear/sparse regression, decision trees, small nets)
+about as well as a <b>12-layer</b> transformer — at <b>~1/12 of the parameters (0.79M vs 9.48M)</b> — and beats it
+on the harder, structured tasks. Each loop iteration behaves like one step of an <b>iterative algorithm</b>
+(gradient descent), so it trades parameters for iterations.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 The setup &amp; the core bet</h2>
+
+<h3>The task: in-context learning of a data-fitting problem</h3>
+<p>Feed the model input–output pairs and one query; it must predict the query’s label <em>without any weight
+updates</em>:</p>
+<pre class="box">prompt  P = ( x₁, f(x₁),  x₂, f(x₂),  … ,  x_k, f(x_k),  x_test )
+goal       predict  f(x_test)          measured by squared error</pre>
+<p>A fresh function <em>f</em> is drawn per prompt (e.g. random linear <code>f(x)=wᵀx</code>), so the model can’t
+memorize <em>f</em> — it must <b>learn a learning algorithm</b> that reads the pairs and fits on the fly.</p>
+
+<h3>Why a loop: matrix inverse (hard) vs gradient descent (easy, repeated)</h3>
+<p>A standard transformer must solve this in <b>one forward pass</b> — essentially approximating the closed-form
+least-squares answer <code>w = (XᵀX)⁻¹Xᵀy</code>. The <b>inverse</b> is the expensive part: it’s an
+elimination procedure with global coupling, so representing it needs <b>many layers/heads</b> (that’s why the
+standard model wants to be deep). Attention naturally does <b>matrix multiplication</b> (weighted sums), but not
+inversion.</p>
+<p>Gradient descent reaches the same <code>w</code> using <b>only matrix multiplies, applied repeatedly</b>:</p>
+<pre class="box">w_{t+1} = w_t − η · Xᵀ(X w_t − y)     ← one cheap step, over and over</pre>
+<div class="callout"><b>Same family as Newton–Schulz.</b> Replacing a one-shot expensive linear-algebra op
+(inverse, SVD) with <em>iterated matrix multiplication</em> is exactly the Newton–Schulz trick (and what the
+Muon optimizer uses to avoid an SVD). Gradient descent is the first-order member; Newton is the second-order one.
+A <b>loop is the natural hardware for “repeat a cheap matmul”</b> — so 1 layer looped can stand in for 12.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🏗 Architecture &amp; training</h2>
+
+<h3>Input injection — the whole ballgame for stability</h3>
+<table>
+  <tr><th>Variant</th><th>Recurrence</th><th>Inference behaviour</th></tr>
+  <tr><td>Weight-tying</td><td><code>Y_{t+1} = M(Y_t)</code></td><td>prompt’s influence <b>fades</b> → drifts to a
+      random fixed point → <b>diverges</b> past trained iterations</td></tr>
+  <tr><td><b>Input injection</b> (default)</td><td><code>Y_{t+1} = M(Y_t + P)</code></td><td>prompt re-added
+      <em>every</em> step → <b>stable fixed point</b> that holds far beyond training</td></tr>
+</table>
+
+<div class="mermaid">
+flowchart LR
+  P[Prompt P] --> ADD1((＋))
+  Y0[Y₀ = 0] --> ADD1
+  ADD1 --> M1[1-layer block M · θ frozen]
+  M1 --> ADD2((＋))
+  P -. re-injected .-> ADD2
+  ADD2 --> M2[same block M]
+  M2 --> D[… loop t times …]
+  D --> OUT[ŷ_test]
+</div>
+
+<h3>The training objective (Eq. 1), in words</h3>
+<pre class="box">tune θ to minimize, averaged over
+   • random prompts P            → learn the algorithm, not one function
+   • prefix lengths i = 0 … k     → predict well at every context size
+   • loop iterations t = b−T … b  → reach a good answer AND hold it (stable fixed point)
+the squared error between ŷ and the true label f(x_{i+1}).</pre>
+<ul>
+  <li><b>b</b> = how deep you unroll (effective depth). Too small → diverges after training; too large → slow.</li>
+  <li><b>T</b> = loss window: only the last T iterations are scored (truncated back-prop → saves memory).</li>
+  <li>Scoring a <em>window</em> (not just the final step) is what forces a <b>convergent</b> fixed point. Linear
+  regression settles on <b>b = 20, T = 15</b>.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Key results</h2>
+<div class="take"><h4>1 · Matches 12 layers with 1/12 the parameters</h4>
+On linear regression it tracks the 12-layer model and nearly the optimal least-squares solver — 0.79M vs 9.48M.</div>
+<div class="take"><h4>2 · Needs MORE iterations than the standard model has layers</h4>
+A 1-layer loop needs <b>~20 iterations</b> to match an 8-layer transformer → its effective depth exceeds the
+standard model’s; each iteration learns a <em>different</em> representation. (The empirical face of “effective
+depth = layers × iterations” from the <a href="cot-vs-latent-thought.html">CoT-vs-Latent</a> post.)</div>
+<div class="take"><h4>3 · Learns from fewer distinct prompts</h4>
+Fewer parameters → less to fit → good error after seeing fewer distinct functions. (Sample-efficiency, <em>not</em>
+data-repetition — looping is compute-depth, not extra epochs.)</div>
+<div class="take"><h4>4 · Probing shows genuine iterative refinement</h4>
+The standard model decodes the target quantities best around layer ~10 then moves on; the loop <b>steadily
+refines</b> them every iteration — evidence of gradient-descent-style refinement, not a one-shot leap.</div>
+<div class="take"><h4>5 · Wins bigger on structured tasks</h4>
+Comparable-or-better across sparse linear, decision trees, 2-layer nets and OpenML tabular data — clearest wins on
+<b>sparse linear</b> and <b>decision trees</b>.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🧠 Discussion — the ideas that made it click</h2>
+
+<div class="callout"><b>Two different “weights.”</b> <span class="mono">θ</span> = the transformer’s parameters,
+learned in training, <b>frozen at inference</b>. <span class="mono">w</span> = the regression answer, inferred
+<em>fresh from each prompt</em>, living in the activations. <b>The loop refines <span class="mono">w</span>, not
+<span class="mono">θ</span>.</b> Looping is not re-training — it’s the frozen model running its algorithm more
+steps. θ updates <b>once per training batch</b> (after the loop, via the loss); at inference θ never changes.</div>
+
+<div class="callout"><b>Two levels of learning.</b> <em>Outer</em> (training): gradient descent on θ — learns
+<em>how</em> to learn. <em>Inner</em> (in-context): the frozen model infers the task’s answer from the prompt
+examples — executes that learned algorithm. This is meta-learning: training learns a learner; ICL runs it, and the
+<b>loop iterations are the visible steps of the in-context learning.</b></div>
+
+<div class="callout"><b>When is the label used?</b> The <em>in-context</em> labels <code>y₁…y_k</code> are inside the
+prompt → inputs the loop uses every step. The <em>query</em> label <code>f(x_{i+1})</code> is used <b>only in the
+training loss</b>, to produce the one θ update — the model never sees it as input, and at inference it doesn’t
+exist.</div>
+
+<div class="callout"><b>It’s a fixed-point iteration (a deterministic “Markov chain”).</b>
+<code>Y_{t+1}=M(Y_t+P)</code> depends only on the current state → memoryless, fixed rule, converges to a fixed
+point <code>Y*=M(Y*+P)</code>. Precisely: a <b>deterministic dynamical system / Deep-Equilibrium model</b> — which
+is also what gradient descent is. The <em>stochastic</em> cousin (random transitions) is diffusion/MDM from the
+<a href="diffusion-lm-reasoning.html">other post</a>.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>⚠️ The limitation: it emulates the algorithm <em>for its training distribution</em></h2>
+<p>The loop reaches a stable fixed point even beyond its trained iterations — but only for the input distribution
+it trained on. It has an <b>error floor</b> and does <b>not</b> learn the truly universal algorithm that a real
+solver (least squares) applies to <em>any</em> inputs. This limitation hits the <b>deep model too</b> — both are
+distribution-specific; they just fail differently.</p>
+
+<h3>A distinctive simplicity (conservatism) inductive bias</h3>
+<p>Fewer parameters give the loop a bias toward <b>simpler, smaller solutions</b> — like mild regularization. The
+same bias helps on some shifts and hurts on others, depending on what the shift asks for:</p>
+
+<figure>
+  <img src="conservatism_extrapolation_demo.png" alt="Conservatism helps on noise/ill-conditioning, hurts on scaling">
+  <figcaption><b>Left — conservatism HELPS.</b> Ridge (simplicity) vs OLS (flexible): under <b>noisy labels</b>
+  and <b>ill-conditioning</b>, shrinking toward small solutions avoids chasing noise / dividing by near-zero →
+  lower error. On <b>clean</b> data it has nothing to protect against, so its bias just adds error.
+  <b>Right — conservatism HURTS.</b> Fit <code>f(x)=2x</code> on |x|≤3, test to |x|=9: the shrunk “conservative”
+  slope undershoots, and the miss <b>grows with input scale</b> (1.2 → 2.4 → 3.7). Reproduce with
+  <span class="mono">conservatism_extrapolation_demo.py</span>.</figcaption>
+</figure>
+
+<div class="analogy"><b>Why the same bias flips.</b> Simplicity bias = conservatism = “prefer small, smooth
+outputs.” It <b>helps</b> when the shift punishes overfitting (noise, ill-conditioning — you <em>should</em> hold
+back) and <b>hurts</b> when the shift demands extrapolation to larger inputs/outputs (scaling — you need to
+<em>stretch</em>, and a conservative model refuses to, so it undershoots).</div>
+
+<h3>Quick glossary</h3>
+<ul>
+  <li><b>Noise:</b> labels have random error — data doesn’t sit exactly on the true line. Fitting exactly = chasing
+  the jitter (overfitting).</li>
+  <li><b>Ill-conditioning:</b> features are nearly redundant (e.g. x₂≈x₁), so the data has almost <em>no spread</em>
+  in the “difference” direction. <code>XᵀX</code> has a near-zero value there, and the inverse divides by it →
+  weights blow up. Ridge adds a little before dividing → stabilizes.</li>
+</ul>
+
+<div class="callout"><b>Why the conservative (shrinkage) bias fixes both:</b>
+<ul style="margin:.3rem 0 0;">
+  <li><b>Noise:</b> shrinking the weights toward small values keeps the model from chasing random jitter →
+  less overfit.</li>
+  <li><b>Ill-conditioning:</b> the ridge penalty adds a small amount to that near-zero value before inverting,
+  so you no longer divide by ~0 → the wild swings are damped, the answer stabilizes.</li>
+</ul>
+In both cases the fix is “don’t take the data too literally / don’t produce extreme weights” — exactly what a
+simplicity bias does. That’s why it wins those two columns but loses on scaling, where you <em>need</em> large
+outputs.</div>
+</section>
+
+</body>
+</html>

@@ -35,6 +35,14 @@ const BLOG = {
           tags:    ["diffusion LM", "complexity", "AC/NC", "PLT"],
           summary: "A diffusion LM is a looped transformer with a token scratchpad (MDM ≡ PLT), and its denoising-step count is a depth dial climbing AC⁰ → regular → AC^d → NC. Includes notation (AC/NC/AC^d), both figures, and all five takeaways.",
         },
+        {
+          title:   "Looped Transformers Are Better at Learning Learning Algorithms",
+          file:    "posts/looped-transformers-learning-algorithms.html",
+          date:    "2026-07-23",
+          paper:   "Yang, Lee, Nowak & Papailiopoulos · ICLR 2024 · arXiv:2311.12424",
+          tags:    ["looped TF", "in-context learning", "gradient descent", "empirical"],
+          summary: "The empirical companion: a 1-layer transformer looped ~20× matches a 12-layer one at in-context learning (1/12 the params) by emulating gradient descent — one cheap matmul step, repeated (same family as Newton–Schulz). Covers input injection, the b/T training window, θ-vs-w, in-context learning as meta-learning, the fixed-point / deterministic-Markov view, and the simplicity bias (helps on noise/ill-conditioning, hurts on scaling) with a runnable demo.",
+        },
       ],
       papers: [
         {
@@ -51,6 +59,11 @@ const BLOG = {
           name:    "Coconut — Training LLMs to Reason in a Continuous Latent Space",
           link:    "https://arxiv.org/abs/2412.06769",
           summary: "Lets a model reason in continuous 'thought' vectors instead of words by feeding the last hidden state straight back as the next input embedding.",
+        },
+        {
+          name:    "Looped Transformers are Better at Learning Learning Algorithms",
+          link:    "https://arxiv.org/abs/2311.12424",
+          summary: "Empirically trains a 1-layer looped transformer to emulate iterative learning algorithms (gradient descent) for in-context learning, matching a 12-layer model at 1/12 the parameters via input injection and a truncated loss window.",
         },
       ],
     },
