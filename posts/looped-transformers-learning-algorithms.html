@@ -66,6 +66,88 @@ A <b>loop is the natural hardware for “repeat a cheap matmul”</b> — so 1 l
 
 <!-- ============================================================ -->
 <section class="section">
+<h2>🔧 Deep dive: how Newton–Schulz actually works</h2>
+<p>The callout above is the slogan; here is the machinery, because it turns out to be the <b>cleanest possible
+model</b> of “looped block replaces one-shot linear algebra” — clean enough to reason about with a theorem instead
+of a probe. We use the version the <b>Muon optimizer</b> runs on each gradient matrix.</p>
+
+<h3>The op being replaced is orthogonalization, not a full SVD</h3>
+<p>Muon takes a gradient/momentum matrix <code>G</code> and wants the <b>nearest semi-orthogonal matrix</b> to it.
+If you did a real SVD, <code>G = U Σ Vᵀ</code>, that nearest orthogonal matrix is <code>Q = U Vᵀ</code> — same
+singular vectors, every singular value replaced by <b>1</b>. Call it the <b>polar factor</b>. Computing
+<code>U, Σ, V</code> is the expensive one-shot op (~n³, GPU-unfriendly, awkward gradients). Newton–Schulz produces
+<code>Q</code> using <b>only matrix multiplies</b>, and never forms <code>U</code>, <code>Σ</code>, or
+<code>V</code>.</p>
+<div class="callout"><b>“Newton–Schulz for the SVD” is really “the SVD with singular values flattened to 1.”</b>
+It does not compute or approximate any individual singular <em>vector</em>. It computes the orthogonalization
+<code>U Vᵀ</code>.</div>
+
+<h3>The one fact that makes it work</h3>
+<p>Take an <b>odd</b> polynomial — the classic choice is <code>p(x) = 1.5x − 0.5x³</code> — and apply it to a matrix
+in this exact shape:</p>
+<pre class="box">X_next = 1.5·X − 0.5·X Xᵀ X</pre>
+<p>If <code>X = U Σ Vᵀ</code>, this expression equals <code>U · p(Σ) · Vᵀ</code>. Two lines show why:
+<code>X Xᵀ X = (UΣVᵀ)(VΣUᵀ)(UΣVᵀ) = U Σ³ Vᵀ</code>, so
+<code>1.5·UΣVᵀ − 0.5·UΣ³Vᵀ = U(1.5Σ − 0.5Σ³)Vᵀ</code>. The <b>U and V pass straight through, untouched</b>; the
+polynomial acts only on the singular values, one at a time, as the scalar map <code>σ → 1.5σ − 0.5σ³</code>.
+Iterating the matrix recurrence is just iterating that scalar map on every singular value <b>in parallel</b>, with
+the singular vectors held fixed.</p>
+
+<div class="take"><h4>It moves the singular VALUES, not the vectors</h4>
+<b>U and V are exact — never approximated.</b> Every iteration keeps the same singular vectors. The only
+approximation is in <b>Σ</b>: the values don’t land exactly on 1 (Muon stops after 5 steps, so they sit in a band
+near 1). NS <em>kills the scale information and preserves the rotational structure</em> — exactly what an optimizer
+wants from a noisy, ill-conditioned gradient.</div>
+
+<h3>Why every singular value lands on 1</h3>
+<p>Look at the scalar map <code>f(σ) = 1.5σ − 0.5σ³</code> on the interval <code>(0, 1]</code>:</p>
+<ul>
+  <li><b>Fixed points:</b> <code>f(σ) = σ</code> gives <code>σ(1 − σ²) = 0</code> → <code>σ = 0</code> or
+  <code>σ = 1</code>.</li>
+  <li><code>f(1) = 1</code> (a value already at 1 stays), and <code>f′(1) = 1.5(1 − σ²) = 0</code> at
+  <code>σ = 1</code> → <b>quadratic convergence</b> into 1.</li>
+  <li>For any <code>σ</code> in <code>(0, 1)</code>, <code>f</code> pushes it <b>upward</b> toward 1.</li>
+</ul>
+<p>So you first scale <code>G</code> so all singular values are ≤ 1 (cheaply, divide by the Frobenius norm as an
+upper bound on the spectral norm), then iterate. Every value climbs to 1; every vector is preserved. Result ≈
+<code>U·I·Vᵀ = U Vᵀ</code> in a handful of matmuls.</p>
+
+<h3>Watch one singular value march to 1</h3>
+<pre class="box">start σ = 0.2,  iterate f(σ) = 1.5σ − 0.5σ³
+
+x0 = 0.200
+x1 = 0.296
+x2 = 0.431
+x3 = 0.607
+x4 = 0.798
+x5 = 0.943
+x6 = 0.995
+x7 = 0.99995        ← a value already at 1 would have stayed at 1 the whole time</pre>
+<p>The small value takes ~7 steps to lift — the classic polynomial is slow near zero. That is exactly the setup for
+Muon’s twist.</p>
+
+<h3>What Muon changes: retuned coefficients</h3>
+<p>Muon does <b>not</b> use <code>1.5x − 0.5x³</code>. Keller Jordan retuned the coefficients of a <b>quintic</b>
+<code>p(x) = a·x + b·x³ + c·x⁵</code> (roughly <code>a = 3.4445, b = −4.7750, c = 2.0315</code>) so it lifts small
+singular values <b>aggressively</b> and drives the whole spectrum into a band near 1 in about <b>5 iterations</b>.
+It deliberately overshoots — it does not converge exactly to 1 — because an optimizer step only needs
+<em>approximate</em> orthogonalization, so speed is the right trade. Fixed count (5), same coefficients every step,
+all matmuls: perfectly GPU-friendly.</p>
+
+<div class="analogy"><b>The loop-transformer parallel, made precise.</b>
+Muon’s classic form uses the <b>same polynomial every step = fully weight-tied loop</b> — Spinner’s
+“identical operation each iteration” stance, and a fixed iteration count <code>T = 5</code> just like picking
+<code>T</code> at inference. But the frontier of NS (per-step-tuned coefficients, e.g. the <em>Polar Express</em>
+line) uses a <b>different polynomial at each iteration</b> to converge in fewer steps — because early steps have a
+different job (lift the tiny singular values) than late steps (polish everything to 1). That is precisely the
+<b>per-step adapter / boosting framing</b>: iteration <code>t</code> gets its own coefficients because it fits the
+residual of steps <code>1…t−1</code> — and here you can <em>derive</em> the optimal per-step polynomial by
+minimizing worst-case distance-to-1 over the remaining spectrum. A theorem where the loop-transformer story usually
+only has a probe.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
 <h2>🏗 Architecture &amp; training</h2>
 
 <h3>Input injection — the whole ballgame for stability</h3>
