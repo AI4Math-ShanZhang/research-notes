@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dreamer — Dream to Control (Latent Imagination) — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .mem{ font-weight:600; color:#b56b00; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Dreamer — Dream to Control</h1>
+<p class="paper-meta">Paper: <em>Dream to Control: Learning Behaviors by Latent Imagination</em> —
+Hafner, Lillicrap, Ba &amp; Norouzi, ICLR 2020,
+<a href="https://arxiv.org/abs/1912.01603">arXiv:1912.01603</a>.
+This note is the Q&amp;A from working through the method, so it leans on the parts that confused me:
+the <code>p</code>/<code>q</code> split, the actor–critic training, and how the value target relates to GAE.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p>Dreamer learns a <b>world model</b> (a compact "dream simulator") from past images, then trains the
+agent <b>entirely inside the dream</b> — it never needs the real environment to try out an action. The trick
+that makes this pay off: because the dream is a neural network, you can <b>backpropagate gradients through
+imagined time</b> to improve the policy directly, instead of using slow trial-and-error.</p>
+
+<table>
+  <tr><th>Component</th><th>Symbol</th><th>What it does</th></tr>
+  <tr><td>Representation model (<b>p</b>)</td><td><code>p(s_t | s_{t-1}, a_{t-1}, o_t)</code></td>
+      <td>Encode the <em>real image</em> <code>o_t</code> into a compact latent state <code>s_t</code>.</td></tr>
+  <tr><td>Transition model (<b>q</b>)</td><td><code>q(s_t | s_{t-1}, a_{t-1})</code></td>
+      <td>Predict the next latent <em>without</em> seeing the image — this is what powers imagination.</td></tr>
+  <tr><td>Reward model (<b>q</b>)</td><td><code>q(r_t | s_t)</code></td>
+      <td>Predict the immediate reward from a latent state.</td></tr>
+  <tr><td class="mem">Action model (actor)</td><td><code>q_φ(a_t | s_t)</code></td>
+      <td>The policy: pick actions that lead to good futures.</td></tr>
+  <tr><td class="mem">Value model (critic)</td><td><code>v_ψ(s_t)</code></td>
+      <td>Predict the <em>total future reward</em> from a state.</td></tr>
+</table>
+
+<div class="mermaid">
+flowchart LR
+  subgraph A["(a) learn world model — REAL data"]
+    o["images o_t"] --> P["p: encode → s_t"]
+    P --> R["reward + image heads"]
+  end
+  subgraph B["(b) learn behavior — IMAGINATION"]
+    s0["real s_t"] --> dream["dream H steps with q"]
+    dream --> critic["train value v_ψ"]
+    dream --> actor["train action q_φ"]
+  end
+  subgraph C["(c) act — REAL world"]
+    img["o_t"] --> enc["encode → s_t"] --> pol["action model → a_t"] --> env["environment"]
+  end
+  A --> B --> C --> A
+</div>
+
+<p><b>Headline result:</b> on 20 visual control tasks (DeepMind Control Suite, from pixels), Dreamer beats
+prior model-based and model-free agents on data-efficiency, compute, and final score — using one set of
+hyper-parameters for all tasks.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes — the Q&amp;A that made it click</h2>
+
+<!-- ---- p vs q ---- -->
+<div class="qa">
+<div class="q">Q1. What do <code>p</code> and <code>q</code> actually mean?</div>
+<p>Both are just distributions produced by neural nets. The letters mark a <b>role</b>, and the whole role is
+decided by one question: <em>is the image available or not?</em></p>
+<ul>
+  <li><b><code>p</code> = needs a real observation.</b> The representation model looks at the actual image
+  <code>o_t</code> to infer the state. Used when <b>acting</b> in the real world (perception with evidence).</li>
+  <li><b><code>q</code> = does NOT need an observation.</b> The transition model predicts the next state from
+  only the previous state and action — no <code>o_t</code> inside it. Used when <b>dreaming</b> the future,
+  where no image exists yet.</li>
+</ul>
+<pre class="calc">Real world:  o_5 (image) ─► p ─► s_5            (perception, evidence-based)
+Dreaming:    s_5 ─(a_5)─► q ─► s_6 ─► q ─► s_7   (no images at all)</pre>
+<p>Training pushes <code>q</code> (image-free) to agree with <code>p</code> (image-informed) — that is the KL
+term in the world-model loss. Once they agree, the agent dreams forward without rendering a single pixel, which
+is why it can run thousands of imagined trajectories cheaply.</p>
+</div>
+
+<div class="analogy"><strong>Kalman-filter analogy.</strong> Dreamer's skeleton is an old hidden-state model
+(Kalman filter / HMM): a hidden state you can't see, plus noisy observations that hint at it. Dreamer differs on
+three counts: the transition is a <em>neural net</em> (non-linear, real-valued state — a "non-linear Kalman
+filter"), it is <em>conditioned on actions</em> (so it reacts to decisions), and it <em>predicts rewards</em> (so
+it knows good from bad). Those last two are exactly what turn a passive observer into something you can plan with.</div>
+
+<!-- ---- actor critic training ---- -->
+<div class="qa">
+<div class="q">Q2. How are the value and action models trained?</div>
+<p>It's actor–critic, entirely in imagination. Start from a <b>real</b> latent <code>s_0</code> (from replay),
+dream <code>H</code> steps forward, then run two opposite updates.</p>
+<p>Running example (horizon <code>H=3</code>, discount γ=1, dreamed rewards
+<code>r_1=r_2=r_3=1</code>, current critic guesses <code>v(s_1)=10, v(s_2)=8, v(s_3)=6</code>):</p>
+
+<h3>Value estimation — build the target <code>V_λ</code> (eqs 4–6)</h3>
+<pre class="calc">Eq 4  V_R   = r_1+r_2+r_3 = 3            (sum rewards only — short-sighted, ignores the future)
+
+Eq 5  k-step returns (sum k real rewards, then bootstrap with the critic):
+      V_N^1 = r_1 + v(s_1)             = 1 + 10       = 11
+      V_N^2 = r_1 + r_2 + v(s_2)       = 1 + 1 + 8    = 10
+      V_N^3 = r_1 + r_2 + r_3 + v(s_3) = 1 + 1 + 1 + 6 = 9
+
+Eq 6  V_λ = λ-weighted blend of ALL the k-step returns  (λ=0.5):
+      V_λ = 0.5·11 + 0.25·10 + 0.25·9 = 10.25   ← the training target</pre>
+<p>Small <code>k</code> trusts the critic (low variance, biased); large <code>k</code> uses more real dreamed
+rewards (less bias, more variance). <code>V_λ</code> blends them — the classic TD(λ) trade-off.</p>
+
+<h3>Learning objective (eqs 7–8) — two opposite moves</h3>
+<ul>
+  <li><b>Critic (eq 8): <em>match</em> the target.</b> Regress <code>v_ψ(s_0)</code> toward <code>10.25</code>,
+  with the target held fixed ("stop gradient"). Not circular, because the target is built from real predicted
+  rewards + the value at <em>later</em> states, so it is a bit more grounded than the raw guess.</li>
+  <li><b>Actor (eq 7): <em>maximize</em> the target.</b> Raise the sum of <code>V_λ</code> along the rollout.
+  The special Dreamer move is <em>how</em>: <code>V_λ</code> is a differentiable function of the policy weights
+  <code>φ</code> (actions → states → rewards/values, every arrow a neural net), so it backprops the value
+  <b>straight through the imagined trajectory</b> — an exact analytic gradient, no REINFORCE.</li>
+</ul>
+<p>The requirement for that gradient is a differentiable action sample — the reparameterization trick (eq 3):
+<code>a = tanh(μ_φ(s) + σ_φ(s)·ε)</code>, ε ~ Normal(0,1).</p>
+
+<div class="mermaid">
+flowchart TB
+  phi["action weights φ"] --> acts["actions a_0,a_1,a_2"]
+  acts --> states["states s_1,s_2,s_3 (transition, frozen)"]
+  states --> rv["rewards + values"]
+  rv --> Vl["V_λ = 10.25"]
+  Vl -. "∂V_λ/∂φ backprop through the dream" .-> phi
+</div>
+</div>
+
+<!-- ---- GAE vs value ---- -->
+<div class="qa">
+<div class="q">Q3. Isn't eq 6 the same as GAE?</div>
+<p><b>Same weighting machinery, different final object.</b> Eq 5 is a single k-step return; eq 6 (<code>V_λ</code>,
+the λ-return) is the λ-weighted blend of all of them — <em>that</em> is the GAE-family object, not eq 5. The one
+difference from GAE is a baseline subtraction:</p>
+<pre class="calc">value  V_λ         = 10.25              (eq 6 — an absolute "how good is here")
+GAE    advantage   = V_λ − v(s_0)
+                   = 10.25 − 9 = 1.25   (relative — "how much better than expected")</pre>
+<table>
+  <tr><th></th><th>Eq 6 <code>V_λ</code></th><th>GAE</th></tr>
+  <tr><td>Type</td><td>value</td><td>advantage = value − baseline</td></tr>
+  <tr><td>Needed for</td><td>backprop-through-dynamics (Dreamer)</td><td>policy gradients / REINFORCE</td></tr>
+</table>
+<p>Dreamer keeps the raw <b>value</b> because it backprops through the dynamics; it never needs the advantage's
+baseline-subtraction variance trick, which only exists to tame policy-gradient noise.</p>
+</div>
+
+<!-- ---- world model objective ---- -->
+<div class="qa">
+<div class="q">Q4. Where does eq 10 fit — is that the actor/critic training?</div>
+<p>No. Dreamer has <b>two separate objectives</b>, run back-to-back each update step, linked by the latent states:</p>
+<table>
+  <tr><th>Objective</th><th>Trains</th><th>Data</th><th>Eqs</th></tr>
+  <tr><td>World model</td><td>encoder, transition, reward, image decoder (<code>θ</code>)</td><td><b>real</b> replay</td><td>10</td></tr>
+  <tr><td>Behavior</td><td>action <code>φ</code>, value <code>ψ</code></td><td><b>imagined</b> rollouts</td><td>7, 8</td></tr>
+</table>
+<p>Eq 10 builds the <em>simulator</em>; eqs 7–8 train the agent <em>inside</em> it (world model frozen during
+behavior learning). Eq 10 has three terms — image reconstruction <code>ln q(o_t|s_t)</code>, reward prediction
+<code>ln q(r_t|s_t)</code>, and the KL term <code>−β·KL(p‖q)</code> that glues the image-free transition to the
+image-informed representation (this is what enables imagination).</p>
+<div class="analogy"><strong>Flight-simulator analogy.</strong> Eq 10 = build &amp; improve the flight simulator
+(from real flights). Eqs 7–8 = train the pilot inside the simulator (from dreams). Acting = fly the real plane,
+record it, feed it back to improve the simulator. Loop forever.</div>
+</div>
+
+<!-- ---- reward vs value ---- -->
+<div class="qa">
+<div class="q">Q5. Is the reward model the same as the critic? And what's its label?</div>
+<p><b>Different networks.</b> The reward model predicts the immediate reward at one step; the critic predicts the
+whole future sum. But they connect: the reward model's outputs are the <em>ingredients</em> that value estimation
+sums into the critic's target.</p>
+<pre class="calc">reward model → r_1,r_2,r_3  ──►  V_λ target (eq 6) = 10.25  ──►  trains critic (eq 8)</pre>
+<p><b>The reward model's label is the <em>real</em> reward from the environment</b>, stored in the replay buffer
+when the agent acted — plain supervised regression, <code>make q(r_t|s_t) match the true r_t</code>. That's the
+one ground-truth signal everything is built on. The critic, by contrast, has no real teacher for "total future
+reward," so it <em>bootstraps</em> — its target <code>V_λ</code> is self-generated from rewards + its own guesses.</p>
+</div>
+
+<!-- ---- deployment ---- -->
+<div class="qa">
+<div class="q">Q6. After training, is value estimation still used?</div>
+<p><b>No — it's training-only scaffolding.</b> At deployment, only the <b>action model</b> runs: encode image →
+latent → action. No imagination, no <code>V_λ</code>, and not even the value model.</p>
+<pre class="calc">deployment loop:   o_t ─► encode ─► s_t ─► action model ─► a_t ─► env</pre>
+<table>
+  <tr><th>Component</th><th>Training</th><th>Deployment</th></tr>
+  <tr><td>Value estimation <code>V_λ</code></td><td>✅ target-builder</td><td>❌ gone</td></tr>
+  <tr><td>Value model <code>v_ψ</code> (critic)</td><td>✅</td><td>❌</td></tr>
+  <tr><td>Action model <code>q_φ</code> (policy)</td><td>✅</td><td>✅ the only thing that runs</td></tr>
+  <tr><td>Encoder / transition / reward</td><td>✅</td><td>encoder only</td></tr>
+</table>
+<p>Think of the critic as a coach during practice: it tells the actor which futures are good so the policy
+improves. On game day the coach stays off the field — the lessons already live in the policy's weights.</p>
+</div>
+
+<div class="callout"><strong>Takeaway for me:</strong> Dreamer = Ha &amp; Schmidhuber's "train in the dream"
+idea, made fully differentiable. The world model (eq 10) gives you a compact, image-free latent simulator; the
+actor–critic (eqs 7–8) then learns by <em>backpropagating value through imagined time</em> rather than
+trial-and-error. The <code>p</code>/<code>q</code> split, the λ-return target, and the reward-vs-value distinction
+are the three things I kept re-deriving until they stuck.</div>
+</section>
+
+</body>
+</html>

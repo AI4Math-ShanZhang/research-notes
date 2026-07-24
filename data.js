@@ -108,9 +108,11 @@ const BLOG = {
       blurb: "World models — dynamics prediction, memory, imagination, and planning.",
       notes: [
         { title:"World Models (Ha & Schmidhuber)", file:"posts/world-models-ha-schmidhuber.html", date:"2026-07-19", paper:"Ha & Schmidhuber · arXiv:1803.10122", tags:["memory","MDN-RNN","imagination","foundational"], summary:"The V-M-C agent, focused on the memory model M: an MDN-RNN whose hidden state remembers history and predicts a distribution over the next latent. Memory is a generative model of dynamics — it lets the agent imagine and even train entirely inside the 'dream'." },
+        { title:"Dreamer — Dream to Control (Latent Imagination)", file:"posts/dreamer-latent-imagination.html", date:"2026-07-24", paper:"Hafner, Lillicrap, Ba & Norouzi · ICLR 2020 · arXiv:1912.01603", tags:["actor-critic","latent imagination","RSSM","value target","backprop-through-dynamics"], summary:"The Q&A that made it click: the p (image-informed) vs q (image-free) split that powers imagination; actor-critic trained entirely in the dream, with a worked V_λ target (eq 6) and analytic gradients through the dynamics; how V_λ relates to GAE (same λ-blend, minus the baseline); the two separate objectives (world model eq 10 vs behavior eqs 7-8); the reward model's real-reward label vs the critic's bootstrapped target; and why only the policy runs at deployment." },
       ],
       papers: [
         { name:"World Models — Ha & Schmidhuber", link:"https://arxiv.org/abs/1803.10122", summary:"The foundational V-M-C agent; the MDN-RNN memory predicts future latents, letting the controller train inside the agent's own imagined 'dream'." },
+        { name:"Dream to Control: Learning Behaviors by Latent Imagination (Dreamer)", link:"https://arxiv.org/abs/1912.01603", summary:"Learns an RSSM latent world model, then trains an actor-critic entirely in imagination by backpropagating the λ-return value target through the learned dynamics — beating prior model-based and model-free agents on 20 visual control tasks." },
       ],
     },
   ],
