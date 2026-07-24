@@ -136,6 +136,12 @@ rewards (less bias, more variance). <code>V_λ</code> blends them — the classi
 <p>The requirement for that gradient is a differentiable action sample — the reparameterization trick (eq 3):
 <code>a = tanh(μ_φ(s) + σ_φ(s)·ε)</code>, ε ~ Normal(0,1).</p>
 
+<div class="callout"><strong>Action model ≠ action supervision.</strong> An "action model" is a thing that
+<em>outputs</em> actions; "action supervision" is a <em>label</em> for the correct action. Dreamer has the
+first, not the second. Its action model is trained by <b>pushing actions up the value gradient</b>
+(reward → value → gradient), so it learns good actions with no target action to copy. (Contrast: an
+imitation-learning VLA <em>does</em> have action labels and trains with <code>‖a − a*‖²</code>.)</div>
+
 <div class="mermaid">
 flowchart TB
   phi["action weights φ"] --> acts["actions a_0,a_1,a_2"]
