@@ -15,6 +15,9 @@
             font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
   .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
   .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  .v3-notes{ background:#eefaf3; border-left:5px solid #3DBD79; }
+  .v3-notes > h2{ color:#1f8a54; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
 </style>
 </head>
 <body class="note-page">
@@ -223,6 +226,70 @@ idea, made fully differentiable. The world model (eq 10) gives you a compact, im
 actor–critic (eqs 7–8) then learns by <em>backpropagating value through imagined time</em> rather than
 trial-and-error. The <code>p</code>/<code>q</code> split, the λ-return target, and the reward-vs-value distinction
 are the three things I kept re-deriving until they stuck.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section v3-notes">
+<h2>🚀 What changed in DreamerV3 (2023)</h2>
+<p class="paper-meta" style="margin-top:0">Follow-up paper: <em>Mastering Diverse Domains through World Models</em> —
+Hafner, Pasukonis, Ba &amp; Lillicrap, 2023, <a href="https://arxiv.org/abs/2301.04104">arXiv:2301.04104</a>.</p>
+
+<p>The <b>core idea is unchanged</b> from v1 — learn a latent world model, train an actor–critic by imagining
+inside it. Almost every v3 change is about one goal: making that engine <b>robust enough to run on any domain with
+a single fixed configuration</b>, instead of one task family that needs retuning.</p>
+
+<table>
+  <tr><th></th><th>Dreamer v1 (2019)</th><th>DreamerV3 (2023)</th></tr>
+  <tr><td>Scope proven</td><td>~20 tasks, one domain (visual continuous control)</td><td><b>150+ tasks, 8 domains</b> — Atari, ProcGen, DMLab, Minecraft, discrete &amp; continuous, dense &amp; sparse</td></tr>
+  <tr><td>Hyperparameters</td><td>tuned per task family</td><td><b>one fixed config for everything</b></td></tr>
+  <tr><td>Flagship</td><td>solves pixel control</td><td><b>first to mine Minecraft diamonds from scratch</b> — no human data, no curriculum</td></tr>
+</table>
+
+<h3>The robustness advances</h3>
+<ul>
+  <li><b>Symlog predictions.</b> Rewards/values span orders of magnitude across domains. v3 squashes targets with
+  <code>symlog(x)=sign(x)·ln(|x|+1)</code> before predicting and undoes it on readout, so a task with rewards of
+  <code>0.01</code> and one with <code>10000</code> look the same to the network → one config fits both.</li>
+  <li><b>Twohot categorical critic.</b> v1's critic regressed a single number with squared error. v3's critic
+  predicts a <em>distribution over exponentially-spaced bins</em> and reads out the expected value. A target like
+  <code>3.7</code> is split across the two nearest bins ("twohot") and trained with cross-entropy — so the gradient
+  size no longer depends on how big the target is, and it can represent multi-modal returns. Same trick for the
+  reward predictor.</li>
+  <li><b>Discrete (categorical) latents.</b> v1's latent was one continuous Gaussian; v3's is ~32 categorical
+  slots × 32 classes, straight-through gradients (started in v2). See the key insight below.</li>
+  <li><b>Free bits + KL balancing.</b> v1 tuned the KL weight <code>β</code> per domain (complex 3D wants strong
+  regularization, sparse-detail games want weak). v3 stops penalizing the KL once it's below ~1 nat (free bits) and
+  splits it into stop-gradient dynamics/representation terms (<code>β_dyn=1, β_rep=0.1</code>) — no per-domain
+  tuning.</li>
+  <li><b>Percentile return normalization + fixed entropy.</b> Exploration scale used to depend on reward scale.
+  v3 normalizes returns by the <code>5th–95th percentile</code> range with a <code>max(1,S)</code> floor (so tiny
+  sparse rewards aren't blown up into noise), letting one fixed entropy value work everywhere.</li>
+  <li><b>Unified actor gradient.</b> v1's signature was analytic gradients backprop'd through the dynamics
+  (continuous only). v3 uses the <b>Reinforce estimator for both discrete and continuous</b> actions, paired with
+  the return normalization above — one estimator across all action types.</li>
+</ul>
+
+<div class="keypt"><strong>Key insight — it's the Gaussian's unimodality, not continuity.</strong> The real issue
+was never "continuous vs discrete." A Gaussian is <em>unimodal</em>: forced to predict "ball goes left OR right,"
+it puts the mean in the empty middle. Flow matching (or diffusion) would fix this just as well — and the field uses
+it exactly where it fits: <b>VLA action heads</b> (π0 generates multimodal action chunks with flow matching) and
+<b>diffusion world-model decoders</b> (DIAMOND swaps the latent for a diffusion model and wins on Atari visual
+detail). <b>DreamerV3 chose categorical for the <em>latent dynamics</em> specifically because that slot is sampled
+thousands of times per step and needs a closed-form KL — two things categorical gives cheaply and flow matching
+does not.</b> So it's "right tool for the slot," not "discrete beats continuous."</div>
+
+<table>
+  <tr><th>Job</th><th>Sampled how often</th><th>Needs tractable KL?</th><th>Best tool</th></tr>
+  <tr><td>Latent dynamics (Dreamer RSSM)</td><td>thousands/step, inner loop</td><td><b>yes</b></td><td>categorical — cheap sample + closed-form KL</td></tr>
+  <tr><td>Observation decoder (world-model output)</td><td>once/step</td><td>no</td><td>diffusion / flow (DIAMOND) — high fidelity</td></tr>
+  <tr><td>Action head (VLA policy)</td><td>once/decision</td><td>no</td><td>flow matching (π0) — multimodal actions</td></tr>
+</table>
+
+<div class="callout"><strong>One-line summary:</strong> v1 = the proof that latent-imagination actor–critic works.
+v3 = the same engine wrapped in normalization / magnitude / balancing armor (symlog, twohot categorical critic,
+discrete latents, free-bits KL, percentile return normalization) so a single fixed config masters 150+ tasks —
+including from-scratch Minecraft diamonds. The concept you understood from v1 didn't change; the robustness around
+handling unknown scales and diverse domains did.</div>
 </section>
 
 </body>
