@@ -278,6 +278,51 @@ back) and <b>hurts</b> when the shift demands extrapolation to larger inputs/out
 In both cases the fix is “don’t take the data too literally / don’t produce extreme weights” — exactly what a
 simplicity bias does. That’s why it wins those two columns but loses on scaling, where you <em>need</em> large
 outputs.</div>
+
+<h3>📐 Ridge regression, precisely — the model the loop imitates</h3>
+<p>Ridge regression is just linear regression with an <b>L2 penalty on the weights</b>. Ordinary least squares
+(OLS) fits <code>ŷ = Xw</code> by minimizing prediction error; ridge adds a term that punishes large weights:</p>
+<pre class="box">OLS:    minimize   ‖y − Xw‖²
+Ridge:  minimize   ‖y − Xw‖²  +  λ·‖w‖²        ‖w‖² = Σⱼ wⱼ²,   λ ≥ 0</pre>
+<p>In words: <b>fit the data well, but don’t use unnecessarily large coefficients.</b> Large weights make a model
+sensitive to noise, to small changes in the input, to correlated features, and to limited training data. Ridge
+accepts a little more <em>training</em> error in exchange for a more stable model. <code>λ</code> sets how hard it
+leans on that trade.</p>
+
+<div class="analogy"><b>Why large weights are fragile — a worked case.</b> When two features are highly correlated,
+OLS might learn <code>ŷ = 20·x₁ − 19·x₂</code>: the two big coefficients nearly cancel, so the fit looks fine but
+the solution is wildly unstable (a tiny wobble in x₁ or x₂ swings the output). Ridge prefers something like
+<code>ŷ = 0.6·x₁ + 0.5·x₂</code> — similar accuracy, far more stable coefficients. That is exactly the
+ill-conditioning fix from the glossary above, seen from the weights’ side.</div>
+
+<h4>Closed form — where the stabilization actually happens</h4>
+<pre class="box">w_OLS   = (XᵀX)⁻¹ Xᵀy
+w_ridge = (XᵀX + λI)⁻¹ Xᵀy</pre>
+<p>The extra <code>λI</code> is the whole trick: it adds a little to the diagonal <em>before</em> inverting, so when
+<code>XᵀX</code> is singular or nearly singular (the ill-conditioned case — a near-zero value to divide by) the
+matrix becomes easy to invert again. This is the same “add a bit before dividing” move described in the glossary,
+now in matrix form.</p>
+
+<h4>What λ controls — a bias–variance dial</h4>
+<ul>
+  <li><code>λ = 0</code> → ridge <b>is</b> ordinary least squares (flexible fit, potentially high variance).</li>
+  <li><code>λ</code> increases → every <code>wⱼ → 0</code> (smaller weights, potentially high bias).</li>
+</ul>
+<p>So small <code>λ</code> = flexible/high-variance, large <code>λ</code> = conservative/high-bias — the classic
+<b>bias–variance trade-off</b>.</p>
+
+<h4>Ridge vs Lasso</h4>
+<pre class="box">Ridge:  λ·Σⱼ wⱼ²      (L2)  → shrinks weights toward 0, rarely exactly 0
+Lasso:  λ·Σⱼ |wⱼ|     (L1)  → can set weights exactly to 0 → feature selection</pre>
+<p>Both shrink, but only Lasso’s L1 penalty zeroes coefficients outright, so it doubles as feature selection; ridge
+keeps every feature but keeps them all small.</p>
+
+<div class="callout"><b>Tie-back to the loop.</b> The looped transformer never <em>writes down</em> a
+<code>λ‖w‖²</code> penalty — its shrinkage is <b>implicit</b>, coming from having few parameters (limited capacity).
+But the behaviour matches ridge with some effective <code>λ</code>: prefer small, stable solutions. That is why it
+inherits ridge’s whole personality — <b>wins</b> under noise and ill-conditioning (where holding back is correct)
+and <b>loses</b> on scaling (where you need large outputs a shrunk model refuses to produce), and why it lands on a
+well-regularized approximation of least squares rather than the exact universal solver.</div>
 </section>
 
 </body>
