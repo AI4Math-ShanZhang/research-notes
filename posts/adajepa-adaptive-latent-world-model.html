@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AdaJEPA — An Adaptive Latent World Model — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  .lbl{ font-weight:600; color:#2c5b8f; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>AdaJEPA — An Adaptive Latent World Model</h1>
+<p class="paper-meta">Paper: <em>AdaJEPA: An Adaptive Latent World Model</em> —
+Ying Wang, Oumayma Bounou, Yann LeCun &amp; Mengye Ren, June 2026,
+<a href="https://arxiv.org/abs/2606.32026">arXiv:2606.32026</a>.
+<a href="https://agenticlearning.ai/adajepa/">Project page</a> ·
+<a href="https://github.com/agentic-learning-ai-lab/adajepa">Code</a>.
+This note is the Q&amp;A from working through it, so it dwells on the parts that tripped me up:
+what exactly the adaptation loss compares, and which weights move.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>The problem.</b> A latent world model lets you plan from images: encode the observation into a
+compact latent, roll the dynamics forward, pick the action sequence that gets closest to the goal.
+But after training, the model is <b>frozen</b>. At deployment the surface is stickier, the lighting is
+different, the object is a shape it never saw — and the model's predictions are quietly wrong for the
+rest of the episode.</p>
+
+<p><b>The move.</b> Stop freezing it. AdaJEPA does <b>test-time adaptation inside the MPC loop</b>:
+plan, execute the first action chunk, watch what actually happened, take <b>one gradient step</b> on the
+world model using that transition, then re-plan with the corrected model. No expert demonstrations,
+no reward labels — the environment supplies the supervision for free.</p>
+
+<div class="mermaid">
+flowchart LR
+  O["observe o_t"] --> PLAN["PLAN<br/>MPC over f_θ<br/>latent goal cost"]
+  PLAN --> ACT["ACT<br/>execute first action a_t"]
+  ACT --> OBS["observe o_(t+1)"]
+  OBS --> BUF["STORE<br/>(o_t, a_t, o_(t+1))<br/>buffer keeps last 5"]
+  BUF --> ADA["ADAPT<br/>1 gradient step on L_ada<br/>last layers only"]
+  ADA --> O
+</div>
+
+<h3>The planning objective (unchanged from a normal latent-MPC setup)</h3>
+<p>Given a goal image <code>o_g</code> encoded to <code>z_g</code>, MPC picks the action sequence
+minimising a latent goal-reaching cost over the horizon:</p>
+<pre class="calc">a*_(t:t+H-1) = argmin  SUM_(k=1..H)  α_k · d( ẑ_(t+k) , z_g )
+
+with  d(ẑ, z_g) = || ẑ - z_g ||²      (squared Euclidean in latent space)</pre>
+
+<h3>The adaptation loss</h3>
+<pre class="calc">L_ada(B) = (1/|B|) · SUM over (o_i, a_i, o_(i+1)) in B  of
+
+               loss(  f_θ( z_i , E_ψ(a_i) )  ,   sg( z_(i+1) )  )
+
+where   z_i = E_φ(o_i)</pre>
+
+<table>
+  <tr><th>Symbol</th><th>What it is</th></tr>
+  <tr><td><code>B</code></td><td>Replay buffer — transitions the robot <em>actually experienced</em>, just now.</td></tr>
+  <tr><td><code>o_i, a_i, o_(i+1)</code></td><td>"I saw this, I did this, then I saw that."</td></tr>
+  <tr><td><code>E_φ</code></td><td>Visual encoder: image → latent state <code>z</code>.</td></tr>
+  <tr><td><code>E_ψ</code></td><td>Action encoder: raw action → an embedding the predictor can consume.</td></tr>
+  <tr><td><code>f_θ</code></td><td>Predictor / dynamics: <code>(z_t, action embedding) → ẑ_(t+1)</code>.</td></tr>
+  <tr><td><code>sg(·)</code></td><td>Stop-gradient — freezes the target so the encoder can't chase it.</td></tr>
+  <tr><td><code>loss</code></td><td>Latent prediction loss; MSE in practice.</td></tr>
+</table>
+
+<p>In words: <b>compare what the model predicted the next latent would be against what the next latent
+actually turned out to be, and shrink the gap.</b></p>
+
+<div class="keypt">
+<b>The formula is not new — and that's the point.</b> The JEPA pretraining objective is
+<code>L_pred = (1/K) Σ_k loss(ẑ_(t+k), z_(t+k))</code>, the same quantity. The contribution is
+<em>when and on what data</em> it is applied: at test time, on the last handful of transitions the
+robot generated itself, between two MPC replans.
+</div>
+
+<h3>The algorithm</h3>
+<pre class="calc">Input: pretrained (E_φ, E_ψ, f_θ), adapted params Ω, goal o_g,
+       horizon H, update steps U, buffer size N, max steps T
+B ← ∅ ;  observe o_0
+for t = 0 … T-1:
+    PLAN    optimise action sequence via the latent goal cost
+    ACT     execute first action a_t,  observe o_(t+1)
+    STORE   B ← B + (o_t, a_t, o_(t+1)),  trim to N
+    ADAPT   for u = 1…U:   Ω ← Ω - η ∇_Ω L_ada(B)</pre>
+
+<h3>Configuration actually used</h3>
+<table>
+  <tr><th>Knob</th><th>Default</th></tr>
+  <tr><td>Adapted parameters <code>Ω ⊆ {φ, ψ, θ}</code></td>
+      <td><code>predlast+enclast</code> — the predictor's <b>last transformer block</b> (incl. final LayerNorm) and the encoder's <b>last stage</b>. Everything else frozen.</td></tr>
+  <tr><td>Gradient steps per replan <code>U</code></td><td><b>1</b></td></tr>
+  <tr><td>Buffer <code>N</code></td><td>5, <code>recent-N</code> strategy (a <code>hard-N</code> variant instead keeps the 5 <em>worst-predicted</em> transitions)</td></tr>
+  <tr><td>Learning rate</td><td>same as training</td></tr>
+  <tr><td>Episode length</td><td>up to 20 MPC steps; one action chunk executed per replan</td></tr>
+  <tr><td>Anti-collapse</td><td>stop-gradient by default (swappable per pretrained model)</td></tr>
+</table>
+
+<h3>Results</h3>
+<p>Across goal-reaching tasks — built on DINO-WM's setup, e.g. PushT (circular pusher, T-shaped block,
+target pose) — planning success improves substantially with <b>as little as one gradient step per replan</b>,
+under both visual and dynamics shift. Trajectory plots show the prediction loss falling as the episode
+proceeds, and better planning following from it. Every adaptation variant tested
+(<code>predlast+enclast</code>, predictor-only, different layer choices, LoRA on the full model) beats the
+frozen model; the result is <em>not</em> very sensitive to which layers you pick.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>Why re-planning alone isn't enough — noise vs. bias</h3>
+<p>MPC already re-plans from a fresh observation every step, so the obvious objection is: doesn't that
+already fix everything? No, and the distinction is the reason this paper exists:</p>
+
+<table>
+  <tr><th></th><th>Random noise</th><th>Systematic bias</th></tr>
+  <tr><td>Example</td><td>Position sensor jitters ±0.3</td><td>Model thinks a push moves the block 1.0; it really moves 0.6</td></tr>
+  <tr><td>Fixed by re-planning?</td><td><b>Yes</b> — errors average out, re-planning <em>is</em> a filter</td><td><b>No</b> — every cycle is wrong in the same direction, forever</td></tr>
+</table>
+
+<div class="callout">
+Re-planning corrects <b>state</b> error ("where am I"). It cannot correct <b>model</b> error
+("what happens if I push"). A frozen world model plans with the same wrong equations at step 20 as at step 1.
+AdaJEPA's whole contribution is adding the missing row: use the transition you just observed to move the weights.
+</div>
+
+<p>And it matters more than it sounds for contact-rich tasks. In PushT, a 0.4-per-step optimism means
+<em>all</em> of the sampled rollouts are wrong about where the block ends up, so the planner picks the wrong
+contact point, the block rotates the wrong way, and no amount of accurate position feedback rescues a plan
+built on wrong physics.</p>
+
+<h3>What the correction looks like, with numbers</h3>
+<p>Toy version: trained where a push moves the block 1.0, deployed on a stickier surface where it moves 0.6.</p>
+<pre class="calc">step 1:  z_t = [0.0, 0]    model predicts ẑ = [1.00, 0]
+                           reality gives  z' = [0.60, 0]
+         L_ada = (1.00-0.60)² = 0.160     → one gradient step
+
+step 2:  model predicts [0.92, 0] ; reality [0.60, 0]
+         L_ada = 0.102                    → one gradient step
+
+step 3:  L_ada = 0.061
+  ⋮
+after ~6 replans the predictor has converged to ≈0.62 per push</pre>
+
+<div class="keypt">
+<b>MPC hands you the training data for free.</b> Every executed action produces an
+<code>(o, a, o')</code> triple whether you want it or not — a free experiment, every control cycle.
+A frozen world model throws all of them away. That's the whole opportunity AdaJEPA picks up.
+</div>
+
+<!-- ---------- Q&A ---------- -->
+<h3>Q&amp;A — the bits I had to straighten out</h3>
+
+<div class="qa">
+<div class="q">Q: So in a normal latent world model, the parameters never update?</div>
+<p>Correct — and that's the baseline being argued against.</p>
+<table>
+  <tr><th></th><th>Frozen WM (e.g. DINO-WM)</th><th>AdaJEPA</th></tr>
+  <tr><td>Fresh observation each step</td><td>yes</td><td>yes</td></tr>
+  <tr><td>Fixes <b>state</b> error</td><td>yes</td><td>yes</td></tr>
+  <tr><td>Model weights</td><td><b>never change after training</b></td><td>last layers of <code>E_φ</code> and <code>f_θ</code>, 1 step per replan</td></tr>
+  <tr><td>Fixes <b>model</b> error</td><td><b>no, never</b></td><td>yes, gradually</td></tr>
+</table>
+</div>
+
+<div class="qa">
+<div class="q">Q: Is <code>z</code> the action embedding?</div>
+<p>No — <code>z</code> is the <b>image</b> embedding. Two separate encoders feed the predictor:</p>
+<pre class="calc">  image  o_i  --[ E_φ ]-->  z_i          ← state latent, this is "z"
+  action a_i  --[ E_ψ ]-->  (action embedding, no z name)
+                   │
+                   ▼
+       f_θ( z_i , E_ψ(a_i) )  =  ẑ_(i+1)  ← predicted NEXT image latent
+                   │
+                   ▼
+       compare with  sg( z_(i+1) ) = sg( E_φ(o_(i+1)) )   ← ACTUAL next image latent</pre>
+<p>Both sides of the loss are <b>image</b> latents. The action never appears as a prediction target —
+you don't predict actions, you predict the <em>consequence</em> of actions. The action gets its own
+encoder purely as a formatting step: the raw action is a couple of numbers, <code>z</code> is a big
+feature vector, and <code>E_ψ</code> lifts one into a space the predictor can mix with the other.</p>
+</div>
+
+<div class="qa">
+<div class="q">Q: Does only the predictor change, or the encoder too?</div>
+<p><b>Both — but only their last layers.</b> And the ablation gives a principle worth keeping:
+<b>fix the error where it enters.</b></p>
+<table>
+  <tr><th>Kind of shift</th><th>Where the error enters</th><th>What you need to adapt</th></tr>
+  <tr><td>Shape / dynamics (different geometry, more friction)</td>
+      <td>The predictor — the representation is fine, "what happens next" is wrong</td>
+      <td>Predictor alone suffices; freezing the encoder costs nothing</td></tr>
+  <tr><td>Visual / layout (lighting, texture, camera, background)</td>
+      <td>The <em>encoder</em> — the image maps to a bad <code>z</code> in the first place</td>
+      <td>Predictor-only is <b>not enough</b>; the encoder must move</td></tr>
+</table>
+<p>At deployment you don't know which one you're facing, so updating both last layers covers both.
+The action encoder <code>E_ψ</code> is inside the formal set <code>Ω ⊆ {φ, ψ, θ}</code> but isn't touched by default.</p>
+</div>
+
+<div class="qa">
+<div class="q">Q: Why the stop-gradient?</div>
+<p>Because if both sides of the comparison are learnable, there's a cheating solution: map <em>every</em>
+image to the same constant vector. Prediction becomes trivially perfect, the loss hits zero, and the model
+is useless — <b>representation collapse</b>, the classic joint-embedding failure. <code>sg(z_(i+1))</code>
+pins the target as a fixed number for this step, so the predictor must come to the target rather than the
+target sliding toward the predictor. This matters precisely <em>because</em> the encoder is being updated too.</p>
+<p>Nice empirical footnote: drop stop-gradient, update only last layers for one step, and performance is
+about the same. One gradient step on a few parameters simply doesn't have the room to collapse anything —
+the safety comes as much from the tiny update budget as from <code>sg</code>.</p>
+</div>
+
+<div class="qa">
+<div class="q">Q: Why "last layers" and not fine-tune the whole thing?</div>
+<p>Five samples, one gradient step. That budget can recalibrate a readout; it cannot retrain a backbone,
+and trying would wreck the representation pretraining paid for. Think <b>recalibration, not learning</b> —
+nudging the output scale/offset to match what this environment is doing right now.</p>
+<p>Cost-wise it's essentially free: one backward pass over a few layers, next to a full CEM/MPPI search
+over hundreds of rollouts. That's why "one gradient step" is the headline rather than a limitation.</p>
+</div>
+
+<h3>Where it sits in the landscape</h3>
+<p>Two honest limits:</p>
+<div class="warn">
+<ul>
+  <li><b>It only corrects the model where you've been.</b> The buffer holds visited states; the planner still
+  rolls out into states you haven't. Wrong there, and <code>L_ada</code> has nothing to say.</li>
+  <li><b>It fixes the dynamics, not the cost.</b> If the goal latent <code>z_g</code> is a poor target, or the
+  encoder puts two task-identical scenes far apart, better prediction doesn't rescue the plan.</li>
+</ul>
+</div>
+
+<p>Framed against the earlier notes: planning-based control has three ways to fail — a biased state estimate,
+a model that drifts over the horizon, and a cost function that doesn't mean what you think. The sampling-based
+planner is effectively an <em>adversary</em> against your own world model, since searching 1000 sequences is a
+very good way to find the region where the model is wrongly optimistic. AdaJEPA attacks the second failure
+directly: keep patching the model where you are currently standing, using data the control loop was generating anyway.</p>
+
+<p>It also sits opposite the π-series bet. π0.6/π0.7 amortise everything into policy weights and do no search
+or adaptation at deploy time. AdaJEPA keeps the planner <em>and</em> keeps learning during the episode —
+paying compute at test time in exchange for recovering from shifts a frozen policy would just fail on.</p>
+</section>
+
+</body>
+</html>
