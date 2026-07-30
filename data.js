@@ -89,9 +89,14 @@ const BLOG = {
           summary: "Decomposes transparency into opaque serial depth, variable transparency, and algorithmic transparency. Shows the inter-step bottleneck compresses to O(few) tokens with no capability loss, that those tokens are mostly guesses at current/nearby final tokens, and that monitorability matches Gemma 4 — while documenting six diffusion-specific reasoning behaviours.",
         },
         {
-          name:    "Analog Bits — self-conditioning for diffusion",
+          name:    "Analog Bits — Generating Discrete Data using Diffusion Models with Self-Conditioning",
           link:    "https://arxiv.org/abs/2208.04202",
-          summary: "Origin of the self-conditioning trick DiffusionGemma inherits: feed the previous step's own prediction back into the next denoising step, zeroing it a fraction of the time during training so the model handles both cases.",
+          summary: "Chen, Zhang & Hinton (ICLR 2023) — origin of the self-conditioning trick DiffusionGemma inherits. The denoiser goes from f(x_t, t) to f(x_t, x̃₀, t): concatenate the previous step's own x₀ estimate onto the input instead of discarding it. Training zeroes that input 50% of the time and applies stop_gradient to the extra forward pass, so cost rises under 25% and zero becomes the in-distribution encoding of \"no signal\" — which is why DiffusionGemma initializes S₀ to the zero matrix. Cuts ImageNet 64×64 FID by 30–43% (Table 8) and works on continuous DDPM too, so it's a generic technique rather than an analog-bits-specific hack.",
+        },
+        {
+          name:    "PRISM — Fine-Tuning Masked Diffusion for Provable Self-Correction",
+          link:    "https://arxiv.org/abs/2510.01384",
+          summary: "Kim, Kim, Lee, Pan, Kim, Kakade & Chen — a plug-in remasking head that learns per-token quality without RL or a verifier. Target is g*(y) = p(x^i = y^i | y ⊕ m^i): how likely the token sitting at position i would be if you couldn't see it. The trick is the label — fill a masked slot with the model's own sample y^i, then supervise with the free binary check 1[x^i = y^i]; since BCE's minimizer is the conditional mean, that single bit recovers the exact probability. g is one coordinate of the unmasking posterior f already models, just readable from an input where the slot is FILLED rather than masked — which is what turns L extra forward passes into zero. Shares the backbone with a second head, regularized by the ordinary MDM loss to prevent forgetting f. Sudoku, 170M text, and LLaDA-8B code.",
         },
       ],
     },
