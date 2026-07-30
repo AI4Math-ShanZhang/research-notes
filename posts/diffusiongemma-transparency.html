@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Transparent is DiffusionGemma? — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .take{ background:#fff8ee; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take h4{ margin:.1rem 0 .4rem; color:#b56b00; }
+  .warn{ background:#fdf2f4; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .dial{ color:#9B72CF; font-weight:600; }
+  pre.blk{ background:#f6f8fa; border:1px solid #e1e4e8; border-radius:6px; padding:.7rem .9rem; overflow-x:auto; font-size:.88em; line-height:1.45; }
+  table td, table th{ vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>How Transparent is DiffusionGemma?</h1>
+<p class="paper-meta">Paper: <em>How Transparent is DiffusionGemma?</em> —
+Joshua Engels, Callum McDougall, Bilal Chughtai et al. (Google DeepMind, June 2026),
+<a href="https://arxiv.org/abs/2606.20560">arXiv:2606.20560</a>.
+The model itself has <b>no paper</b> — only a
+<a href="https://ai.google.dev/gemma/docs/diffusiongemma/model_card">model card</a>, so this paper's Appendix A is
+currently the most detailed public description of DiffusionGemma's architecture.</p>
+
+<!-- ===== Conclusion / TL;DR ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ In one line</h2>
+<p>DiffusionGemma passes a <b>dense vector</b> between denoising steps, which naively makes it
+<b>28.6×</b> more opaque than autoregressive Gemma 4 — but that vector is built as
+<code>softmax(logits) · W<sub>E</sub></code>, so it is <span class="dial">structurally made of token directions</span>.
+Squeeze it down to <b>~8 tokens</b> per position and capabilities are unchanged; read those tokens and they are
+mostly guesses at the current and neighbouring final tokens. Opaque serial depth drops to <b>1.1×</b>.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The question</h3>
+<p>Autoregressive models reason in visible chain-of-thought text, and that visibility is load-bearing for safety —
+you can hand the CoT to a monitor and ask it to look for reward hacking, prompt injection, or scheming.
+Text diffusion breaks the assumption: DiffusionGemma refines a whole <b>canvas</b> of C tokens for T steps, and part
+of what crosses each step boundary is <b>not language</b>. So: does it still "think in English"?</p>
+
+<h3>Three axes of transparency</h3>
+<table>
+  <tr><th>Axis</th><th>Question</th><th>Verdict</th></tr>
+  <tr><td><b>Opaque serial depth</b></td>
+      <td>How much serial computation happens between interpretable nodes?</td>
+      <td>28.6× naively → <b>1.1×</b> if the bottleneck is readable</td></tr>
+  <tr><td><b>Variable transparency</b></td>
+      <td>Can we read an intermediate snapshot of the state?</td>
+      <td><b>Yes</b>, mostly (§3)</td></tr>
+  <tr><td><b>Algorithmic transparency</b></td>
+      <td>Can we reconstruct the <em>process</em> from those snapshots?</td>
+      <td><b>Harder</b> — six diffusion-specific behaviours (§5)</td></tr>
+  <tr><td><b>Monitorability</b></td>
+      <td>Can a monitor extract useful information from outputs?</td>
+      <td><b>Similar</b> to Gemma 4 (§4)</td></tr>
+</table>
+
+<h3>The architecture (Appendix A)</h3>
+<div class="mermaid">
+flowchart TB
+  P["Prompt p"] -->|prefill, causal attn| KV["Static KV cache"]
+  INIT["Canvas o&#8320; = C random tokens<br/>S&#8320; = <b>zero matrix</b>"] --> STEP
+  subgraph STEP["Denoising step t &nbsp;(&times;T, T&#8804;48)"]
+    direction TB
+    A["E = Embed(o<sub>t-1</sub>)"] --> B["h = E + GatedMLP(S<sub>t-1</sub>)"]
+    B --> C["Transformer<br/>(bidirectional attn over canvas)"]
+    C --> D["logits &#8467;<sub>t</sub> &nbsp;(C &times; V)"]
+    D --> E1["&#964;<sub>t</sub>: 0.8 &rarr; 0.4 anneal"]
+    E1 --> F["<b>S<sub>t</sub> = softmax(&#8467;/&#964;) &middot; W<sub>E</sub></b><br/>(C &times; d<sub>model</sub>)"]
+    E1 --> G["EB sampling (&gamma;=0.1):<br/>keep low-entropy, <b>renoise</b> the rest"]
+  end
+  KV -.attend.-> C
+  G --> H["o<sub>t</sub>"]
+  F --> STEP
+  H --> STEP
+  STEP --> OUT["o<sub>T</sub> = argmax &#8467;<sub>T</sub>"]
+</div>
+
+<p>Two quantities cross each step boundary — the canvas tokens <b>o</b> (readable, it's just text) and the
+<b>self-conditioning matrix S</b> (C × d<sub>model</sub>, not readable by default). S is the whole problem.</p>
+
+<h3>§2 — Opaque serial depth</h3>
+<p>Compile the model (including sampling) to a Boolean circuit, mark the interpretable nodes, take the longest
+path containing none. Measured at 256k context:</p>
+<table>
+  <tr><th>Model</th><th>Empirical (UB)</th><th>Asymptotic</th></tr>
+  <tr><td>Gemma 4 26B A4B</td><td>21,235</td><td>O(L·(log N + log D))</td></tr>
+  <tr><td>DiffusionGemma — <b>interpretable</b> bottleneck</td><td><b>23,571</b> (1.1×)</td><td>O(L·(log N + log D + log C))</td></tr>
+  <tr><td>DiffusionGemma — <b>uninterpretable</b> bottleneck</td><td>608,016 (28.6×)</td><td>O(T·L·(log N + log D + log C))</td></tr>
+</table>
+<p>The 28.6× uses the worst case T = 48; adaptive stopping normally halts at <b>12–16</b> steps, so in practice
+it's about a third of that. Everything hinges on which row you're entitled to quote — hence §3.
+(Tool: <a href="https://github.com/google-deepmind/serial_depth">google-deepmind/serial_depth</a>.)</p>
+
+<h3>§3.1 — Squeezing the bottleneck</h3>
+<p>S is built from all |V| ≈ 262k vocabulary entries. Restrict it and see if the model still works:</p>
+<pre class="blk">S' = W_E · softmax( f(ℓ̂) )
+
+f_k :  keep the top k logits;                  squash the rest to a constant c
+f_p :  keep logits with probability &gt;= p;       squash the rest to a constant c
+
+c = ln( S_rest / (|V| - |kept|) )   chosen so the KEPT tokens' probabilities are EXACTLY preserved</pre>
+<p>Worked example, V = 6, <code>Z = [4.0, 3.0, 1.0, 0.0, -1.0, -2.0]</code>, f<sub>k=2</sub>:</p>
+<pre class="blk">probs   = [0.6920, 0.2546, 0.0345, 0.0127, 0.0047, 0.0017]
+S_rest  = 4.221            c = ln(4.221/4) = 0.0538
+probs'  = [0.6920, 0.2546, 0.0134, 0.0134, 0.0134, 0.0134]
+          └─ unchanged ─┘  └──── flattened, same TOTAL mass ────┘</pre>
+<p>Result (Fig. 2): <b>k = 8</b> and <b>p = 0.03</b> match baseline on Natural2Code, LiveCodeBench, AMC/AIME, IMO and
+GPQA. Since probabilities sum to 1, a p-threshold admits at most 1/p = <b>33 tokens</b> — so the bottleneck really is
+O(few) tokens, against a 262,144-entry vocabulary.</p>
+
+<div class="callout"><b>Note:</b> this f<sub>p</sub> is <em>not</em> nucleus sampling. Nucleus keeps the smallest set
+whose <em>cumulative</em> mass reaches p; here it's a <em>per-token</em> threshold (closer to min-p / epsilon sampling).
+That's why the paper says <em>decreasing</em> p improves performance — a lower bar admits more tokens.</div>
+
+<h3>§3.2 — Are those tokens interpretable? (Fig. 3)</h3>
+<p>800 WildChat prompts, 1024 generated tokens (4 canvases), T = 48, no early stopping. Every surviving token is
+sorted into one of five categories, by priority, against the <b>final</b> output:</p>
+<pre class="blk">1. Final Token          exact match at this position i
+2. Adjacent Token       exact match at a final token within ±10 positions
+3. Similar to Final     top-50 cosine neighbour (Gemma 4 31B embeddings) of the final token at i
+4. Similar to Adjacent  same, but for a nearby position
+5. Other                ← the grey band. This is just the else branch.</pre>
+<p>In the figure, <span style="color:#2b6cb0"><b>blue</b></span> = exact match,
+<span style="color:#c05621"><b>orange</b></span> = semantic neighbour, shade = distance 0→10, grey = Other.</p>
+<table>
+  <tr><th>Filter</th><th>Early steps</th><th>Late steps</th><th>Why</th></tr>
+  <tr><td>Top&nbsp;K = 8</td><td>~16% grey</td><td><b>~48% grey</b></td>
+      <td>Fixed count. Once the model is confident, p<sub>top1</sub> ≈ 1 and slots 2–8 are arbitrary noise.</td></tr>
+  <tr><td>p &gt; 0.03</td><td>&lt;15% grey</td><td><b>≈100% exact match</b></td>
+      <td>Adaptive count. When confident, only one token qualifies — and it's the answer.</td></tr>
+</table>
+<p>The distance gradient is itself informative: light shades (distance 1–10) are thickest at <b>early</b> steps and
+collapse to distance 0 as denoising proceeds. That's token smearing, visible as a colour gradient.</p>
+
+<h3>§4 — Monitorability</h3>
+<p>Adapting the eval suite of Guan et al. (2025) — intervention, process, and outcome-property categories, scored by
+G-mean². Averages: <b>Gemma 4 ≈ 0.82, DiffusionGemma ≈ 0.78</b>. Similar.</p>
+<div class="warn"><b>Two caveats the paper flags itself.</b>
+(1) These rollouts span <b>many canvases</b>, and reasoning <em>between</em> canvases is autoregressive — so the
+similarity is partly measuring AR behaviour, not diffusion behaviour.
+(2) DiffusionGemma's CoT is <b>~3× shorter</b> (8,447 vs 24,392 characters, Fig. 5), and longer CoT is generally
+<em>more</em> monitorable — so this confounder handicaps DiffusionGemma, and it matched anyway.</div>
+
+<h3>§5 — Six diffusion-specific reasoning behaviours</h3>
+<table>
+  <tr><th>Phenomenon</th><th>What happens</th></tr>
+  <tr><td><b>Early length prediction</b><br/>§5.1.1</td>
+      <td>After <b>one</b> step, padding probability is ~100% beyond position 55; the answer converges to 50 tokens.
+      Padding probs are monotone in position, so they read as a CDF over length:
+      <code>E<sub>t</sub>[L] = Σ<sub>i</sub> (1 − p<sub>t</sub>(i))</code>. By step 2 it's an almost perfect predictor.
+      <em>The only quantified result in §5.</em></td></tr>
+  <tr><td><b>Retroactive self-correction</b><br/>§5.1.2</td>
+      <td>"Squares between 400 and 800? <b>State your answer first</b>, then reason." Step 4: answer <b>9</b>
+      (moderate confidence). Steps 5–6: computes √400 = 20, √800 ≈ 28.28. Step 7: reaches <b>backwards</b> and
+      corrects to <b>8</b>. Impossible autoregressively.</td></tr>
+  <tr><td><b>Non-AR code generation</b><br/>§5.1.3</td>
+      <td>Skeleton-first: function name and block delimiters → core loop logic → <em>then</em> docstring, variable
+      inits and comments, which appear <em>earlier</em> in the file.</td></tr>
+  <tr><td><b>Token smearing</b><br/>§5.2.1</td>
+      <td>Knows <em>what</em>, not <em>where</em>: mass for <code>" bracket"</code> spread across a whole cluster of
+      docstring slots before locking in. Same for newlines and commas.</td></tr>
+  <tr><td><b>Sequence smearing</b><br/>§5.2.2</td>
+      <td>Step 3 holds "There are **<b>12</b>** perfect squares…" and "There are **<b>9</b>** perfect squares…"
+      simultaneously — the whole sentence at two offsets. Step 4 collapses to one.</td></tr>
+  <tr><td><b>Intermediate context reasoning</b><br/>§5.3</td>
+      <td>Fibonacci with "replace any units digit 3 with <b>Gold</b>". Step 2: <code>2, 1, 3, , ,</code> —
+      Step 3: <code>2, 1, Gold, 4, 7</code>. The <b>3</b> was needed to compute 4 and 7, and <b>never appears in the
+      output</b>. Gemini 2.5 Pro can't do this task without CoT at all.</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>1. What S actually is, in one formula</h3>
+<pre class="blk">S_t = softmax( ℓ_t / τ_t ) @ W_E          shape (C, V) @ (V, d_model) → (C, d_model)
+
+so   S[i] = Σ_v  P[i,v] · W_E[v]          a <b>convex combination of token embeddings</b></pre>
+<p>Each row is a <b>soft embedding</b> — a probability-weighted blend of the vocabulary embeddings at that position.
+If the distribution is one-hot on "cat", <code>S[i] = W_E[cat]</code> exactly. As it spreads out, S drifts into the
+interior of the embedding convex hull. <b>So read S as "a fuzzy token", and how fuzzy is exactly the model's
+uncertainty.</b></p>
+<p>Concretely: position 5 has P(cat)=0.5, P(dog)=0.4, P(bird)=0.1, and sampling picks "dog". A vanilla masked dLLM
+forwards only the token <code>dog</code> — the 0.5 on "cat" is gone forever. DiffusionGemma forwards
+<code>dog</code> <em>and</em> S[5], so the next step still knows it was torn.</p>
+
+<div class="take"><h4>Why S₀ = 0</h4>
+At step 0 there is no previous prediction to condition on. S enters via
+<code>embeddings + GatedMLP(S)</code>, and a gated MLP maps 0 → 0, so the first pass runs on the prompt plus the
+random canvas alone. This is the standard self-conditioning recipe from Chen et al.'s <em>Analog Bits</em>: during
+training you drop the self-conditioning input some fraction of the time by zeroing it, so <b>zero is the
+in-distribution encoding of "no signal"</b>. The paper only states the zero-init; the rationale is inherited
+convention.</div>
+
+<h3>2. Why self-condition at all — and why <em>this</em> model needs it most</h3>
+<p><b>(a) Discrete sampling destroys nearly everything.</b> A step computes C × 262k numbers of belief; sampling
+collapses each row to one integer. S is a cheap side channel that lets the distribution survive.</p>
+<p><b>(b) Renoising means S is the <em>only</em> memory.</b> This is the DiffusionGemma-specific reason. EB sampling
+replaces high-entropy positions with a <b>uniformly random token</b> — bit-for-bit identical to what that slot held at
+step 0. Without S, six steps of work at that position are simply gone; the model can't tell "I've been agonising over
+this slot" from "I've never looked at it". S is what makes renoising <em>recoverable</em> rather than amnesiac.</p>
+<p><b>(c) Fewer steps.</b> T is budgeted at 48 but adaptive stopping halts at 12–16. Each step removed is a full 26B
+forward pass saved — most of where the "4× faster" claim comes from.</p>
+
+<h3>3. The design choice that saves the whole paper</h3>
+<p>They could have forwarded the raw residual stream — more information, easier to implement. Forcing it through
+<code>softmax(ℓ) @ W_E</code> constrains the channel to the convex hull of token embeddings. It <b>can only express
+"a mixture of tokens"</b>. It <em>cannot</em> express arbitrary latent content, because it is structurally built out
+of vocabulary directions.</p>
+<p>That capacity limit is what makes the logit lens work, and it's why top-8 truncation costs nothing: there was never
+more than ~8 tokens of meaning in there. The paper is explicit that this is load-bearing —
+<em>"DiffusionGemma has a projection in intermediate layers that biases the vector that gets passed between denoising
+steps towards the embedding vectors"</em> — and that a differently-trained future model, or one under heavy
+outcome-based RL, could lose it.</p>
+
+<div class="take"><h4>Gemma ties its embeddings</h4>
+W<sub>E</sub> is the ordinary learned embedding table, reused — no new embedding parameters. Since the Gemma family
+ties input and output embeddings, Eq. 1 is a clean round trip:
+<code>h →W<sub>E</sub>ᵀ→ logits →softmax→ P →W<sub>E</sub>→ S</code>, out of embedding space and straight back in.
+That's why adding S to <code>Embed(o)</code> is type-correct rather than arbitrary.</div>
+
+<h3>4. The OOD caveat in §3.1, and why the bias is in their favour</h3>
+<p>After f<sub>k</sub>, all ~262,000 discarded tokens have <em>identical</em> probability. Real LM tails are never flat —
+they're heavy and semantically structured, concentrated on near-synonyms of the winner. So the tail contribution to S
+becomes:</p>
+<pre class="blk">naturally:  ≈ 0.0345·emb(token2) + 0.0127·emb(token3) + …   concentrated, related tokens
+after f_k:  ≈ 0.0535 · (mean embedding of the ENTIRE vocabulary)   ← a direction never seen in training</pre>
+<p>So the ablation does two things at once: (1) removes tail information — what they want to measure — and
+(2) injects a vocabulary-centroid artifact — pure damage. You can't separate them, so the measured degradation is an
+<b>upper bound</b> on the true cost.</p>
+<div class="take"><h4>Why this makes the result stronger, not weaker</h4>
+<code>measured damage ≥ true information loss</code>, and measured damage ≈ 0. A pessimistic method that still reports
+no damage gives a <em>stronger</em> conclusion than an unbiased one. If the bias ran the other way, the 28.6× → 1.1×
+result would be suspect. Flagging the flaw and using the method anyway is the right call here.</div>
+
+<h3>5. Lock-in is the unifying mechanism of §5 — and it's untested</h3>
+<p>It shows up three separate times as the failure mode: self-correction fails on lock-in (§5.1.2), the "Gold"
+substitution fails on lock-in (§5.3), and sequence smearing <em>resolves</em> by locking in (§5.2.2). The paper's
+hypothesis is a <b>race condition</b>:</p>
+<pre class="blk">process A:  entropy at the answer slot falls below the EB threshold   (commitment)
+process B:  the reasoning region converges                           (computation)
+
+B before A  →  correction works
+A before B  →  lock-in, wrong answer is permanent</pre>
+<p>The load-bearing detail in the success case is that the answer was at <b>"moderate confidence"</b> at step 4 — high
+enough entropy to stay renoisable. Had it been confident, EB would have kept it and the reasoning at steps 5–6 would
+have had nothing to correct.</p>
+<p><b>Why a token <em>shift</em> is especially hard:</b> the canvas has fixed slots, so 12 → 9 displaces everything
+downstream by one position. But EB sampling accepts positions <em>independently</em> by entropy and refuses to renoise
+confident ones — an independent per-position rule structurally cannot coordinate a block move. Which means the whole
+block must be uncertain simultaneously… which is <b>exactly what sequence smearing provides</b>. §5.2.2 is the
+mechanism that makes §5.1.2's success case possible; lock-in is what happens when the smearing collapsed too early.
+The paper doesn't connect these two sections, but they're the same phenomenon from opposite sides.</p>
+<div class="warn"><b>The tension nobody resolves.</b> EB sampling exists <em>for speed</em> — commit confident
+positions early so you finish in 12–16 steps instead of 48. But "commit confident positions early" is precisely the
+mechanism that causes lock-in. The sampler's speed feature and its correctness failure are the same mechanism, and
+γ = 0.1 plus the τ: 0.8 → 0.4 anneal are the knobs sitting on that tradeoff. No experiment in the paper touches
+either.</div>
+
+<h3>6. The sequence-smearing deflation is stronger than it looks</h3>
+<p>The paper says the model uses smearing <em>"for spacing, not for storing multiple semantically different options at
+once."</em> Decompose the canvas and you see why:</p>
+<pre class="blk">slot:   1      2     3    4    5    6        7        8        9
+A:      There  are   **   1    2    **       perfect  squares  between   (12)
+B:      There  are   **   9    **   perfect  squares  between  400       (9)
+        └── same ──┘  ↑    └────────── offset by one ──────────────┘
+                   differs</pre>
+<p><b>Slot 4</b> holds genuine semantic uncertainty (12 vs 9) — but that's ordinary token-level uncertainty at a single
+position, which an AR model has too. <b>Slots 5+</b> are the actual sequence smearing, and they contain no semantic
+alternatives at all — the same continuation twice, mechanically displaced.</p>
+<p>So the novel diffusion mechanism is doing <b>zero semantic work</b>. It's bookkeeping the layout consequence of a
+perfectly ordinary one-token uncertainty.</p>
+<p>Also worth noticing: the example only produces smearing <em>at all</em> because 12 and 9 straddle the 9→10
+<b>tokenization boundary</b>. Torn between 8 and 5, both single tokens, there'd be no shift and no smearing. The
+trigger is narrow.</p>
+<div class="callout"><b>The experiment that would settle it.</b> Their example is confounded — 12 and 9 differ in both
+value <em>and</em> token length. The clean test is two plausible answers of <b>identical token length</b>
+("1066 or 1067?"), so any multi-slot superposition can't be explained by spacing. Not in the paper.</div>
+
+<h3>7. Versus LLaDA-style masked diffusion</h3>
+<table>
+  <tr><th></th><th>Masked dLLM (LLaDA)</th><th>DiffusionGemma</th></tr>
+  <tr><td>noise type</td><td>absorbing <code>[MASK]</code></td><td><b>uniform random tokens</b></td></tr>
+  <tr><td>initial canvas</td><td>all <code>[MASK]</code></td><td>C random real tokens</td></tr>
+  <tr><td>"undecided" looks like</td><td><code>[MASK]</code> — visibly marked</td><td>a random token — indistinguishable</td></tr>
+  <tr><td>commitment</td><td>progressive unmasking</td><td><b>non-monotonic</b>, re-evaluated every step</td></tr>
+  <tr><td>inter-step state</td><td>tokens only</td><td>tokens <b>+ S</b></td></tr>
+  <tr><td>selection rule</td><td>confidence / random</td><td>EB entropy budget (γ = 0.1)</td></tr>
+</table>
+<p><b>The deep reason for uniform instead of absorbing noise:</b> with mask noise, an unmasked token is <em>known
+clean</em> and the model has no reason to reconsider it. With uniform noise there is no marker separating "corrupted"
+from "settled", so every position is permanently suspect and revision is <b>native</b> rather than bolted on. That is
+the architectural root of everything in §5.</p>
+<p>And on remasking — masked dLLMs do remask (LLaDA's low-confidence remasking), but a remasked slot returns to
+<code>[MASK]</code>, which carries <b>zero information</b>. The model must re-derive its belief from visible neighbours.
+A renoised DiffusionGemma slot holds a garbage token but <b>still carries its full distribution in S</b>. That's why the
+9 → 8 correction has something to build on instead of starting over.</p>
+
+<div class="take"><h4>The trade, stated once</h4>
+Every "concerning" mechanism in this paper is the same feature as a capability gain.
+<b>S carried forward</b> → superposition persists, self-correction possible / but the bottleneck isn't language.
+<b>EB renoising</b> → answers can be revoked / but lock-in.
+<b>Sequence smearing</b> → can realign a whole sentence in one move / but a beam the output doesn't show.
+DiffusionGemma can retroactively fix its answer <em>precisely because</em> it has the machinery that makes it less
+transparent than a masked dLLM. LLaDA is more transparent here largely by being less able.</div>
+
+<h3>8. What §5 does and doesn't establish</h3>
+<p>Only §5.1.1 is quantified (Fig. 7 sweeps requested sentence count 1→5). Everything else is <b>one prompt plus a
+visualiser screenshot</b>. So none of these findings come with a frequency — we don't know whether retroactive
+self-correction happens on 2% or 60% of answer-first prompts. They're existence proofs, and the paper is upfront about
+it ("initial evidence", "one possibility", "so far").</p>
+<p>The one genuine control experiment is the <b>Collatz</b> case in §5.2.1. Smearing requires identity to be knowable
+<em>before</em> position — "bracket" will appear somewhere in the docstring, you just don't know which slot. In a
+Collatz sequence each value is computed from its immediate predecessor, so identity and index determine each other
+exactly and there is nothing to be positionally uncertain about. Predicted: no smearing. Observed: no smearing. That's
+what upgrades the smearing story from anecdote to causal claim.</p>
+<p>A quietly reassuring corollary the paper leaves implicit: smearing appears exactly where content is
+<em>predictable</em>, which is where you least need to monitor. On genuinely sequential reasoning — the cases you most
+want to follow — DiffusionGemma behaves essentially autoregressively and the canvas reads left to right.</p>
+
+<h3>9. §5.3 is the only finding that actually hurts</h3>
+<p>Everything else in §5 is "unusual order, still readable". The Fibonacci "3 → Gold" case is different: the digit
+<b>3</b> is causally necessary for computing 4 and 7, and is <b>absent from the final output</b>. Monitor only the
+finished text and that computational step is invisible — you see "Gold" and have no way to know a 3 was ever there.</p>
+<p>§4 found final-output monitoring is empirically sufficient. §5.3 shows that <b>in principle</b> it need not be.
+That gap is the paper's real contribution to the safety case, and it's the thread worth watching in the next
+generation of these models.</p>
+
+<p style="margin-top:1.6rem;padding-top:.8rem;border-top:1px solid #e1e4e8;">
+<b>Related:</b> <a href="diffusion-lm-reasoning.html">On the Reasoning Abilities of Masked Diffusion LMs</a> —
+the complexity-theory side (MDM ≡ padded looped transformer, denoising steps as a depth dial).</p>
+</section>
+
+</body>
+</html>

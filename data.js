@@ -69,6 +69,34 @@ const BLOG = {
     },
 
     {
+      id: "text-diffusion",
+      name: "Text Diffusion",
+      blurb: "Diffusion language models — architecture, sampling, self-conditioning, and interpretability. (The complexity-theory side lives in Loop Transformer.)",
+      notes: [
+        {
+          title:   "How Transparent is DiffusionGemma?",
+          file:    "posts/diffusiongemma-transparency.html",
+          date:    "2026-07-29",
+          paper:   "Engels, McDougall, Chughtai et al. · Google DeepMind · arXiv:2606.20560",
+          tags:    ["text diffusion", "self-conditioning", "interpretability", "monitorability", "logit lens", "EB sampling"],
+          summary: "DiffusionGemma passes a dense self-conditioning matrix S between denoising steps, which naively makes it 28.6× more opaque than Gemma 4 — but S = softmax(logits)·W_E is structurally a blend of token embeddings, so squeezing it to ~8 tokens per position costs nothing and opaque serial depth drops to 1.1×. Covers the architecture (canvas, S, EB renoising), the f_k / f_p ablations and their out-of-distribution caveat, Figure 3's category breakdown, and all six §5 phenomena — plus why lock-in is the unifying mechanism, why the sequence-smearing 'beam search' is really just spacing, and how uniform vs. absorbing noise explains the whole LLaDA contrast.",
+        },
+      ],
+      papers: [
+        {
+          name:    "How Transparent is DiffusionGemma?",
+          link:    "https://arxiv.org/abs/2606.20560",
+          summary: "Decomposes transparency into opaque serial depth, variable transparency, and algorithmic transparency. Shows the inter-step bottleneck compresses to O(few) tokens with no capability loss, that those tokens are mostly guesses at current/nearby final tokens, and that monitorability matches Gemma 4 — while documenting six diffusion-specific reasoning behaviours.",
+        },
+        {
+          name:    "Analog Bits — self-conditioning for diffusion",
+          link:    "https://arxiv.org/abs/2208.04202",
+          summary: "Origin of the self-conditioning trick DiffusionGemma inherits: feed the previous step's own prediction back into the next denoising step, zeroing it a fraction of the time during training so the model handles both cases.",
+        },
+      ],
+    },
+
+    {
       id: "vla",
       name: "VLA/VWA",
       blurb: "Vision-language-action policies — training, RL, decoding, and masking.",
