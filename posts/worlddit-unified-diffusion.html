@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorldDiT — A Unified Diffusion Architecture for World and Action Modeling — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>WorldDiT — A Unified Diffusion Architecture for World and Action Modeling</h1>
+<p class="paper-meta">Paper: Sen Wang, R. Gnana Praveen, Bidhan Roy &amp; Marcos Villagra (Bagel Labs), July 2026,
+<a href="https://arxiv.org/abs/2607.23909">arXiv:2607.23909</a>.
+Short note — the key points from working through it, in plain words.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>The claim.</b> Almost every strong robot policy today bolts an action head onto a big pretrained
+vision-language model. WorldDiT asks: do you actually need the VLM? It uses <b>no VLM at all</b> — just
+frozen image and text encoders feeding one small diffusion transformer — and still scores <b>94.9%</b>
+mean on LIBERO with only <b>399M</b> total parameters (135M of them trainable). For comparison, π0 gets
+94.2% with 3B, and OpenVLA gets 76.5% with 7B.</p>
+
+<p><b>The trick.</b> One shared transformer denoises <b>two things at once</b>: the next 7 robot actions,
+and 128 pieces of a <b>future camera image</b>. The image job is homework — it shapes the weights during
+training and is <b>deleted at run time</b>.</p>
+
+<div class="mermaid">
+flowchart LR
+  A["3 past frames<br/>+ instruction<br/>+ robot state"] --> B["frozen MAE<br/>frozen CLIP text<br/>state encoder"]
+  B --> C["108 clean<br/>context tokens"]
+  C --> D["WorldDiT<br/>depth 4 · width 1024"]
+  E["7 noised<br/>action tokens"] --> D
+  F["128 noised<br/>future RGB patches"] -.->|training only| D
+  D --> G["action velocity<br/>→ 7 actions"]
+  D -.->|training only| H["RGB velocity<br/>→ loss, then discarded"]
+</div>
+
+<h3>What goes in and out</h3>
+<pre class="calc">CONTEXT (clean, never noised, just read)
+  3 time steps × 36 tokens = 108
+     34 visual   ← both cameras → frozen MAE → Perceiver Resampler (squeezer)
+      1 language ← whole instruction → frozen CLIP text → ONE vector
+      1 state    ← arm + gripper
+
+TARGETS (noised, the model must clean them up)
+    7 action tokens   ← the next 7 actions, 7 numbers each
+  128 RGB patches     ← camera frame at t+7, cut into 16×16 squares,
+                        keep 64 per camera, each = 16·16·3 = 768 raw colors,
+                        each square normalized by its own mean and spread
+
+  4 register tokens (scratch space)
+  ────
+  247 tokens during training  →  119 at run time</pre>
+
+<p>Both targets are trained with <b>flow matching</b>: mix the true answer with noise, ask the model for the
+velocity that points from noise to answer. Loss weights are <b>0.1 for actions</b> and <b>0.001 for the
+image</b> — the image job is weighted 100× less.</p>
+
+<p>At run time: start from noise, run 20 Euler steps to get 7 actions, <b>execute 3</b>, look again, repeat.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Key Notes</h2>
+
+<h3>1. The one-way rule is the whole design</h3>
+
+<pre class="calc">image tokens  CAN look at →  action tokens
+action tokens CANNOT look at →  image tokens</pre>
+
+<p>Because the action tokens never read the image tokens, deleting the image tokens changes
+<b>nothing</b> about the action answer. That is what "removed from the inference graph" means — not a
+feature that was switched off, but arithmetic that provably does not change.</p>
+
+<div class="keypt">
+<b>Looking goes one way, learning goes both ways.</b> The image loss still backpropagates into the shared
+weights <em>and</em> into the context token representations, because the image tokens read those context
+tokens. So the homework reshapes the features the action head uses — for free, with zero cost at run time.
+</div>
+
+<h3>2. There is no VLM — only encoders</h3>
+<p>Two different things people mix up. A <b>vision encoder</b> turns a picture into numbers. A <b>VLM</b> is
+a language model that looks at pictures and <em>writes words</em>. WorldDiT has the first, not the second.</p>
+<ul>
+  <li><b>MAE</b> (frozen) — a self-supervised image ViT. It has never seen text.</li>
+  <li><b>Perceiver Resampler</b> — squeezes ~392 patch tokens down to 34.</li>
+  <li><b>CLIP text encoder</b> (frozen) — the entire instruction becomes <b>one vector</b>.</li>
+</ul>
+<p>Nothing here can read a sentence compositionally, and nothing carries internet knowledge.</p>
+
+<h3>3. There is no planning either</h3>
+<p>Planning means: propose many candidate action sequences, roll each one forward through a model, score
+them, pick the best. WorldDiT does none of that. It goes straight from observation to actions.</p>
+
+<div class="callout">
+<b>The 20 denoising steps are not a search.</b> They clean up <em>one</em> answer, twenty times over. Nothing
+is ever compared against anything. The paper's word "replan" is borrowed MPC vocabulary with the model
+rollout removed — it is really just chunked reactive control.
+</div>
+
+<p>So where did the thinking go? A human demonstrator did it, and the model copied. The deliberation is
+baked into the weights at training time.</p>
+
+<h3>4. 34 visual tokens ≠ 128 RGB patches</h3>
+<table>
+  <tr><th></th><th>34 visual tokens</th><th>128 RGB patches</th></tr>
+  <tr><td>When</td><td>now and just before</td><td>7 steps in the future</td></tr>
+  <tr><td>What</td><td>squeezed meaning from MAE</td><td>raw pixel colors, cut from the image</td></tr>
+  <tr><td>Clean or noisy</td><td>clean</td><td>noisy</td></tr>
+  <tr><td>Role</td><td>the question</td><td>the homework</td></tr>
+  <tr><td>At run time</td><td>needed</td><td>does not exist yet — deleted</td></tr>
+</table>
+<p>The future frame cannot be an input because it has not happened yet. During training you have the whole
+video, so you can look ahead and grab it. That is the only reason it is available at all.</p>
+
+<h3>5. The flow lives in each target's own space</h3>
+<p>A point that is easy to get backwards: the 1024 hidden width is <b>only plumbing</b>. Noise is added, and
+the answer comes back, in the target's own size.</p>
+<pre class="calc">true patch (768) + noise (768) → mix (768) → project up (1024)
+   → transformer → project down (768) = velocity     ← compared here
+
+true action (7)  + noise (7)   → mix (7)   → project up (1024)
+   → transformer → project down (7)   = velocity     ← compared here</pre>
+<p>Same idea as an image generator: the text prompt is the condition and is never noised; the image is the
+target. Context tokens have no noise, no output head, and no loss. They exist only to be read.</p>
+
+<h3>6. Where it sits</h3>
+<table>
+  <tr><th></th><th>Makes a future picture?</th><th>When?</th><th>Does the action part read it?</th></tr>
+  <tr><td><b>WALL-WM</b></td><td>yes, real video</td><td>while the robot runs</td><td><b>yes, every layer</b></td></tr>
+  <tr><td><b>WorldDiT</b></td><td>128 small patches</td><td>training only</td><td><b>no, never</b></td></tr>
+  <tr><td><b>π0</b></td><td>no</td><td>—</td><td>—</td></tr>
+</table>
+
+<p>So WorldDiT is <em>not</em> WALL-WM with MAE swapped in for the VLM — the two use opposite attention rules,
+and WALL-WM still keeps a Qwen 9B word-level planner. The swap framing fits <b>π0</b>:</p>
+<pre class="calc">π0        :  PaliGemma 3B   →  small flow head  →  actions
+WorldDiT  :  MAE + CLIP     →  small flow head  →  actions  (+ image homework)</pre>
+
+<p>There is also a nice symmetry in how both papers use a one-way mask. π0 forbids the VLM from reading the
+action tokens, so the 3B side can be computed <b>once</b> and the 10 denoising steps run only on the small
+action expert. WorldDiT forbids the actions from reading the image tokens, so the image side can be
+<b>dropped entirely</b>. Same rule, two different payoffs.</p>
+
+<h3>7. Limitations</h3>
+<div class="warn">
+<ul>
+  <li><b>Generalization is the real hole.</b> The instruction is one CLIP vector, and the model has no
+  internet knowledge. There is <b>no test</b> anywhere in the paper on new objects, new sentences, or new
+  scenes — which is exactly what a VLM is for.</li>
+  <li><b>It is four models, not one.</b> They fine-tune separately on each of the four suites, so 94.9% is the
+  average of four specialists. π0/π0.5 are built as one generalist. Not apples to apples, and unmentioned.</li>
+  <li><b>The score is not held out</b> — 300 of the 500 episodes per suite were used to pick the checkpoint.
+  To their credit, the paper says this plainly.</li>
+  <li><b>The key ablation is missing.</b> There is no "same model, no RGB homework" row. Given the 0.001
+  weight, it is entirely possible the image objective does almost nothing and LIBERO is just easy.</li>
+  <li><b>It is not really a world model.</b> You can never roll it forward, never check a plan against it.
+  It is a training-time regularizer wearing a world-model title.</li>
+  <li><b>Simulator only, on a nearly saturated benchmark.</b> No real robot, and the top of the table is
+  already at 97–98%.</li>
+  <li><b>Very short sight</b> — 7 steps, one frame. Consistent with LIBERO Long being their worst suite (91.8).</li>
+</ul>
+</div>
+
+<p>Three experiments would settle it: (1) the same model without the RGB loss, (2) new objects and new
+instructions, (3) a real robot.</p>
+</section>
+
+</body>
+</html>
