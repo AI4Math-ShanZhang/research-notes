@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parallel Decoding Distillation — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table td, table th { vertical-align: top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Parallel Decoding Distillation — one network call for several denoising steps</h1>
+<p class="paper-meta">Paper: Neta Shaul, Chao Liu, Arash Vahdat &amp; Julius Berner (NVIDIA), July 2026,
+<a href="https://arxiv.org/abs/2607.26004">arXiv:2607.26004</a> ·
+<a href="https://research.nvidia.com/labs/genair/pdd/">project page (FastGen-PDD)</a>.
+Notes from working through it — the paper part, then the questions that actually made it click.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>The problem.</b> Diffusion and flow models need many sampling steps, and each step is one full forward
+pass of a 14B–22B transformer. Video generation is therefore slow. The usual fix is to distill the model into
+a few-step student with <b>variational score distillation</b> (VSD) or an <b>adversarial</b> loss — DMD2 and
+friends. Those work, but they are hard to optimize and they <b>mode collapse</b>: every prompt starts giving
+back the same picture, and videos lose their motion.</p>
+
+<p><b>The claim.</b> You do not need any of that. PDD trains a few-step student with <b>one plain MSE
+regression loss</b>. No GAN, no second score network, no JVP (Jacobian-vector product), no finite
+differences. It matches or beats the adversarial methods at 4–8 network calls and keeps far more diversity.</p>
+
+<div class="keypt">
+<b>The one-sentence idea.</b> Give the model <em>several output heads</em>. One look at the current state
+produces the velocities for the next <em>L</em> denoising steps at once — including steps whose states do not
+exist yet. So one network call moves you <em>L</em> steps instead of one.
+</div>
+
+<h3>Setup and notation</h3>
+<pre class="calc">t          time along the path,  t = 0 is pure noise, t = 1 is the image
+X_k        the STATE at time t_k  — the noisy image/video latent itself
+v_k        the VELOCITY for the interval [t_k, t_k+1] — the arrow you move along
+
+            X_k+1  =  X_k  +  (t_k+1 - t_k) * v_k
+
+N          number of grid intervals   (128/64 for images, 256/128 for video)
+L          block size — how many intervals one network call covers
+NFE        number of function evaluations = number of network calls = N / L</pre>
+
+<h3>Architecture</h3>
+<p>The student reuses the <b>teacher's backbone unchanged</b> and copies the <b>final linear layer N times</b>
+— one head per grid interval. Head <em>k</em> owns interval [t_k, t_k+1]. The head index <em>is</em> the time
+conditioning, so no extra time embedding is needed, and the block size can be changed freely.</p>
+
+<pre class="calc">v_k  =  W_k · H(X_n)          all heads read the SAME backbone features H(X_n)</pre>
+
+<p>Because every head is linear on the same features, at inference the L heads are <b>pre-added offline into
+one matrix</b>:</p>
+
+<pre class="calc">X_n+1 = X_n + Δt·(v_0+v_1+v_2+v_3)
+      = X_n + (Δt·(W_0+W_1+W_2+W_3))·H(X_n)
+      = X_n + W_fused · H(X_n)                 ← ONE linear layer</pre>
+
+<div class="callout">
+So a PDD network call costs <b>exactly the same</b> as a teacher call. The extra heads exist only during
+training. You are not buying speed with more compute per call — you are simply making <b>N/L times fewer
+calls</b>.
+</div>
+
+<h3>Training</h3>
+
+<div class="mermaid">
+flowchart TD
+  A["sample a state X_n on the path<br/>(or pure noise — data-free)"] --> B["ONE student forward pass<br/>→ v_0 … v_L-1"]
+  B --> C["pick a random position k<br/>walk forward with v_0…v_k-1<br/>(free — no network calls)"]
+  C --> D["state X̄_k<br/>stop-gradient"]
+  D --> E["TEACHER at X̄_k<br/>Euler = 1 call · Midpoint = 2 calls"]
+  E --> F["loss = ‖ v_k − teacher_velocity ‖²"]
+  B --> F
+</div>
+
+<p>Worked out with N = 8, L = 4, step size 0.125, and the sampled position k = 2:</p>
+
+<pre class="calc">1.  one student pass on X_0                  →  v_0, v_1, v_2, v_3
+2.  X̄_1 = X_0  + 0.125 · v_0                  (free, no network call)
+    X̄_2 = X̄_1 + 0.125 · v_1                  (free, no network call)
+3.  stop-gradient on X̄_2
+4.  ask the TEACHER for the right velocity at X̄_2, time t = 0.25
+5.  loss = ‖ v_2 − teacher_velocity(X̄_2) ‖²
+
+cost per training step = 1 student pass + 1 or 2 teacher passes</pre>
+
+<p>Head 2 is being told: <em>given where heads 0 and 1 actually dragged us, say what the teacher would say
+there.</em> The heads are trained along the student's own trajectory, so their errors stay consistent with
+each other instead of piling up.</p>
+
+<ul>
+  <li><b>Why stop-gradient?</b> Otherwise the gradient flows back through v_1, v_0 and the whole chain —
+  expensive and unstable. With it, each head is a plain independent regression.</li>
+  <li><b>Why only one k per iteration?</b> Building X̄_k is free, but teacher calls are not. Sampling one
+  random k costs 1–2 teacher passes instead of L. Over many iterations every head gets trained.</li>
+  <li><b>Why that still teaches the whole block.</b> All heads share the backbone, so the gradient from head
+  k also improves the features heads 0, 1, 3 read from. The paper argues these gradients recover the
+  full-interval mean-velocity signal <em>in expectation</em> — which is how it avoids ever differentiating
+  the velocity field.</li>
+  <li><b>Data-free.</b> For the big models they never touch a real image or video. Only text prompts. The
+  student rolls out its own trajectory online and the teacher supervises point by point.</li>
+  <li><b>Variable NFE for free.</b> L is sampled between L_min and L_max during training, so <em>one</em>
+  trained model samples at 2, 4, or 8 steps with no retraining.</li>
+</ul>
+
+<h3>Results</h3>
+
+<p><b>Qwen-Image 20B, text-to-image</b> — teacher uses 50 steps × 2 (CFG) = 100 calls:</p>
+<table>
+  <tr><th>Method</th><th>NFE</th><th>OneIG-EN ↑</th><th>DPG-Bench ↑</th><th>GenEval ↑</th></tr>
+  <tr><td>Teacher (Euler)</td><td>50×2</td><td>0.537</td><td>88.30</td><td>0.86</td></tr>
+  <tr><td>DMD2-Lightning</td><td>4</td><td>0.524</td><td>88.25</td><td>0.85</td></tr>
+  <tr><td><b>PDD-Midpoint</b></td><td><b>4</b></td><td><b>0.538</b></td><td><b>88.66</b></td><td><b>0.86</b></td></tr>
+  <tr><td>DMD2-Lightning</td><td>8</td><td>0.526</td><td>88.20</td><td>0.84</td></tr>
+  <tr><td><b>PDD-Midpoint</b></td><td><b>8</b></td><td><b>0.541</b></td><td>88.46</td><td>0.85</td></tr>
+</table>
+<p>At 4 calls PDD already matches the 100-call teacher on prompt following.</p>
+
+<p><b>The diversity story</b> — this is the paper's real point:</p>
+<table>
+  <tr><th>Method</th><th>NFE</th><th>HPSv2 ↑</th><th>PickScore ↑</th><th>OneIG Diversity ↑</th></tr>
+  <tr><td>Teacher</td><td>50×2</td><td>30.83</td><td>22.78</td><td>0.200</td></tr>
+  <tr><td>DMD2-Lightning</td><td>4</td><td><b>32.34</b></td><td><b>22.98</b></td><td>0.095</td></tr>
+  <tr><td>PDD-Midpoint</td><td>4</td><td>31.33</td><td>22.86</td><td><b>0.174</b></td></tr>
+  <tr><td>DMD2-Lightning</td><td>8</td><td><b>32.35</b></td><td>22.95</td><td>0.109</td></tr>
+  <tr><td>PDD-Midpoint</td><td>8</td><td>31.56</td><td>22.86</td><td><b>0.181</b></td></tr>
+</table>
+<p>Read honestly: <b>DMD2 wins on human-preference scores</b>, but its diversity is about half of PDD's. It
+makes one very pretty picture per prompt. PDD stays close to the teacher (0.181 vs 0.200).</p>
+
+<p><b>Wan2.1 1.3B, text-to-video, VBench:</b></p>
+<table>
+  <tr><th>Method</th><th>NFE</th><th>Overall ↑</th><th>Quality ↑</th><th>Semantic ↑</th><th>Motion (VideoMAE L2) ↑</th></tr>
+  <tr><td>Teacher (UniPC)</td><td>50×2</td><td>83.77</td><td>84.90</td><td>79.22</td><td>27.07</td></tr>
+  <tr><td>rCM</td><td>4</td><td>84.43</td><td>85.38</td><td>80.63</td><td>—</td></tr>
+  <tr><td>AnyFlow</td><td>4</td><td>84.45</td><td>85.22</td><td><b>81.34</b></td><td>19.88</td></tr>
+  <tr><td>DMD2 (FastGen)</td><td>4</td><td>84.69</td><td>86.14</td><td>78.87</td><td>21.83</td></tr>
+  <tr><td><b>PDD-Midpoint</b></td><td><b>4</b></td><td><b>84.94</b></td><td><b>86.45</b></td><td>78.91</td><td><b>24.63</b></td></tr>
+</table>
+
+<p><b>Wan2.1 14B:</b> PDD-Midpoint at 4 NFE reaches 84.92 overall (teacher 83.90) after only
+<b>200 training iterations</b>. <b>LTX-2.3 (22B, 10s, 720p, video+audio):</b> good generations at 8 NFE after
+<b>~250 iterations</b>, on par with or better than the official distilled model — against a teacher that needs
+4×30 = 120 calls, so roughly <b>15× fewer network calls</b>.</p>
+
+<p><b>ImageNet-256 (SiT-XL+REPA), 1 step:</b> FID 2.69 (Midpoint) / 2.73 (Euler), better than Pi-Flow (2.85)
+but <b>worse than FreeFlow (1.45)</b>. PDD does not win the small 1-step academic benchmark; its case is made
+on the large text-to-image and video models at 4–8 steps.</p>
+
+<h3>Ablations worth remembering</h3>
+<ul>
+  <li><b>Midpoint beats Euler everywhere.</b> Two teacher calls per training step instead of one, and it
+  estimates the interval <em>average</em> velocity rather than the instantaneous one. Worth the cost.</li>
+  <li>The two hyperparameters that matter most are the <b>time reparameterization (shift)</b> and the
+  <b>batch size</b>. Big batches matter.</li>
+  <li>For Wan they <b>skip one backbone layer for the unconditional CFG branch</b> (layer 10 for 1.3B, layer
+  12 for 14B), which improved guidance.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>1. X versus v — the thing to get straight first</h3>
+<p><b>X is where you are. v is which way you move.</b> Same tensor shape, completely different role.</p>
+<table>
+  <tr><th></th><th>what it is</th><th>meaning</th></tr>
+  <tr><td>X_k</td><td>a <b>state</b>, a point</td><td>the noisy picture at time t_k</td></tr>
+  <tr><td>v_k</td><td>a <b>velocity</b>, an arrow</td><td>direction + speed to move during [t_k, t_k+1]</td></tr>
+</table>
+
+<pre class="calc">X_0 --v_0--> X_1 --v_1--> X_2 --v_2--> X_3 --v_3--> X_4
+
+tiny example (pretend an image is 2 numbers, step = 0.125):
+  X_0 = [ 1.0, -2.0 ]     v_0 = [ 4.0, 8.0 ]
+  X_1 = X_0 + 0.125·v_0 = [ 1.5, -1.0 ]
+  v_1 = [ 2.0, 8.0 ]
+  X_2 = X_1 + 0.125·v_1 = [ 1.75, 0.0 ]</pre>
+
+<p>Watch the index: <b>v_1 is not "the velocity of X_1"</b>. It is the arrow <em>used at</em> X_1, which lands
+you on X_2. And in PDD it is <em>computed from X_0</em>, not from X_1. That mismatch is the whole method.</p>
+
+<h3>2. Classical decoding vs parallel decoding</h3>
+
+<p><b>Classical (the teacher).</b> One network call = one step. The network must be <em>fed</em> X_3 before it
+can say the direction at X_3. Strictly sequential.</p>
+<pre class="calc">X_0 -[CALL 1]-> X_1 -[CALL 2]-> X_2 -[CALL 3]-> X_3 -[CALL 4]-> X_4
+    -[CALL 5]-> X_5 -[CALL 6]-> X_6 -[CALL 7]-> X_7 -[CALL 8]-> X_8
+
+8 steps  →  8 network calls</pre>
+
+<p><b>PDD, L = 4.</b> One network call = L steps. One look at X_0, four arrows out.</p>
+<pre class="calc">                one look at X_0
+                      |
+      +-------+-------+-------+
+      v       v       v       v
+     v_0     v_1     v_2     v_3       ← 4 directions at once
+      \       |       |       /
+       +------+---+---+------+
+                  v
+X_0 -[CALL 1]------------------> X_4
+X_4 -[CALL 2]------------------> X_8
+
+8 steps  →  2 network calls</pre>
+
+<div class="keypt">
+<b>Where the efficiency comes from, exactly:</b> <code>classical = N calls</code>, <code>PDD = N/L calls</code>.
+The network is a 14B–22B transformer, so one call dominates everything. Adding vectors and the fused linear
+layer are basically free. Cutting 8 calls to 2 cuts wall-clock by about 4×. LTX-2.3: 120 calls → 8.
+</div>
+
+<h3>3. The word "parallel" is not about GPUs</h3>
+<p>It does not mean more devices, or several samples at once. It means <b>several future denoising steps are
+decoded from one forward pass</b> — the same shape as speculative / multi-token decoding in an LLM
+(Medusa-style heads), where extra heads guess the next few tokens the model has not seen yet. Here they guess
+the next few denoising directions.</p>
+
+<div class="qa">
+<div class="q">Why different heads? Why not one head applied L times?</div>
+<p>One head reading H(X_0) gives the <em>same</em> vector every time, so <code>X_4 = X_0 + 0.5·v</code> — a
+single big Euler step, a straight line. The noise-to-image path is <b>curved</b>, so you cut the corner and
+land off it. L different heads draw a 4-segment polyline that can bend and follow the curve. Same cost, much
+better shape.</p>
+</div>
+
+<div class="qa">
+<div class="q">Then why not just run the network L times with the same head?</div>
+<p>You could — that <em>is</em> the teacher. It costs L network calls, which is exactly the slowness being
+attacked. The whole point is 1 call per block instead of L.</p>
+</div>
+
+<div class="qa">
+<div class="q">Are the L outputs X_n+1, X_n+2, X_n+3 …?</div>
+<p>No. They are the sub-intervals <b>inside</b> block n. Only their <em>sum</em> connects X_n to X_n+1:</p>
+<pre class="calc">X_n+1 = X_n + Δt·(v_0 + v_1 + v_2 + v_3)</pre>
+<p>n indexes blocks, k indexes positions within a block. At inference the intermediate states X̄_1, X̄_2, X̄_3
+are <b>never built</b> — you just add the arrows. They only exist during <em>training</em>, where you need them
+so you can ask the teacher "what is the right arrow at this exact spot?"</p>
+</div>
+
+<h3>4. The obvious objection, and the answer</h3>
+<p><em>"Why not just take 2 big steps with the original teacher? That is also 2 calls."</em></p>
+<pre class="calc">true path (curved):     X_0 ..----..
+                                  '.
+                                    '..____ X_8
+
+teacher, 2 big steps:   X_0 --------------->   straight, cuts the corner, lands off
+
+PDD, 2 calls:           X_0 --\
+                               \--\
+                                   \--\____   4 bends per call, follows the curve</pre>
+<p>Asked at X_0, the teacher reports the direction <b>at that exact point</b>. Move 0.5 along it and you fly
+off the curve. PDD's heads answer a different question: <em>from X_0, what are the four directions that keep
+you on the curve?</em> Head 1 reports the direction at a point it has never seen, because in training it was
+regressed against the teacher's answer at that future point.</p>
+
+<div class="callout">
+<b>Split the two things.</b> The <b>speed</b> comes purely from making N/L times fewer calls. The
+<b>quality</b> comes from training the heads to fill in the shape between calls. Both cost nothing extra at
+run time.
+</div>
+
+<h3>5. Why the training is so cheap</h3>
+<pre class="calc">PDD           :  1 student pass + 1–2 teacher passes per step
+trajectory RL :  full teacher rollout
+VSD / DMD2    :  student + second trainable "fake score" net + discriminator</pre>
+<p>That is why 200 iterations were enough for Wan 14B and ~250 for LTX-2.3 22B. Simple regression also means
+no adversarial balancing act — the paper reports stable convergence across hyperparameters, which is the
+actual selling point over GAN/VSD, more than the raw numbers.</p>
+
+<h3>6. Why the diversity gap is the interesting result</h3>
+<p>VSD and adversarial losses push the student toward <em>high-likelihood</em> outputs. That is why DMD2 wins
+HPSv2 and PickScore — those metrics reward one polished image. It is also exactly why diversity halves: the
+student collapses onto the modes the reward likes. In video this shows as <b>less motion</b>, which is the
+VideoMAE/V-JEPA columns.</p>
+<p>PDD regresses onto the teacher's own trajectory, so it inherits the teacher's spread by construction. It
+is a <b>trajectory-matching</b> method, not a reward-maximizing one.</p>
+
+<h3>7. Limitations</h3>
+<div class="warn">
+<ul>
+  <li><b>Loses on human preference.</b> DMD2 is a point ahead on HPSv2 at both 4 and 8 NFE. The paper's
+  defence is that this is bought with mode collapse, which is fair, but if you only ship one image per prompt
+  the user may not care.</li>
+  <li><b>Not the winner on ImageNet 1-step.</b> FreeFlow's 1.45 FID beats PDD's 2.69 by a wide margin. The
+  method's case rests on the large-model regime.</li>
+  <li><b>N heads is N extra output matrices during training.</b> With N = 256 for video and a 22B model, the
+  memory cost of the head bank is not discussed in detail. It vanishes at inference, but training-time cost
+  is real.</li>
+  <li><b>No ablation on the loss itself.</b> No "without stop-gradient" row, no comparison of teacher
+  approximation order beyond Euler vs Midpoint, no isolation of what the shared backbone actually contributes
+  versus the heads.</li>
+  <li><b>Still teacher-bounded.</b> Trajectory distillation can at best reach the teacher. It cannot exceed
+  it, which reward-based distillation sometimes appears to do on preference metrics.</li>
+</ul>
+</div>
+
+<h3>8. Where it sits</h3>
+<table>
+  <tr><th></th><th>Loss</th><th>Needs JVP / finite diff?</th><th>Variable NFE?</th><th>Diversity</th></tr>
+  <tr><td><b>PDD</b></td><td>single MSE</td><td>no</td><td>yes, post-hoc</td><td>near teacher</td></tr>
+  <tr><td>DMD2 / VSD</td><td>adversarial + score</td><td>no</td><td>fixed</td><td>collapsed</td></tr>
+  <tr><td>MeanFlow / flow maps</td><td>MSE on mean velocity</td><td><b>yes</b></td><td>yes</td><td>—</td></tr>
+  <tr><td>Pi-Flow</td><td>single loss</td><td>no</td><td>fixed</td><td>—</td></tr>
+</table>
+<p>The closest relative is MeanFlow: same goal of learning a mean velocity, but MeanFlow gets there by
+differentiating the velocity field, which is fragile and expensive. PDD's move is to <b>decompose the mean
+velocity into L parallel sub-interval predictions instead of differentiating it</b> — a discrete
+reformulation of the same quantity that needs only forward passes.</p>
+</section>
+
+</body>
+</html>

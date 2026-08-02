@@ -102,6 +102,29 @@ const BLOG = {
     },
 
     {
+      id: "fast-generation",
+      name: "Fast Generation",
+      blurb: "Few-step image and video generation — distilling diffusion/flow models down to a handful of network calls.",
+      notes: [
+        {
+          title:   "Parallel Decoding Distillation — one network call for several denoising steps",
+          file:    "posts/pdd-parallel-decoding-distillation.html",
+          date:    "2026-08-02",
+          paper:   "Shaul, Liu, Vahdat & Berner (NVIDIA) · arXiv:2607.26004",
+          tags:    ["distillation", "flow matching", "few-step sampling", "video generation", "diversity"],
+          summary: "Classical decoding needs one full network call per denoising step, because the model must be fed X_k before it can say the direction at X_k. PDD copies the final linear layer N times so one look at X_n emits the velocities for the next L steps at once — including steps whose states do not exist yet — and the speedup is exactly N/L calls. The L heads are linear on the same features, so they pre-add offline into one matrix: a PDD call costs the same as a teacher call. Training is one student pass plus 1–2 teacher passes: walk forward inside the block with the student's own arrows (free, no network calls), stop-gradient, ask the teacher for the right velocity at one random position, MSE. No GAN, no VSD, no JVP. Covers the X-vs-v distinction, why L different heads beat one head used L times (a curved path vs a straight big Euler step), why running the network L times IS the teacher, and why DMD2 wins HPSv2 while collapsing diversity to half of PDD's. 4 NFE matches the 100-call Qwen-Image teacher; Wan 14B after 200 iterations; LTX-2.3 at 8 NFE vs the teacher's 120.",
+        },
+      ],
+      papers: [
+        {
+          name:    "Parallel Decoding Distillation for Fast Image and Video Generation",
+          link:    "https://arxiv.org/abs/2607.26004",
+          summary: "NVIDIA. Trajectory-based distillation that replaces VSD/adversarial losses with a single MSE regression. Discretizes the sampling path into N intervals grouped into blocks of size L; the student reuses the teacher backbone with the final linear layer repeated N times, so one forward pass on X_n yields mean velocities for every interval in the block, and at inference the L heads fuse into a single averaged linear layer (zero overhead per call, N/L fewer calls). Learns the mean velocity without ever regressing its derivative — no JVPs, no finite differences — by decomposing the full interval into parallel sub-intervals and supervising one random sub-interval per iteration, since gradients through the shared backbone recover the full-interval signal in expectation. Training costs 1 student pass + 1 (Euler) or 2 (Midpoint) teacher passes, is data-free (prompts only), and sampling variable block sizes gives one model that runs at 2/4/8 NFE without retraining. Results: Qwen-Image 20B at 4 NFE matches the 100-call teacher (OneIG 0.538, DPG 88.66); Wan2.1 1.3B best VBench overall at 4 NFE (84.94) with the highest motion score; Wan 14B after 200 iterations; LTX-2.3 22B at 8 NFE after ~250 iterations vs a 120-call teacher. The headline finding is diversity — OneIG diversity 0.181 vs DMD2's 0.109 (teacher 0.200) — though DMD2 still leads on HPSv2/PickScore, and on ImageNet-256 1-step PDD's 2.69 FID trails FreeFlow's 1.45.",
+        },
+      ],
+    },
+
+    {
       id: "vla",
       name: "VLA/VWA",
       blurb: "Vision-language-action policies — training, RL, decoding, and masking.",
