@@ -155,5 +155,15 @@ const BLOG = {
         { name:"AdaJEPA — An Adaptive Latent World Model", link:"https://arxiv.org/abs/2606.32026", summary:"Adapts the latent world model at test time inside the MPC loop: plan, act, use the observed transition as a self-supervised signal, re-plan. One gradient step per replan on the last layers of encoder and predictor substantially improves goal-reaching under visual and dynamics shift, with no extra demonstrations." },
       ],
     },
+
+    {
+      id: "spatial-intelligence",
+      name: "Spatial Intelligence",
+      blurb: "How MLLMs perceive and reason about 3D structure — diagnostic benchmarks, occlusion, counting, mental rotation.",
+      notes: [],
+      papers: [
+        { name:"Spatial-IQ — Deconstructing Spatial Intelligence via Hierarchical Capability Tests", link:"https://arxiv.org/abs/2607.22864", summary:"NVIDIA. Takes one task — count every object in a stack of blocks, including the hidden ones that must be there to support the visible ones — and splits it into 9 sub-tasks ordered by the developmental stages of human spatial cognition (Piaget &amp; Inhelder): individuate objects, group them, count columns and layers (S1–S4), count visible objects (S5), identify the top layer, direct support, and supporting columns (S6–S8), count hidden objects (S9), then the targets T1 Object Counting and T2 Mental Rotation. ~80k scenes generated in Isaac Sim 5.1 on a 4×4×4 voxel grid with four object types; hidden-object ground truth comes from a pixel-level depth-buffer occlusion test that keeps an object only if it is camera-visible or physically required to hold up a retained object above it, so every hidden count is forced by support rather than guessed. 3k evaluation scenes, 68k disjoint training scenes, three response modalities (free text, image-option MCQ, image editing). Result: humans 82.1% on Object Counting, best of 8 frontier text models 17.7%, worst 2.1%; in 5-choice MCQ every model collapses to chance (~20%) against 86.2% human. The real finding is that the headline number hides the mechanism — Qwen (17.7%) combines its own visible+hidden counts correctly 64.2% of the time, close to the human 69.1%, while Gemini scores a comparable 14.8% with only 18.6% consistency, i.e. it reaches the total by a route that bypasses the decomposition. Errors are systematic: phantom block above the top layer, two columns merged into one, adjacent visible blocks merged or dropped. As training signal: SFT on the integer alone drives hierarchy preservation to 0%, SFT with hierarchical CoT lifts Qwen2.5-VL 32B from 2.9% → 46.7%, and a 10%-SFT warmup followed by GRPO/DAPO RLVR reaches 62.6% — with reward on the final integer only, so the gain is sharpening onto CoT trajectories that land on correct totals, not new sub-task supervision. Still 20 points under human." },
+      ],
+    },
   ],
 };
