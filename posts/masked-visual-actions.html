@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Masked Visual Actions — Unified World Modeling — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Masked Visual Actions for Unified World Modeling</h1>
+<p class="paper-meta">Paper: Alzayer, Huang, Chen, Luey, Zhang, Agrawala, Wetzstein, Fei-Fei, Du, Wu &amp; Huang
+(Stanford · UMD · Harvard), July 2026, <a href="https://arxiv.org/abs/2607.19343">arXiv:2607.19343</a> ·
+<a href="https://masked-visual-actions.github.io">project page</a>.
+Short note — the key points from working through it, in plain words.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>The idea in one line.</b> Don't tell the video model the action with numbers. <b>Draw it.</b>
+The action is the robot arm painted onto the video, in the right pixels, in every frame. Everything
+else is gray. That gray video with an arm in it <em>is</em> the command.</p>
+
+<p>Then one small change gives you two models for free. Reveal the <b>robot</b> pixels and the model
+fills in the scene — a forward model. Reveal the <b>object</b> pixels and the same model fills in the
+robot — an inverse model. Same weights, same input format, only the mask changes.</p>
+
+<div class="mermaid">
+flowchart LR
+  I["reference first frame<br/>(full color)"] --> M["Wan-Fun-Control 2.2 14B<br/>+ LoRA rank 256"]
+  A["masked video<br/>(only some pixels shown,<br/>rest flat gray)"] --> M
+  M --> V["full video<br/>all pixels filled in"]
+</div>
+
+<h3>What goes in</h3>
+<pre class="calc">INPUT
+  reference frame I0   — the scene as it is now, full color
+  masked video M ⊙ V   — the revealed entity, drawn in place, every frame
+                         everything else = uniform gray
+  text prompt          — kept deliberately high-level, so the model
+                         must rely on the mask, not the words
+
+OUTPUT
+  the whole video V — the model paints back what it cannot see
+
+CONDITIONING = plain concatenation in latent space
+  (fine, because the mask is already lined up with the output pixels)</pre>
+
+<p><b>Training.</b> ~1,000 DROID demos (both external cameras) + 4,000 RoboCasa examples —
+about <b>15 hours</b>. LoRA rank 256 only, 10k steps, 8×H200, 4 days. <b>Failure trajectories are kept
+on purpose</b>, so the model can show an attempt that goes wrong instead of always succeeding.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Key Notes</h2>
+
+<h3>1. Two ways to make the mask, and they are complementary</h3>
+
+<table>
+  <tr><th></th><th>Segmentation</th><th>Rendering</th></tr>
+  <tr><td>How</td><td>SAM on a real video, prompt "a robotic arm"</td><td>recorded joint angles + camera calibration → render the URDF mesh</td></tr>
+  <tr><td>Good</td><td>no calibration, any robot, can mask <em>any</em> entity</td><td>you can draw an action that has not happened yet</td></tr>
+  <tr><td>Bad</td><td>you can't hand-draw one at test time; the cut-out shape leaks what was behind the arm</td><td>needs calibration, and can only draw the robot</td></tr>
+</table>
+
+<p>Two rendering details that matter: the mesh is drawn <b>translucent</b> so the arm never hides itself,
+and the <b>gripper fingers are painted bright red</b> so open-vs-closed is easy to see.</p>
+
+<div class="callout">
+The rendering path is the one that makes this usable as a simulator. To ask "what if the arm did
+<em>this</em> instead?", you need to be able to <em>produce</em> the condition — and a URDF render of any
+joint trajectory gives you exactly that.
+</div>
+
+<h3>2. Forward and inverse are the same model, different mask</h3>
+
+<p>Split the scene into two roles:</p>
+<ul>
+  <li><b>active</b> — moves by its own agency (robot arm, human hand)</li>
+  <li><b>passive</b> — moves only because something pushed it (the mug, the drawer)</li>
+</ul>
+
+<pre class="calc">FORWARD :  show the ACTIVE  pixels  →  model fills in the PASSIVE
+           "the arm moves like this — what happens to the scene?"
+
+INVERSE :  show the PASSIVE pixels  →  model fills in the ACTIVE
+           "I want the mug to move like this — what must the arm do?"</pre>
+
+<div class="keypt">
+<b>Why this is allowed.</b> A video model already learns the joint story of everything in the scene,
+p(e₁, e₂, …, eₙ). Hiding a subset just asks for a conditional of that same joint. Forward and inverse
+are not two models — they are two <em>questions</em> to one model. Same trick as BERT, moved from words
+to pixels.
+</div>
+
+<p>The model itself never learns the words "active" and "passive". It only learns <em>fill in the gray</em>.
+The active/passive split is how the humans choose to use it, not a property of the network.</p>
+
+<h3>3. The zero-shot inverse result is the surprise</h3>
+
+<p>They trained <b>only</b> on masks showing the robot. Not one inverse example. Yet at test time you can
+flip it, condition on the object, and it works. The paper says plainly that they expected to need inverse
+finetuning and did not.</p>
+
+<p>Their reading: the condition lives in the same space the model already thinks in, so inverse is not a
+new <em>task</em> — only a new <em>query</em>.</p>
+
+<p>To actually run it on a robot: inverse model makes a video of the arm → a small learned
+inverse-dynamics model reads that video → joint commands. On C<span style="font-variant:small-caps">offee</span>S<span style="font-variant:small-caps">erve</span>M<span style="font-variant:small-caps">ug</span> in RoboCasa:</p>
+
+<pre class="calc">Diffusion Policy   50%
+ACT                80%
+SmolVLA            85%
+Ours (inverse)     90%     ← and the video model never saw this task</pre>
+
+<h3>4. Why a dense mask beats a sparse signal</h3>
+
+<p>The real answer is <b>where the learning work has to happen</b>.</p>
+
+<table>
+  <tr><th>Signal</th><th>What the model must still figure out by itself</th></tr>
+  <tr><td>raw joint angles (7 numbers)</td><td>forward kinematics + what this robot <em>looks like</em> + contact + scene response</td></tr>
+  <tr><td>end-effector marker</td><td>the rest of the arm + contact + scene response</td></tr>
+  <tr><td>skeleton stick figure</td><td>the arm's real shape and thickness + contact + scene response</td></tr>
+  <tr><td><b>masked visual action</b></td><td><b>only: how does the scene react to these moving pixels</b></td></tr>
+</table>
+
+<p>With a sparse signal the model must learn a translator: <em>sparse code → robot appearance → contact →
+result</em>. It can only learn that translator from the robots in 15 hours of data. So it quietly memorizes
+"skeleton shaped like this ⇒ draw a Franka with the standard gripper".</p>
+
+<div class="keypt">
+The dense mask <b>deletes the translator</b>. Appearance is handed over, not predicted. What's left to
+learn is contact and reaction — which is exactly what a pretrained video model already knows from
+internet video. Less to learn, and the leftover part is already covered by the prior. That is why 15
+hours and a LoRA are enough.
+</div>
+
+<h3>5. The ablation is the proof, and the first row is the important one</h3>
+
+<pre class="calc">Same robot, same domain (DROID)        LPIPS ↓
+  end-effector vis.   0.107
+  skeleton vis.       0.106
+  masked actions      0.0945     ← basically tied. sparse is FINE here.
+
+Same Franka, custom 3D-printed gripper   PSNR ↑
+  end-effector vis.   20.32
+  skeleton vis.       21.02
+  masked actions      22.79      ← baselines bend the robot back
+                                   into the training gripper
+
+Unseen bimanual R1-Pro (BEHAVIOR)        PSNR ↑
+  Ctrl-World (raw state)  18.39   ← static or corrupted video
+  end-effector vis.       19.23
+  skeleton vis.           19.58   ← both collapse / distort the robot
+  masked actions          22.90</pre>
+
+<p>Read the first block carefully. <b>In-domain, sparse conditioning is not worse at all.</b> The gap only
+opens once you leave the training distribution. So the failure of sparse signals is not a fidelity
+failure — it is a <b>generalization failure of the learned translator</b>. Masked actions have no
+translator to fail.</p>
+
+<h3>6. What it is used for</h3>
+
+<table>
+  <tr><th>Use</th><th>How</th><th>Result</th></tr>
+  <tr><td><b>Policy evaluation</b></td><td>roll a policy out inside the video model, score the imagined video</td><td>r = 0.982 with real success rate across RoboCasa tasks</td></tr>
+  <tr><td><b>Planning</b></td><td>sample 10 trajectories from Diffusion Policy, simulate each, let Gemini 3.1 Pro pick the best</td><td>+7 to +26 points across six tasks; keeps improving with N</td></tr>
+  <tr><td><b>Action extraction</b></td><td>inverse model → video of the arm → learned IDM → joint commands</td><td>90% vs 50/80/85 for DP / ACT / SmolVLA</td></tr>
+</table>
+
+<p>The planning setup is test-time scaling in disguise: <b>policy + video model = generator, VLM = verifier</b>.
+The VLM prompt is worth noting — it is told to punish three specific world-model lies: ghost contact
+(gripper near but not touching), post-disengagement coasting (object keeps moving after the arm pulls
+back), and frame-jump glitches (the goal state just teleports in). The JSON schema forces the model to
+commit to the <em>causal mechanism</em> before the success flag, so the verdict is anchored on process,
+not on the last frame.</p>
+
+<h3>7. Limitations</h3>
+<div class="warn">
+<ul>
+  <li><b>Correlation, not causation</b> — their own stated limit. It has not learned physics, it has
+  learned what usually follows what.</li>
+  <li><b>Imagination is optimistic.</b> The correlation with reality is excellent, but the video model
+  reports <em>higher</em> success than reality, in both sim and real. Good for <em>ranking</em>
+  trajectories; risky as an absolute score.</li>
+  <li><b>Speed.</b> It is a 14B video diffusion model. Fine for offline Best-of-N, not for a control loop.</li>
+  <li><b>Calibration.</b> The "just segment anything" freedom is real in the training pipeline, but the
+  rendering path — the one you need at test time — still wants camera calibration.</li>
+  <li><b>Capped by the base model.</b> The method re-purposes the video prior rather than extending it.</li>
+</ul>
+</div>
+
+<h3>8. Where it sits</h3>
+<table>
+  <tr><th></th><th>How the action is given</th><th>Forward?</th><th>Inverse?</th><th>Crosses embodiments?</th></tr>
+  <tr><td><b>Ctrl-World</b></td><td>raw end-effector state</td><td>yes</td><td>no</td><td>no — collapses</td></tr>
+  <tr><td><b>UVA / UWM / X-WAM</b></td><td>mask over <em>modality channels</em> (action vector vs video)</td><td>yes</td><td>yes</td><td>no — actions stay low-dim vectors</td></tr>
+  <tr><td><b>Masked Visual Actions</b></td><td>mask over <em>space</em> — pixels on one canvas</td><td>yes</td><td>yes, zero-shot</td><td>yes</td></tr>
+</table>
+
+<p>That middle row is the sharp comparison. Other unified models also mask, but they mask <em>channels</em>,
+so the forward/inverse switch works while the embodiment gap stays. Masking <b>spatially</b> puts the
+active and the passive entity on the same canvas — so the one switch buys both.</p>
+
+<div class="callout">
+<b>In one line.</b> Masked visual actions turn the action into a picture of the robot drawn on the video
+itself, so the model only has to learn contact and reaction instead of also learning what each robot looks
+like — and because it is just masked fill-in, flipping which pixels you reveal turns the same checkpoint
+from a forward model into an inverse model for free.
+</div>
+</section>
+
+</body>
+</html>
