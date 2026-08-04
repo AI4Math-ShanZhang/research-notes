@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BagelVLA — Interleaved Vision-Language-Action Generation — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table.res{ border-collapse:collapse; margin:1rem 0; font-size:.9rem; width:100%; }
+  table.res th, table.res td{ border:1px solid #dde3ea; padding:.35rem .6rem; text-align:center; }
+  table.res th{ background:#f4f7fa; }
+  table.res td.l, table.res th.l{ text-align:left; }
+  table.res tr.best td{ font-weight:700; background:#f2fbf6; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>BagelVLA — Enhancing Long-Horizon Manipulation via Interleaved Vision-Language-Action Generation</h1>
+<p class="paper-meta">Paper: Yucheng Hu et al., February 2026,
+<a href="https://arxiv.org/abs/2602.09849">arXiv:2602.09849</a> ·
+<a href="https://cladernyjorn.github.io/BagelVLA.github.io/">project page</a>.
+Note from working through it — focused on Figure 3 (the three dual-denoising schemes) and how the language
+step is actually scheduled at run time.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>The problem.</b> Most VLAs learn a direct map from instruction to action. That breaks on long-horizon
+jobs, because one instruction — <em>"stack the cubes red → yellow → blue → green"</em> — silently contains a
+chain of separate stages. The policy has no place to record which stage it is in.</p>
+
+<p><b>The move.</b> Don't compress the chain. Write it out. BagelVLA factorizes the task into three
+generations that happen <b>in order, in one token sequence</b>:</p>
+
+<pre class="calc">p(a_t, v_t+k, l_t | v_t, L)  =  p(l_t   | v_t, L)              ← 1. subtask TEXT
+                              · p(v_t+k | v_t, L, l_t)         ← 2. goal IMAGE
+                              · p(a_t   | v_t, L, l_t, v_t+k)  ← 3. ACTION chunk
+
+  L    = global instruction        l_t   = the immediate subtask
+  v_t  = current observation       v_t+k = predicted keyframe
+</pre>
+
+<p>Each stage sees everything before it and nothing after. Language is trained with plain cross-entropy;
+the keyframe and the action are each trained with flow matching.</p>
+
+<div class="mermaid">
+flowchart LR
+  A["current view v_t<br/>+ instruction L"] --> B["LLM expert 7B<br/><b>subtask text</b><br/>'pick up the red block'"]
+  B --> C["generation expert 7B<br/><b>goal keyframe</b><br/>gripper holding red block"]
+  C --> D["action expert 2B<br/><b>action chunk</b>"]
+  A --> C
+  A --> D
+  B --> D
+</div>
+
+<p><b>The architecture.</b> A Mixture-of-Transformers: three experts sharing one attention stream, so it is
+one sequence, not three pipelined models. Understanding and generation experts are initialized from
+<b>Bagel</b> and follow Qwen2.5-7B; SigLIP2 encodes views for understanding, the FLUX VAE encodes images for
+generation. The action expert copies the Qwen2.5 shape but shrinks the MLP to 1/5, giving <b>2B</b> — small
+on purpose, so it can be re-run fast.</p>
+
+<h3>Two training stages</h3>
+<pre class="calc">Stage 1 — planning + visual dynamics (no actions at all)
+    2.98M   general VQA pairs        keeps the language ability alive
+    310k    human-hand episodes      visual dynamics from ego video
+    146k    open-source robot eps    language planning + visual dynamics
+    64 A800 · batch ~1600 · 20k steps · lr 1e-5
+
+Stage 2 — action fine-tuning
+    real robot: 3,000 basic-task trajectories (9 skills)
+              + 1,500 long-horizon trajectories
+    subtasks and keyframes MANUALLY annotated
+</pre>
+
+<p>Public datasets without subtask labels (Bridge, EgoDex, AgiBot) get them synthesized by
+<b>Seed-1.5-VL-thinking</b>, which also picks the temporal boundaries, then filtered.</p>
+
+<!-- ============================================================ -->
+<h3>Figure 3 — the three dual-denoising schemes</h3>
+
+<p>Two flow-matching processes run in the same sequence: the generation expert denoises the keyframe, the
+action expert denoises the action chunk. The keyframe is built up over ~50 steps. So the question is
+<b>at which moment does the action expert read the image branch?</b></p>
+
+<div class="callout">
+<b>(a) Complete Denoise.</b> Finish the image completely, then start the action, conditioned on the clean
+picture. Cost is N1 + N2 steps, run back to back. This is the textbook <b>world model + inverse dynamics</b>
+combination — and the paper's own framing is that it is theoretically sound but pays twice and inherits every
+visual error.
+</div>
+
+<div class="callout">
+<b>(b) Joint Denoise.</b> Both denoise in lockstep. At image step 5 the action is also at step 5 and attends
+to the <b>half-noisy</b> image. Cost drops to N steps.
+</div>
+
+<div class="callout">
+<b>(c) Single-Step Denoise.</b> Run the image denoiser for <b>one</b> step, keep only its KV-cache, throw the
+rest away. The action expert conditions on that and denoises alone.
+</div>
+
+<pre class="calc">(a)  image: noise → 1 → 2 → … → 50 → CLEAN PICTURE
+                                          ↓
+     action:                    noise → 1 → … → 10 → actions
+
+(c)  image: noise → 1 → (stop, keep KV-cache)
+                            ↓
+     action:      noise → 1 → … → 10 → actions
+</pre>
+
+<p>On top of (c) they change one thing — where the image noise starts. That is <b>Residual Flow Guidance</b>:</p>
+
+<pre class="calc">naive single-step :  starting noise centered at ZERO           → build the future from nothing
+RFG               :  starting noise centered at CURRENT FRAME  → predict only the CHANGE
+</pre>
+
+<table class="res">
+<tr><th class="l">Dual flow-matching scheme (Calvin ABC-D, single view)</th><th>Latency ↓</th><th>ABC-D ↑</th></tr>
+<tr><td class="l">Complete Denoise</td><td>6.04 s</td><td>2.480</td></tr>
+<tr><td class="l">Joint Denoise</td><td>2.90 s</td><td>2.038</td></tr>
+<tr><td class="l">Single-step Denoise</td><td>1.23 s</td><td>3.345</td></tr>
+<tr class="best"><td class="l">Single-step + RFG &nbsp;<em>(default)</em></td><td>1.23 s</td><td>3.600</td></tr>
+</table>
+
+<p>RFG is free — same 1.23 s, better score — and it reaches good keyframes in ~10 denoising steps instead of
+50, because the model no longer has to redraw the static background.</p>
+
+<h3>Two clocks at inference</h3>
+
+<p>The 7B experts are too slow to run every chunk, so their KV-cache is computed and then <b>reused</b> while
+only proprioception and the 2B action expert update. The approximation is made safe during training by
+<b>randomly replacing the current frame with an older one</b>, teaching the model to act correctly on a stale
+view.</p>
+
+<pre class="calc">OUTER (slow)  fresh image → new subtask → new keyframe → rebuild KV-cache
+INNER (fast)  frozen cache + fresh proprioception → action chunk    ×N
+
+1.2 s per chunk on one RTX 5090 · chunk size 48 → ~40 Hz
+reusing the frozen cache                       → ~72 Hz
+</pre>
+
+<h3>Results</h3>
+
+<table class="res">
+<tr><th class="l">Model</th><th>Calvin ABC-D</th><th>RoboTwin Clean</th><th>RoboTwin Rand.</th></tr>
+<tr><td class="l">π0</td><td>3.648</td><td>46.42</td><td>16.34</td></tr>
+<tr><td class="l">RDT</td><td>—</td><td>34.50</td><td>13.72</td></tr>
+<tr><td class="l">UP-VLA</td><td>4.078</td><td>52.92</td><td>15.16</td></tr>
+<tr><td class="l">VPP</td><td>4.329</td><td>—</td><td>—</td></tr>
+<tr><td class="l">w/o textual planning</td><td>—</td><td>54.00</td><td>19.20</td></tr>
+<tr><td class="l">w/o keyframe forecasting</td><td>3.345</td><td>56.72</td><td>15.92</td></tr>
+<tr class="best"><td class="l">BagelVLA</td><td>4.405</td><td>75.26</td><td>20.87</td></tr>
+</table>
+
+<p>Real-world long-horizon (20 runs per task, AgileX dual-arm) is where the gap opens widest — and the
+hardest difficulty is the clearest signal:</p>
+
+<table class="res">
+<tr><th class="l">Stack Cubes in Requested Order</th><th>Easy</th><th>Middle</th><th>Hard</th><th>Avg SR ↑</th><th>Planning Acc ↑</th></tr>
+<tr><td class="l">π0</td><td>75</td><td>35</td><td>10</td><td>40.0</td><td>55</td></tr>
+<tr><td class="l">VPP</td><td>60</td><td>15</td><td>0</td><td>25.0</td><td>45</td></tr>
+<tr><td class="l">w/o keyframe forecasting</td><td>90</td><td>45</td><td>25</td><td>53.3</td><td>80</td></tr>
+<tr><td class="l">w/o textual planning</td><td>75</td><td>40</td><td>15</td><td>43.3</td><td>70</td></tr>
+<tr class="best"><td class="l">BagelVLA</td><td>95</td><td>65</td><td>60</td><td>73.3</td><td>95</td></tr>
+</table>
+
+<p>On <em>Calculate and Place Symbol Blocks</em> (do the arithmetic, then lay out the answer blocks) the same
+shape holds: 63.3 average versus 31.7 for π0, with 85 planning accuracy. On the 9 basic real-world skills
+run <b>without</b> subtask planning, BagelVLA averages 75.5 versus π0 65.0 and VPP 59.5 — the biggest single
+jump is pick&amp;place on <b>unseen</b> objects, 85 versus 55 and 45.</p>
+
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="keypt">
+<b>The ranking in Table 4 says something the paper doesn't quite say out loud.</b>
+The more the action depends on the actual generated image, the worse it does. Complete Denoise uses the
+finished picture and loses. Joint Denoise uses noisy pictures and loses harder. Single-step uses no picture at
+all and wins by a wide margin.
+</div>
+
+<p>Their explanation is domain shift: Calvin ABC→D changes scene colors, generated intermediate states go
+out of distribution, and the action expert is dragged down with them. That is convincing. But follow it
+through and the visual branch here is not really working as a world model the policy consumes. It is working
+as a <b>training objective and a feature extractor</b>. The action never sees the future frame.</p>
+
+<p>Which reframes the contribution. "Predict the future and act toward it" is the story; "let a generative
+branch shape the representation, then read it before it renders anything" is the mechanism. Same family as
+WorldDiT's trick of backpropagating an RGB loss through shared weights and then deleting the RGB branch at
+run time — different route, same underlying bet.</p>
+
+<div class="qa">
+<div class="q">If the action reads the KV-cache after one step, what is actually in there?</div>
+<p>Not pixels. One step out of fifty removes almost nothing, so the latent is still noise. But those noisy
+image tokens have <b>attended to</b> the instruction, the current view, and the subtask. So the cache holds
+something like <em>the intent</em> — "gripper moves left, picks the red block" — in feature space, before any
+paint hits the canvas.</p>
+<p>With RFG the story sharpens: the starting noise is centered on the current frame, so the cache does carry
+real image content — <b>the current observation, never the predicted future one</b>. The paper's own reason
+for RFG &gt; naive is exactly this: one step on pure Gaussian noise gives the action expert too little to stand
+on.</p>
+</div>
+
+<div class="qa">
+<div class="q">Does the language expert plan all the subtasks upfront?</div>
+<p>No — and this is the whole point of the word <em>interleaved</em>. It emits only the <b>immediate</b>
+subtask, conditioned on the <b>current camera view</b>. As the scene changes it emits a new one. If the robot
+drops the block, the next view shows an empty gripper and the model says "pick up the red block" again
+instead of marching on to step 3. A fixed upfront list cannot do that.</p>
+<p>Reusing the same subtask across several action chunks is correct, not a bug: "pick up the red block" takes
+2–3 seconds of motion and one chunk covers well under a second. Re-running a 7B forward pass to regenerate
+the identical sentence would be pure waste.</p>
+</div>
+
+<div class="qa">
+<div class="q">Why is freezing the KV-cache not free, unlike normal LLM caching?</div>
+<p>In text generation the cache is <b>exact</b> — past tokens genuinely never change, so their K/V are
+identical on recompute. Here the first thing in the sequence is the camera image, and the robot is moving.
+Freezing means acting on an old picture. That is a deliberate accuracy-for-speed trade, which is why the
+stale-frame training augmentation exists and why fresh <b>proprioception</b> is fed every chunk. The split
+ends up being: stale but rich (image, subtask, keyframe) versus fresh but thin (joint positions).</p>
+</div>
+
+<h3>What I'd want before trusting it</h3>
+
+<div class="warn">
+<b>1. The re-planning schedule is never specified.</b> The paper describes the async mechanism and quotes
+40 Hz / 72 Hz, but never says what triggers the outer loop — fixed interval? keyframe reached? confidence
+drop? That number decides whether the robot notices a failed grasp in 0.5 s or 5 s, and every long-horizon
+claim leans on it.
+</div>
+
+<div class="warn">
+<b>2. The headline multi-task table doesn't test the headline mechanism.</b> Table 2 is explicitly run
+<em>without</em> subtask planning. So the 75.5 average is evidence for the pretraining and the backbone, not
+for interleaved planning. The paper is upfront about this and attributes it to implicit planning learned in
+Stage 1 — fair, but it means the two headline numbers support two different claims.
+</div>
+
+<div class="warn">
+<b>3. Baseline coverage in Table 1 has holes.</b> RDT has no Calvin number, VPP has no RoboTwin numbers. The
+missing Calvin entry for "w/o textual planning" is explained in the caption (Calvin is single-step, so there
+is nothing to decompose); the other two gaps are not.
+</div>
+
+<div class="warn">
+<b>4. A number that repeats.</b> "w/o keyframe forecasting" scores 3.345 on Calvin in Table 1, and
+"Single-step Denoise (Eq. 2)" scores 3.345 in Table 4 — different settings (Table 4 is single-view, 10k
+steps). Could be coincidence, could be a transcription slip. Worth checking against the appendix tables
+before quoting either.
+</div>
+
+<h3>The one-line version</h3>
+<p>Write the causal chain out instead of compressing it — subtask text, then goal image, then actions, all in
+one attention stream — but read the image branch <b>before it draws anything</b>, so the policy gets the
+planning signal without inheriting the rendering errors.</p>
+
+</section>
+
+</body>
+</html>
