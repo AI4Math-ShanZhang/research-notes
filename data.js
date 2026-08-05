@@ -43,6 +43,14 @@ const BLOG = {
           tags:    ["looped TF", "in-context learning", "gradient descent", "empirical"],
           summary: "The empirical companion: a 1-layer transformer looped ~20× matches a 12-layer one at in-context learning (1/12 the params) by emulating gradient descent — one cheap matmul step, repeated (same family as Newton–Schulz). Covers input injection, the b/T training window, θ-vs-w, in-context learning as meta-learning, the fixed-point / deterministic-Markov view, and the simplicity bias (helps on noise/ill-conditioning, hurts on scaling) with a runnable demo.",
         },
+        {
+          title:   "Looped Transformers as Programmable Computers",
+          file:    "posts/looped-transformers-programmable-computers.html",
+          date:    "2026-08-05",
+          paper:   "Giannou, Rajput, Sohn, Lee, Lee & Papailiopoulos · ICML 2023 · arXiv:2301.13196",
+          tags:    ["looped TF", "expressivity", "Turing complete", "hand-constructed", "positional encoding"],
+          summary: "The constructive anchor: hand-pick 13 layers of weights, loop the output back, and the prompt becomes a punchcard — weights are hardware, prompt is software, depth never grows with program length. Full derivation of the ±1 binary positional code (dot = L − 2D, why 0/1 ties and breaks, why the margin stays exactly 2 as n grows because log n cancels, why λ must grow like log n), why addresses stored as content give you pointers and a program counter, why RoPE cannot do any of it, and a worked compile of read into Q/K/V and of the branch into a ReLU multiplexer. Plus SUBLEQ → FLEQ, softmax-as-sigmoid for computing functions inside attention, and an honest account of what a construction with zero experiments is actually worth.",
+        },
       ],
       papers: [
         {
@@ -64,6 +72,11 @@ const BLOG = {
           name:    "Looped Transformers are Better at Learning Learning Algorithms",
           link:    "https://arxiv.org/abs/2311.12424",
           summary: "Empirically trains a 1-layer looped transformer to emulate iterative learning algorithms (gradient descent) for in-context learning, matching a 12-layer model at 1/12 the parameters via input injection and a truncated loss window.",
+        },
+        {
+          name:    "Looped Transformers as Programmable Computers",
+          link:    "https://arxiv.org/abs/2301.13196",
+          summary: "Giannou et al. (ICML 2023) — the constructive existence proof for this whole category. Hand-derives the weights of a <13-layer transformer so that, run in a loop, it emulates a one-instruction-set computer (SUBLEQ) and then a flexible one (FLEQ): the input is split into scratchpad / memory / commands, one forward pass executes one instruction, and depth stays constant no matter how long the program is. Key machinery: ±1 binary positional codes used simultaneously as address badges, data pointers, and the program counter (self-match log n, every rival at most log n − 2, so a sharpened softmax is an exact lookup); ReLU layers doing binary addition and a branch multiplexer; and softmax squeezed into a sigmoid so attention itself computes nonlinear functions via Barron's sum-of-sigmoids. Runs a calculator, matrix inverse, power iteration, and full backprop+SGD. No training and no experiments — it bounds capacity, not learnability.",
         },
       ],
     },

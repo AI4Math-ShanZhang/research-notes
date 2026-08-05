@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Looped Transformers as Programmable Computers — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take{ background:#fff8ee; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take h4{ margin:.1rem 0 .4rem; color:#b56b00; }
+  .warn{ background:#fdf1f2; border:1px solid #f0c2c8; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .warn h4{ margin:.1rem 0 .4rem; color:#b02a3a; }
+  .mono{ font-family:ui-monospace,Menlo,Consolas,monospace; }
+  pre.box{ background:#f4f7fa;border:1px solid #e0e5ea;border-radius:6px;padding:.7rem 1rem;font-size:.88rem;overflow-x:auto; }
+  table.tbl{ border-collapse:collapse; margin:1rem 0; font-size:.9rem; width:100%; }
+  table.tbl th, table.tbl td{ border:1px solid #e0e5ea; padding:.4rem .7rem; text-align:left; }
+  table.tbl th{ background:#f4f7fa; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Looped Transformers as Programmable Computers</h1>
+<p class="paper-meta">Paper: <em>Looped Transformers as Programmable Computers</em> —
+Giannou, Rajput, Sohn, Lee, Lee &amp; Papailiopoulos, ICML 2023,
+<a href="https://arxiv.org/abs/2301.13196">arXiv:2301.13196</a>.
+The <b>constructive</b> anchor of this category: not "can we train a loop" but "is a loop
+<em>big enough</em>, in principle, to run any algorithm at all."</p>
+
+<!-- ===== TL;DR ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ In one line</h2>
+<p>Hand-pick the weights of a <b>13-layer</b> transformer and feed its output back into its input.
+The input sequence stops being "text" and becomes a <b>punchcard</b>: part program, part memory,
+part scratchpad. Each loop pass executes <b>one instruction</b>. The result is a universal computer
+whose <b>weights are the hardware and whose prompt is the software</b> — and crucially, the depth
+does <em>not</em> grow with the length of the program.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 The setup</h2>
+
+<h3>The input is a punchcard, not a sentence</h3>
+<p>The input matrix <code>X</code> is split into three zones side by side:</p>
+<pre class="box">[  Scratchpad  |  Memory  |  Commands  ]</pre>
+<ul>
+  <li><b>Scratchpad</b> — like a CPU cache. All work happens here. Data is copied in, transformed, copied out.</li>
+  <li><b>Memory</b> — where values live: scalars, vectors, matrices.</li>
+  <li><b>Commands</b> — the lines of code.</li>
+</ul>
+<p>One forward pass = one CPU cycle. To run a 1000-line program you run the same 13 layers 1000 times,
+feeding output back to input. The only thing carrying state between passes is the <b>program counter</b>.</p>
+
+<div class="callout"><b>Why the loop is not optional.</b> Without it, the network's depth would have to
+scale with the number of lines of code. With it, depth is constant and you pay in <b>time</b> instead.
+Total runtime still scales with program length — as complexity theory says it must — but the
+<em>network</em> does not.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🔑 The positional encoding is the whole trick</h2>
+
+<h3>Binary codes written with +1 and −1</h3>
+<p>Each column gets extra rows glued on the bottom (<b>appended</b>, not added):</p>
+<pre class="box">column j  =  [  data        (d rows)      ]
+             [  position code (log n rows) ]</pre>
+<p>The code for column <code>i</code> is the binary form of <code>i</code>, with <b>1 → +1</b> and
+<b>0 → −1</b>. For n = 8 (3 bits, least-significant first):</p>
+<pre class="box">i = 0  →  (0,0,0)  →  p₀ = (−1, −1, −1)
+i = 1  →  (1,0,0)  →  p₁ = (+1, −1, −1)
+i = 2  →  (0,1,0)  →  p₂ = (−1, +1, −1)
+i = 5  →  (1,0,1)  →  p₅ = (+1, −1, +1)
+i = 7  →  (1,1,1)  →  p₇ = (+1, +1, +1)</pre>
+
+<h3>The dot product has an exact formula</h3>
+<p>Each slot of the dot product has only two possible outcomes: <b>+1 if the two signs agree</b>
+(either <code>(+1)(+1)</code> or <code>(−1)(−1)</code>), and <b>−1 if they disagree</b>. So with
+<code>L = log n</code> slots and <code>D</code> of them differing:</p>
+<pre class="box">p_i · p_j  =  (L − D)·(+1)  +  D·(−1)  =  L − 2D</pre>
+<p>Worked out for <code>p₅ = (+1,−1,+1)</code>:</p>
+<pre class="box">p₅ · p₅ :   (+1)(+1) + (−1)(−1) + (+1)(+1)  =  1+1+1 =  3     D=0
+p₅ · p₁ :   (+1)(+1) + (−1)(−1) + (+1)(−1)  =  1+1−1 =  1     D=1
+p₅ · p₀ :   (+1)(−1) + (−1)(−1) + (+1)(−1)  = −1+1−1 = −1     D=2
+p₅ · p₂ :   (+1)(−1) + (−1)(+1) + (+1)(−1)  = −1−1−1 = −3     D=3</pre>
+
+<h3>Why 0/1 codes would break it</h3>
+<p>Keep 1 as 1 but leave 0 as 0, and compare <code>q₃ = (1,1,0)</code> with <code>q₇ = (1,1,1)</code>:</p>
+<pre class="box">q₃ · q₃  =  1·1 + 1·1 + 0·0  =  2
+q₃ · q₇  =  1·1 + 1·1 + 0·1  =  2      ← TIE</pre>
+<div class="take"><h4>A zero bit is invisible</h4>
+With 0/1, a <em>mismatch</em> contributes <code>0</code> — it costs nothing. With ±1, a mismatch
+contributes <code>−1</code> — it actively votes against. That is the entire reason for the sign
+convention. Under 0/1, any address whose 1-bits are a superset of yours ties with you
+(address 1 ties with 3, 5, and 7), and the lookup becomes ambiguous.</div>
+
+<h3>Why the margin is a constant 2, no matter how big n gets</h3>
+<p>Because the <code>log n</code> <b>cancels</b> in the subtraction:</p>
+<pre class="box">winner  =  L − 2·0
+rival   =  L − 2·D        (D ≥ 1, since different numbers differ somewhere)
+
+gap     =  (L − 0) − (L − 2D)  =  2D   ≥  2</pre>
+<p>Watch it survive a jump in n. Compare address 5 against address 1 (they differ in exactly one bit):</p>
+<pre class="box">n = 8, three slots
+  p₅ = ( +1, −1, +1 )
+  p₁ = ( +1, −1, −1 )
+         ✓   ✓   ✗          self = 3,  cross = 1,  gap = 2
+
+n = 1024, ten slots
+  p₅ = ( +1, −1, +1, −1, −1, −1, −1, −1, −1, −1 )
+  p₁ = ( +1, −1, −1, −1, −1, −1, −1, −1, −1, −1 )
+         ✓   ✓   ✗   ✓   ✓   ✓   ✓   ✓   ✓   ✓   self = 10, cross = 8, gap = 2</pre>
+<p>The seven new slots added <b>+1 to the self-score and +1 to the cross-score</b> — they lifted both
+numbers equally. Extra bits are shared context, not evidence. Only the <em>disagreements</em> carry
+information about "is this the right address," and one flipped bit costs a flat <b>2</b> because the
+product jumps the full distance from +1 to −1.</p>
+
+<h3>The temperature still has to grow — but only like log n</h3>
+<p>The margin is constant, but the number of <em>rivals</em> is not: there are n−1 of them, all sharing
+the leftover softmax mass. Worst case:</p>
+<pre class="box">                 e^(λ·L)
+w  =  ------------------------------------  =  1 / ( 1 + (n−1)·e^(−2λ) )
+      e^(λ·L) + (n−1)·e^(λ·(L−2))</pre>
+<table class="tbl">
+<tr><th>n</th><th>λ = 1 (no sharpening)</th><th>λ = 5</th><th>λ = 10</th></tr>
+<tr><td>16</td><td>0.20 leak</td><td>1e−4</td><td>3e−8</td></tr>
+<tr><td>1,024</td><td>broken</td><td>0.046</td><td>2e−6</td></tr>
+<tr><td>1,000,000</td><td>broken</td><td>broken</td><td>2e−3</td></tr>
+</table>
+<p>To get leak below ε you need <code>λ ≥ ½·ln((n−1)/ε)</code> — logarithmic in n, and <b>free</b>,
+because λ is just a scalar folded into the Q or K weight matrix. No extra layer, head, or width.
+The leftover mass is what every lemma's "for any ε &gt; 0" is accounting for.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>📍 Addresses are data — the von Neumann move</h2>
+<p>Normally a positional encoding is a <b>passive name tag</b>: column 5 wears a badge saying "I am 5,"
+and nothing ever touches that badge. Here, the same string of numbers is <b>written into the content of
+other columns</b>:</p>
+<pre class="box">command column 40  =  [ p₅ , p₉ , p₉ , p₂ , ... ]   +  its own badge p₄₀
+                        ↑    ↑    ↑    ↑
+                     read a  read b  write  which
+                                     here   function</pre>
+<p>So <code>(+1,−1,+1)</code> plays two roles at once:</p>
+<ul>
+  <li>glued to column 5 → <b>"I am address 5"</b></li>
+  <li>sitting inside command 40's data → <b>"go fetch address 5"</b></li>
+</ul>
+<div class="callout"><b>Because they are literally the same numbers</b>, you can build the attention query
+straight from the stored copy and it matches the badge exactly. That is a <b>pointer dereference</b>. An
+address became a piece of data you can copy, store, and pass around — the same move that makes pointers
+possible in a real computer.</div>
+<p>The <b>program counter</b> is the same object again: one slot in the scratchpad holding a code, meaning
+"the next instruction lives there." And since a code is a binary number, <code>PC + 1</code> is binary
+addition, which a ReLU feed-forward net does exactly (their Lemma 1: 8d hidden units, ripple-carry).</p>
+
+<h3>Why not RoPE</h3>
+<table class="tbl">
+<tr><th>Reason</th><th>Detail</th></tr>
+<tr><td><b>RoPE is not a vector you can store</b></td><td>It is a rotation applied to q and k <em>inside</em> the attention op. It is not in the token's content, so you can never write "address 5" into an instruction and read it back. This alone kills it.</td></tr>
+<tr><td><b>RoPE is relative, a CPU needs absolute</b></td><td>Scores depend only on (i − j). It can say "7 columns back"; it cannot say "go to line 37." Jump targets are absolute.</td></tr>
+<tr><td><b>No exact separation guarantee</b></td><td>Smooth, oscillating, distance-dependent scores with no clean margin. The ±1 scheme gives a hard gap of 2 to <em>every</em> wrong address.</td></tr>
+<tr><td><b>No ReLU arithmetic on it</b></td><td>PC+1 must happen in the feed-forward layer. Binary + binary is ReLU-computable; rotating a phase is not, and the angle isn't in the residual stream anyway.</td></tr>
+</table>
+<p>Bonus: appending log(n) rows keeps width at <code>O(log n + d)</code>, and appending (rather than adding)
+lets the K/Q matrices look at <b>only</b> the position rows — "match on position, ignore content" becomes
+true by construction instead of something you have to prove.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🔧 How you actually compile an algorithm into weights</h2>
+<p>Four steps: <b>(1)</b> fix a layout — decide what each row means, like assigning registers.
+<b>(2)</b> pick primitives — attention does <em>lookup and copy</em>, ReLU does <em>arithmetic and gating</em>.
+<b>(3)</b> solve for the matrices. <b>(4)</b> count layers and stack.</p>
+
+<h3>The layout</h3>
+<pre class="box">rows 1..d          DATA   the value stored here
+rows d+1..d+L      PTR    an address stored as content
+rows d+L+1..d+2L   POS    this column's own address badge
+
+scratchpad column s  =  [  0      ;  p_a  ;  p_s  ]     ← holding "fetch address a"
+memory column a      =  [  mem[a] ;  0    ;  p_a  ]</pre>
+
+<h3>Compiling <code>read</code> into Q, K, V</h3>
+<pre class="box">Attn(X) = X + V · X · softmax( Xᵀ Kᵀ Q X )</pre>
+<p>Choose the matrices so the score between s and j is exactly <code>p_a · p_j</code>:</p>
+<pre class="box">K = [ 0 | 0   | I ]      →   K·x_j = p_j            "read the badge rows"
+Q = [ 0 | λ·I | 0 ]      →   Q·x_s = λ·p_a          "read the pointer rows"
+
+score  =  (K x_j)·(Q x_s)  =  λ·(p_j · p_a)         one-hot at j = a
+
+V = [ I | 0 | 0 ]                                    "move the data rows"
+    [ 0   0   0 ]
+    [ 0   0   0 ]
+
+column s becomes   x_s + V·x_a  =  [ mem[a] ; p_a ; p_s ]</pre>
+<p><b>One layer, one head.</b> Three matrix choices and you have a memory read. Writing back is the same
+thing with Q and K swapped — the memory column queries the scratchpad instead.</p>
+
+<h3>Compiling the branch into ReLU</h3>
+<p>The flag, for integer <code>m</code>, wanting 1 exactly when <code>m ≤ 0</code>:</p>
+<pre class="box">flag = 1 − ReLU(m) + ReLU(m − 1)
+
+ m    ReLU(m)   ReLU(m−1)   flag
+−1      0          0          1
+ 0      0          0          1
+ 1      1          0          0
+ 2      2          1          0
+ 3      3          2          0</pre>
+<p>Then the jump. Normally selecting between two vectors needs multiplication, which ReLU cannot do.
+The paper's formula sidesteps it:</p>
+<pre class="box">next = 2·ReLU( p_(PC+1) − 1·flag ) + 2·ReLU( p_target − 1·(1−flag) ) − 1</pre>
+<p>With <b>flag = 1</b>: the first term's entries are <code>±1 − 1 ∈ {0, −2}</code>, so ReLU kills it → 0.
+The second term is <code>2·ReLU(±1) − 1</code>, which maps <code>+1 → +1</code> and <code>−1 → −1</code> —
+i.e. it returns <code>p_target</code> unchanged. With <b>flag = 0</b> the mirror image returns
+<code>p_(PC+1)</code>.</p>
+<div class="take"><h4>The ±1 convention pays off a third time</h4>
+This is a <b>multiplexer built from ReLU</b>, and it only works because the code entries sit exactly at
+the two points where "subtract 1, then ReLU" behaves as an on/off switch. The same sign choice that made
+addressing unambiguous and the margin constant also makes branching expressible.</div>
+
+<h3>The six moves everything is built from</h3>
+<table class="tbl">
+<tr><th>Want to do</th><th>Use</th></tr>
+<tr><td>fetch from an address</td><td>attention (Q = pointer block, K = badge block)</td></tr>
+<tr><td>write to an address</td><td>attention with Q and K swapped</td></tr>
+<tr><td>move data between blocks</td><td>the V matrix</td></tr>
+<tr><td>add, compare, branch</td><td>ReLU feed-forward</td></tr>
+<tr><td>PC = PC + 1</td><td>ReLU doing binary ripple-carry (Lemma 1, 8d hidden units)</td></tr>
+<tr><td>a nonlinear function</td><td>softmax squeezed into a sigmoid, then a sum of sigmoids</td></tr>
+</table>
+
+<h3>Why it is tedious in practice</h3>
+<ul>
+  <li><b>Side effects.</b> Q, K, V apply to <em>every</em> column at once. Columns you never meant to touch
+  still attend somewhere and still receive a V write. You need bookkeeping rows — a null column of zeros
+  for everyone else to point at, gating bits, erase steps — so only the intended column changes. This is
+  most of the fiddly detail in the proofs.</li>
+  <li><b>Residual stream real estate.</b> Every intermediate result needs its own rows, since nothing can
+  be overwritten until you're sure it's dead. Hence width <code>O(M·d + log n)</code> — a separate
+  function-block region per function. The paper admits this is inefficient and chose it for clarity.</li>
+  <li><b>Error accumulation.</b> Softmax is never exactly one-hot and the sigmoid sums are approximations,
+  so error compounds across layers and loop iterations. Hence every lemma reads "for any ε &gt; 0."</li>
+</ul>
+<p><b>Related:</b> Tracr (Lindner et al. 2023, cited here) automates exactly this — you write RASP, it emits
+weights. The trade-off is that RASP is less expressive; the hand construction here reaches Turing
+completeness and arbitrary nonlinear functions.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>⚙️ SUBLEQ → FLEQ</h2>
+
+<h3>SUBLEQ: one instruction is enough</h3>
+<pre class="box">SUBLEQ(a, b, c):
+    mem[b] = mem[b] − mem[a]
+    if mem[b] ≤ 0:  goto line c
+    else:           goto next line</pre>
+<p>That single instruction is Turing complete (Mavaddat &amp; Parhami, 1988). Their looped transformer
+for SUBLEQ programs: <b>9 layers, 2 heads, width O(log n + N)</b>, where N is the bit-width of integers.</p>
+
+<h3>FLEQ: the usable version</h3>
+<p>SUBLEQ is universal but painful to program in, so they generalize:</p>
+<pre class="box">FLEQ(a, b, c, m, flag, p):
+    mem[c] = f_m( mem[a], mem[b] )
+    if mem[flag] ≤ 0:  goto instruction p</pre>
+<p>where <code>f_m</code> is picked from a menu of M pre-built <b>function blocks</b> baked into the weights
+(matrix multiply, square root, sigmoid, addition…). The instruction carries a pointer selecting which one.
+Depth becomes <code>9 + max(depth of any function block)</code>.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🌀 Attention has two jobs here</h2>
+
+<h3>Job 1: lookup — but exact, not "best"</h3>
+<p><code>read</code> and <code>write</code> are lookups, yes. But nothing here is searching for the
+<em>best</em> or <em>most suitable</em> column. It is an <b>exact address match</b>, like a hash table:</p>
+<pre class="box">"give me address 5"   →   returns column 5. Always. Nothing else.</pre>
+<p>There is no notion of a column being better or more relevant. The correct column wins by a fixed
+margin of 2, and the temperature λ crushes everything else to near zero. <b>The answer is fully determined
+before you run it.</b> If the pointer says 5, you get 5 — the <em>content</em> of the columns is irrelevant
+to the choice.</p>
+<p>Compare with a real LLM: attention there is genuinely soft and content-based. It blends many tokens by
+relevance, and the weights are meaningful gradations. This paper <b>deliberately destroys</b> that softness
+to get exact, provable behaviour.</p>
+<table class="tbl">
+<tr><th></th><th>Real LLM attention</th><th>This paper</th></tr>
+<tr><td>matches on</td><td>content similarity</td><td>address equality</td></tr>
+<tr><td>output</td><td>weighted blend of many</td><td>one column, exactly</td></tr>
+<tr><td>weights</td><td>graded, meaningful</td><td>forced to ~1 and ~0</td></tr>
+<tr><td>purpose</td><td>relevance</td><td>addressing</td></tr>
+</table>
+
+<h3>Job 2: attention as a function computer — not a lookup at all</h3>
+<p>This is the easiest part to miss, and it is arguably the paper's most novel piece.</p>
+<p>They set the attention up so <b>only two terms compete</b> in the softmax. Softmax over two things
+<b>is exactly a sigmoid</b>. Then, by Barron's theorem, any smooth function is a sum of sigmoids:</p>
+<pre class="box">f(x)  ≈  c₁·σ(a₁ᵀx) + c₂·σ(a₂ᵀx) + … + c_m·σ(a_mᵀx)        error ~ O(1/√m)</pre>
+<p>The coefficients <code>c_i</code> and <code>a_i</code> are stored <b>inside the Q and V matrices</b>,
+and an indicator vector in the input picks which function to run.</p>
+<p>So here attention is <b>not fetching anything</b>. It is computing square root, or a sigmoid, or an
+activation derivative.</p>
+<div class="callout">As far as the authors know, this is the <b>first work showing attention layers
+themselves</b> (not the MLP) can emulate general nonlinear functions.</div>
+
+<h3>And "next step" is decided by the MLP, not attention</h3>
+<p>The choice of what happens next — jump or continue — is pure ReLU arithmetic:</p>
+<pre class="box">flag  = 1 − ReLU(m) + ReLU(m − 1)
+next  = 2·ReLU( p_(PC+1) − flag ) + 2·ReLU( p_target − (1 − flag) ) − 1</pre>
+<p>Attention never makes a decision. It fetches what it is told to fetch.
+<b>Control flow lives in the feed-forward layers.</b></p>
+
+<h3>The clean division of labor</h3>
+<pre class="box">attention   →  move data around (by address)
+attention   →  compute nonlinear functions (as sums of sigmoids)
+ReLU MLP    →  arithmetic, comparison, branching, PC + 1
+the loop    →  carries state from one instruction to the next</pre>
+<p>One cycle:</p>
+<table class="tbl">
+<tr><th>#</th><th>Step</th><th>Who does it</th></tr>
+<tr><td>1</td><td>fetch instruction</td><td>attention</td></tr>
+<tr><td>2</td><td>fetch operands</td><td>attention</td></tr>
+<tr><td>3</td><td>compute f(a, b)</td><td>attention (sigmoids) or MLP</td></tr>
+<tr><td>4</td><td>write result</td><td>attention</td></tr>
+<tr><td>5</td><td>decide next instruction</td><td>MLP</td></tr>
+</table>
+<p>So attention does steps 1, 2, 4 as lookup, sometimes step 3 as computation, and <b>never step 5</b>.</p>
+
+<div class="take"><h4>In one sentence</h4>
+Attention here does <b>exact address-based lookup</b> rather than searching for a "best" state — the pointer
+fully determines the answer and content plays no role in the choice — but it has a <b>second job</b> too,
+where softmax is squeezed into a sigmoid so attention layers compute nonlinear functions directly; and
+deciding what step comes next is <b>not attention's job at all</b>, it is ReLU arithmetic in the
+feed-forward layers.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🧊 Nothing here is learned</h2>
+<table class="tbl">
+<tr><th>Piece</th><th>Where it lives</th><th>How it is set</th><th>Changes?</th></tr>
+<tr><td><b>Weights</b> (Q,K,V,W₁,W₂)</td><td>the network</td><td>written by hand on paper</td><td>never</td></tr>
+<tr><td><b>Program</b> (commands)</td><td>the input X</td><td>written by hand</td><td>never</td></tr>
+<tr><td><b>Memory + scratchpad</b></td><td>the input X</td><td>starts blank / with data</td><td>every loop step</td></tr>
+</table>
+<p>No dataset, no loss, no optimizer, no experiments. The 13 layers are the <b>hardware</b>; the prompt is
+the <b>software</b>. Same weights + different prompt = different algorithm.</p>
+
+<h3>But the weights are real, and not all trivial</h3>
+<ul>
+  <li><b>Boring — pure selectors.</b> The addressing matrices are identity blocks placed in the right rows.
+  This part really is "just wiring."</li>
+  <li><b>Not boring — real circuits.</b> The binary adder for PC+1 needs 8d hidden units in a specific
+  ripple-carry pattern. The flag and multiplexer need specific coefficients and biases; get one wrong and
+  branching breaks.</li>
+  <li><b>Definitely not boring — the function blocks.</b> The Barron coefficients stored in Q and V are
+  arbitrary real numbers. They are not wiring — they <em>are</em> the square-root function, baked into
+  weights.</li>
+</ul>
+<p>That is why Table 1 says SUBLEQ needs <b>9</b> layers but matrix inversion and SGD need <b>13</b>: the
+extra 4 are the arithmetic, not the addressing.</p>
+
+<h3>Engineered latent space vs. an LLM's</h3>
+<p>Here, every coordinate has a name a human assigned (<code>rows 1–20 = data, rows 21–24 = address,
+row 25 = flag</code>). You can read any hidden state and say exactly what it means. In a trained LLM
+nobody assigns meaning — features are entangled and superposed, and interpretability researchers need
+sparse autoencoders just to guess what a few directions do.</p>
+<div class="analogy"><b>The difference in one sentence.</b> Training an LLM = you have examples but not
+the algorithm, so gradient descent <em>searches</em> for weights; you get something that works but you
+don't know what. This paper = you already have the algorithm, so you <em>compile</em> it into weights;
+you know exactly what it does and can prove it. Growing a program vs. writing one.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>📈 What they run on it</h2>
+<table class="tbl">
+<tr><th>Target</th><th>Layers</th><th>Heads</th></tr>
+<tr><td>SUBLEQ (universal computer)</td><td>9</td><td>2</td></tr>
+<tr><td>Basic calculator</td><td>13</td><td>1</td></tr>
+<tr><td>Approximate matrix inverse</td><td>13</td><td>1</td></tr>
+<tr><td>Power iteration</td><td>13</td><td>1</td></tr>
+<tr><td>Backprop + SGD on a 2-layer net</td><td>13</td><td>1</td></tr>
+</table>
+<div class="take"><h4>Two levels of learning in the SGD result</h4>
+The 13-layer transformer never updates its own weights. But the 2-layer network it is training lives
+<b>inside the memory zone of the input</b>, and its parameters genuinely get updated by gradient descent
+across loop iterations. <b>Outer</b> = fixed hardware, never learns. <b>Inner</b> = a small net stored as
+data in the token stream, learning during the loop. A very literal version of in-context learning: the
+learner is a program, and the CPU happens to be a transformer.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>⚖️ What it's worth, honestly</h2>
+
+<div class="warn"><h4>The obvious objection is correct</h4>
+No real LLM has a program counter. Nobody assigned rows 21–24 to be an address. The authors say it
+themselves: <em>"the way we design our constructions shares no similarities with how real-world language
+models are trained."</em></div>
+
+<h3>What it does claim</h3>
+<p>Not "GPT works this way." The question is: <b>is a fixed-depth transformer plus a loop big enough to
+represent iterative algorithms?</b> Answer: yes, provably, at 13 layers. A <b>lower bound on capacity</b> —
+the same species of statement as "a 2-layer MLP is a universal approximator." Nobody trains MLPs because
+of that theorem, but it told the field the architecture was not the bottleneck.</p>
+
+<h3>Three ways it is genuinely useful</h3>
+<ol>
+  <li><b>It settles "is depth the bottleneck?" — no.</b> The prior belief was that a k-step algorithm needs
+  ~k layers, which makes reasoning depth cost parameters. This says: not if you have a loop. That is the
+  theoretical license for the whole recurrent-depth line (Universal Transformer, CoTFormer, Huginn, and the
+  trained looped-transformer work).</li>
+  <li><b>Negative results are the more practical half.</b> If a task provably needs more depth or more loop
+  steps than you have, <em>no amount of training will find it</em>. You need the constructive side to
+  calibrate the impossible side.</li>
+  <li><b>It predicts why chain-of-thought works.</b> The structural claim is that with fixed depth, the
+  computation state <em>must</em> live in the token sequence — there is nowhere else. That is what the
+  scratchpad is, and CoT is exactly that in real models. This sits on the theory arc explaining why CoT
+  genuinely extends what a fixed-depth transformer can compute, rather than being a prompting trick.</li>
+</ol>
+
+<h3>Where the analogy does touch reality</h3>
+<ul>
+  <li><b><code>read</code> is an induction head.</b> Match a key, copy the associated value. The paper shows
+  the mechanism attention <em>can</em> implement; interpretability found that training <em>does</em> find it.</li>
+  <li><b>The KV cache is literally addressable memory</b> — every token appends to a store that later tokens
+  look up by content match.</li>
+  <li><b>CoT tokens are the scratchpad.</b></li>
+  <li><b>No counterpart:</b> the program counter, the clean non-overlapping address space, and the
+  hand-assigned row meanings. Real models use superposition. That part is pure fiction.</li>
+</ul>
+
+<h3>What it does not show</h3>
+<ul>
+  <li><b>No proof SGD finds anything like this.</b> Existence ≠ learnability. Biggest gap.</li>
+  <li><b>No experiments at all.</b> Zero. Pure construction.</li>
+  <li><b>Wildly inefficient</b> — separate scratchpad region per function, poly(T·D) heads for general
+  activations. Real models are far more parameter-efficient.</li>
+  <li><b>Ignores language.</b> Everything runs on hand-built vectors; tokenization never enters.</li>
+</ul>
+
+<div class="take"><h4>Fairest verdict</h4>
+The construction is a fiction, but the architectural claim it motivated is not. Later work trained looped
+transformers from scratch and found they <em>do</em> learn iterative algorithms better than depth-matched
+non-looped ones, and generalize to more steps at test time — see the
+<a href="looped-transformers-learning-algorithms.html">empirical companion post</a> in this category.</div>
+</section>
+
+</body>
+</html>
