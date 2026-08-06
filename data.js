@@ -18,6 +18,28 @@ const BLOG = {
       id: "loop-transformer",
       name: "Loop Transformer",
       blurb: "Latent / looped reasoning, chain-of-thought, expressivity & complexity.",
+      repos: [
+        {
+          name:    "raymin0223/mixture_of_recursions",
+          link:    "https://github.com/raymin0223/mixture_of_recursions",
+          summary: "Mixture-of-Recursions (NeurIPS 2025) — a router gives each token its own recursion depth, and the recursion-aware KV cache fixes the hole that Ouro named as its blocker. The adaptive per-position depth piece, already working.",
+        },
+        {
+          name:    "lucidrains/ponder-transformer",
+          link:    "https://github.com/lucidrains/ponder-transformer",
+          summary: "Small, clean PonderNet halting inside a transformer. Reference for the exit-gate math — the halting distribution, the geometric prior, and the KL that Ouro deliberately replaced with a uniform one.",
+        },
+        {
+          name:    "rkstgr/LoopLM",
+          link:    "https://github.com/rkstgr/LoopLM",
+          summary: "Reimplementation of Ouro (arXiv:2510.25741) — shared-weight recurrence, sandwich norm, exit gate, multi-step weighted loss, plus the Mano task. ByteDance released weights (ByteDance/Ouro-1.4B, modeling_ouro.py) but no training code, so this is the trainable version.",
+        },
+        {
+          name:    "avramdj/rrt-lora",
+          link:    "https://github.com/avramdj/rrt-lora",
+          summary: "Replication of Relaxed Recursive Transformers (arXiv:2410.20672) — one shared block with a different LoRA per loop step. Literally shared backbone + per-step adapter, so it is the natural baseline for any claim that the training objective (not the adapter) is what helps.",
+        },
+      ],
       notes: [
         {
           title:   "Chain of Thought vs Latent Thought",

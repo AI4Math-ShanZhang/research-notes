@@ -44,6 +44,18 @@
     </div>`;
   }
 
+  // ---- render the open-source repo block (shown above the notes) ----
+  function reposHTML(repos){
+    if(!repos || !repos.length) return '';
+    return `<div class="repos">
+      <h3>Open-source repositories to build on</h3>
+      ${repos.map(r => `<div class="repo">
+        <a href="${r.link}" target="_blank" rel="noopener">${r.name}</a><span class="gh">GitHub ↗</span>
+        <div class="summary">${r.summary||''}</div>
+      </div>`).join('')}
+    </div>`;
+  }
+
   // ---- render all categories ----
   function render(active){
     const wrap = document.getElementById('categories');
@@ -52,6 +64,7 @@
       .map(c => `<section class="category" data-cat="${c.id}">
           <h2>${c.name} <span class="count">${c.notes.length}</span></h2>
           <p class="blurb">${c.blurb||''}</p>
+          ${reposHTML(c.repos)}
           ${c.notes.length ? c.notes.map(noteHTML).join('')
                            : '<p class="blurb"><em>Notes coming soon.</em></p>'}
         </section>`).join('');

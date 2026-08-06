@@ -50,6 +50,17 @@
     </div>`;
   }
 
+  function reposHTML(repos){
+    if(!repos || !repos.length) return '';
+    return `<div class="repos">
+      <h3>Open-source repositories to build on</h3>
+      ${repos.map(r => `<div class="repo">
+        <a href="${r.link}" target="_blank" rel="noopener">${r.name}</a><span class="gh">GitHub ↗</span>
+        <div class="summary">${r.summary||''}</div>
+      </div>`).join('')}
+    </div>`;
+  }
+
   function render(active){
     const wrap = document.getElementById('categories');
     wrap.innerHTML = BLOG.categories
@@ -59,6 +70,7 @@
         return `<section class="category" data-cat="${c.id}">
           <h2>${c.name} <span class="count">${papers.length}</span></h2>
           <p class="blurb">${c.blurb||''}</p>
+          ${reposHTML(c.repos)}
           ${papers.length ? papers.map(paperHTML).join('')
                           : '<p class="blurb"><em>No papers listed yet.</em></p>'}
         </section>`;
