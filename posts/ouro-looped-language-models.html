@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ouro — Scaling Latent Reasoning via Looped Language Models — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take{ background:#fff8ee; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .take h4{ margin:.1rem 0 .4rem; color:#b56b00; }
+  .warn{ background:#fdf1f2; border:1px solid #f0c2c8; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .warn h4{ margin:.1rem 0 .4rem; color:#b02a3a; }
+  .mono{ font-family:ui-monospace,Menlo,Consolas,monospace; }
+  pre.box{ background:#f4f7fa;border:1px solid #e0e5ea;border-radius:6px;padding:.7rem 1rem;font-size:.88rem;overflow-x:auto; }
+  table.tbl{ border-collapse:collapse; margin:1rem 0; font-size:.9rem; width:100%; }
+  table.tbl th, table.tbl td{ border:1px solid #e0e5ea; padding:.4rem .7rem; text-align:left; }
+  table.tbl th{ background:#f4f7fa; }
+  table.tbl td.num{ text-align:right; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .good{ color:#1f7a5e; font-weight:600; }
+  .bad{ color:#b02a3a; font-weight:600; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Ouro — Scaling Latent Reasoning via Looped Language Models</h1>
+<p class="paper-meta">Paper: <em>Scaling Latent Reasoning via Looped Language Models</em> —
+Zhu, Wang, Hua, Zhang, Li et al. (ByteDance Seed · UC Santa Cruz · Princeton · Mila · CMU · M-A-P),
+<a href="https://arxiv.org/abs/2510.25741">arXiv:2510.25741</a>.
+The <b>empirical-at-scale</b> entry in this category: the other loop papers prove what a loop
+<em>could</em> do; this one trains one on 7.7T tokens and reports what actually happens.</p>
+
+<!-- ===== TL;DR ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ In one line</h2>
+<p>Take one stack of layers and run the input through it <b>4 times</b> with the same weights.
+A small gate decides, <b>per token</b>, when to stop. At 1.4B and 2.6B parameters this matches
+4B and 8B standard transformers — and the controlled experiments show the gain is <b>not</b> more
+stored knowledge (still ~2 bits per parameter either way) but better <b>use</b> of the knowledge
+already in the weights.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 The setup</h2>
+
+<h3>The architecture is almost boringly plain</h3>
+<pre class="box">non-looped:  lmhead ∘ (L layers)              ∘ emb
+looped:      lmhead ∘ (L layers)ᵗ             ∘ emb        ← same weights, t passes</pre>
+
+<table class="tbl">
+<tr><th>Model</th><th>Layers</th><th>Loops</th><th>Effective passes</th><th>Tokens</th></tr>
+<tr><td>Ouro 1.4B</td><td class="num">24</td><td class="num">4</td><td class="num">96</td><td class="num">7.7T</td></tr>
+<tr><td>Ouro 2.6B</td><td class="num">48</td><td class="num">4</td><td class="num">192</td><td class="num">7.7T</td></tr>
+</table>
+
+<p>The 2.6B is the 1.4B's 24 layers <b>duplicated</b> to 48 — they note this upcycling is unusually
+smooth precisely because weight sharing already forced the layers to be interchangeable-ish.</p>
+
+<div class="warn"><h4>They wanted 8 loops and could not have them</h4>
+Stage 1a trained with <code>Tmax = 8</code> and hit loss spikes and gradient oscillation. They cut to
+<code>Tmax = 4</code> and raised batch size 4M → 8M to stabilize. So the depth they shipped is the
+depth they could <em>train</em>, not the depth they wanted. Worth holding onto — it comes back in the
+extrapolation results.</div>
+
+<h3>Headline numbers</h3>
+<table class="tbl">
+<tr><th></th><th>BBH</th><th>GSM8K</th><th>MATH500</th></tr>
+<tr><td><b>Ouro 1.4B</b> R4</td><td class="num good">71.02</td><td class="num good">78.92</td><td class="num good">82.40</td></tr>
+<tr><td>Qwen3-4B base</td><td class="num">70.95</td><td class="num">72.86</td><td class="num">59.60</td></tr>
+<tr><td colspan="4" style="background:#fafbfc"></td></tr>
+<tr><td><b>Ouro 2.6B</b> R4 (MMLU-Pro 55.73)</td><td class="num good">80.46</td><td class="num">—</td><td class="num good">90.85</td></tr>
+<tr><td>Qwen3-8B base (MMLU-Pro 53.72)</td><td class="num">77.65</td><td class="num">—</td><td class="num">62.30</td></tr>
+</table>
+
+<div class="take"><h4>Read the axis carefully</h4>
+This is <b>parameter</b> efficiency, not <b>compute</b> efficiency. 2.6B × 4 loops = 192 layer passes
+per token. Comparing that to an 8B model on parameter count flatters the method; a FLOP-matched
+table is not in the paper. The claim "2–3× efficiency" means <em>memory footprint</em>, which is the
+metric that matters for edge deployment — just not the same metric as "cheaper to run".</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🚪 The exit gate, derived slowly</h2>
+
+<p>This is the part of the paper with the most notation and the least difficulty. Everything follows
+from one idea: <b>at every loop, ask "stop here?"</b></p>
+
+<h3>Survival is a product of "no"s</h3>
+<pre class="box">λₜ = σ( Linear(h⁽ᵗ⁾) )        chance of stopping AT step t, given you reached t
+
+Sₜ = (1−λ₁)(1−λ₂)···(1−λₜ)     chance you did NOT stop in the first t steps
+S₀ ≡ 1</pre>
+
+<p>To survive <code>t</code> steps you must say "no" at step 1 <b>and</b> "no" at step 2 <b>and</b> …
+so the "no"s multiply.</p>
+
+<div class="callout"><b>The ≡ in <code>S₀(x) ≡ 1</code>.</b> Three lines means "defined to be, always" —
+not "happens to equal". It is bookkeeping: at <code>t = 0</code> the product has no factors, and an
+empty product has no meaning on its own, so they declare it 1. That makes the next formula work at
+<code>t = 1</code> with no special case: <code>p₁ = λ₁·S₀ = λ₁</code>.</div>
+
+<h3>A full worked example, Tmax = 3</h3>
+<p>Gate outputs <code>λ₁ = 0.2</code>, <code>λ₂ = 0.5</code>. Think of a pot of probability worth 1.0
+that gets sliced:</p>
+
+<pre class="box">start pot = 1.0
+
+step 1:  gate takes 20% of the pot     p₁ = 0.2 × 1.0 = 0.2      pot left 0.8  ← S₁
+step 2:  gate takes 50% of what's LEFT p₂ = 0.5 × 0.8 = 0.4      pot left 0.4  ← S₂
+step 3:  last step, no gate, take all  p₃ =             0.4      pot left 0
+
+                                       total = 0.2 + 0.4 + 0.4 = 1.0  ✓</pre>
+
+<h3>Why the sum is exactly 1</h3>
+<p>The <b>Σ</b> just means "add these up". It equals 1 because the model definitely stops somewhere —
+<code>Tmax</code> is a hard wall. The mechanism is a <b>telescoping sum</b>:</p>
+
+<pre class="box">pₜ  =  Sₜ₋₁ − Sₜ            "alive before t"  minus  "alive after t"
+
+Σ pₜ = (S₀−S₁) + (S₁−S₂) + ⋯ + (S_{T−2}−S_{T−1}) + p_T
+     =  S₀ − S_{T−1} + S_{T−1}          ← because they DEFINED p_T = S_{T−1}
+     =  1</pre>
+
+<div class="take"><h4>The two formulas for pₜ are the same thing</h4>
+<pre class="box">Sₜ = Sₜ₋₁ · (1 − λₜ)
+
+Sₜ₋₁ − Sₜ = Sₜ₋₁ − Sₜ₋₁(1−λₜ) = Sₜ₋₁·[1 − (1−λₜ)] = λₜ · Sₜ₋₁   ✓
+
+check at t=2:   λ₂·S₁ = 0.5 × 0.8 = 0.4      S₁ − S₂ = 0.8 − 0.4 = 0.4</pre>
+The multiply form is "the slice the gate took" — that's what you compute in code. The subtract form
+is "how much the pot dropped" — that's what telescopes in the proof. Same number, two viewpoints.
+<b>The pot shrinks by exactly the slice taken.</b></div>
+
+<h3>Inference: one knob</h3>
+<pre class="box">CDF:   0.2 → 0.6 → 1.0
+q = 0.5 :  step1 0.2 < 0.5 keep going, step2 0.6 ≥ 0.5  →  EXIT AT 2
+q = 0.9 :  run all 3</pre>
+<p><code>q</code> is set at deployment time, no retraining. Small q = cheap and shallow, large q = deep.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🎯 Two training stages — and a notation gap between them</h2>
+
+<h3>Stage I: expected loss minus entropy</h3>
+<pre class="box">L  =  Σₜ p(t|x)·L⁽ᵗ⁾   −   β·H( p(·|x) )
+      └─ expected task loss ─┘  └─ anti-collapse ─┘</pre>
+
+<p><b>Why the entropy term exists.</b> Without it there is a runaway loop: deeper steps have lower
+loss → gradient shifts mass to later steps → later steps get more training signal → they get even
+better → more mass. Everything collapses onto <code>t = Tmax</code> and adaptive computation dies.</p>
+
+<p><b>The KL form is the same thing.</b> With a uniform prior,
+<code>KL(p ‖ uniform) = −H(p) + log Tmax</code>, and <code>log Tmax</code> is a constant that
+gradients ignore. The KL wording exists so they can tell the ELBO story (exit step = latent
+variable) and connect to PonderNet.</p>
+
+<div class="callout"><b>Why uniform and not geometric?</b> A geometric prior (PonderNet) or
+Poisson-lognormal (Geiping et al.) softly prefers <em>early</em> exit. Uniform is depth-unbiased —
+it decouples "this input is hard" from any global compute preference. Appendix A backs this: geometric
+priors plateau at higher training loss, worse as the bias strengthens, because deep steps get starved
+of credit assignment.</div>
+
+<h3>Stage II: freeze the LM, teach the gate what actually helped</h3>
+<pre class="box">Iᵢ⁽ᵗ⁾ = max(0,  lossᵢ at t−1  −  lossᵢ at t )      "did this loop help THIS token?"
+wᵢ⁽ᵗ⁾ = σ( 50 · (Iᵢ⁽ᵗ⁾ − 0.005) )                   target: continue (≈1) or exit (≈0)</pre>
+
+<table class="tbl">
+<tr><th>improvement I</th><th>target w</th><th>meaning</th></tr>
+<tr><td class="num">0.20</td><td class="num">0.9999</td><td>definitely continue</td></tr>
+<tr><td class="num">0.05</td><td class="num">0.90</td><td>continue</td></tr>
+<tr><td class="num">0.005</td><td class="num">0.50</td><td>borderline</td></tr>
+<tr><td class="num">0.00</td><td class="num bad">0.44</td><td>lean exit — but only barely</td></tr>
+</table>
+
+<div class="warn"><h4>The label can shout "continue" but only whisper "exit"</h4>
+Because of the <code>max(0, ·)</code> clip, <code>I</code> bottoms out at 0, so
+<code>w = σ(−0.25) = 0.438</code> is the <b>floor</b>. Even when a loop makes things actively worse,
+the target still says "44% continue". The label is lopsided toward running deeper. The paper describes
+<code>w ≈ 0</code> as "recommends exiting", but 0.44 is not ≈ 0. Not discussed anywhere.</div>
+
+<h3>Why per token</h3>
+<p>The gate is <code>Linear(h)</code>, and a transformer has a hidden state at <b>every position</b>.
+So one loop over a 500-token sequence produces 500 λ's. With 4 loops you get 500 × 4.</p>
+
+<div class="analogy"><b>Why you want that.</b>
+<pre class="box">"The capital of France is Paris"
+
+  is     →  trivial, grammar forces it.  Loop 1 already nails it.   → exit early
+  Paris  →  needs a fact lookup from the weights.                   → keep looping</pre>
+One exit depth for the whole sentence would either waste 4 loops on <code>is</code> or starve
+<code>Paris</code>. And the per-token labels are free — the LM head already gives you a cross-entropy
+at every position.</div>
+
+<div class="warn"><h4>Stage I is written per-sequence, Stage II per-token</h4>
+In Eq. 2 and 4, <code>L⁽ᵗ⁾</code> is already summed over all positions and <code>p(t|x)</code> is
+conditioned on the whole <code>x</code>; <code>λₜ(x)</code> carries no position index. In Eq. 5 and 6
+everything suddenly gains an <code>i</code> and gets averaged over <code>M</code>. The paper never
+reconciles them.<br><br>
+It is almost certainly notation shortcut, not a design change — Section 3 states the goal is
+"per token and per example", <code>Linear(h)</code> cannot produce one number per sequence without a
+pooling step they never mention, pretraining runs on packed 4K web chunks where one exit depth would
+be meaningless, and at generation time there is no sequence yet. Figure 5 also reports an
+<b>"average exit round"</b>, which only makes sense if positions differ. So the <code>x</code> in
+Stage I should really be the prefix <code>x₁:ℓ</code>. They wrote the compact version because the
+ELBO derivation is much prettier with one latent <code>z</code> per <code>x</code>.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🧮 The entropy term is regularizing the wrong quantity</h2>
+
+<p>This is my main technical objection, and it is worth doing with real numbers.</p>
+
+<p>The paper takes entropy <b>for each x separately</b>, then averages over the batch. So for
+<em>every single input</em> there is a force pulling toward (0.25, 0.25, 0.25, 0.25). But that fights
+the whole point — you <em>want</em> easy inputs sharp at step 1 and hard inputs sharp at step 4, and
+both of those are sharp, so both get penalized.</p>
+
+<h3>Same tensor, two ways to collapse it</h3>
+<pre class="box">p : [B, M, T]  =  [2, 3, 4]
+
+version A (paper):   entropy over T  →  [2,3]   then mean over B,M  →  scalar
+version B (marginal): mean over B,M  →  [4]     then entropy over T →  scalar</pre>
+
+<h3>Case 1 — good adaptive behavior (what you want)</h3>
+<table class="tbl">
+<tr><th>token</th><th>p(1)</th><th>p(2)</th><th>p(3)</th><th>p(4)</th><th>H of row</th></tr>
+<tr><td>t1 <code>The</code></td><td class="num">0.90</td><td class="num">0.06</td><td class="num">0.03</td><td class="num">0.01</td><td class="num">0.4149</td></tr>
+<tr><td>t2 <code>capital</code></td><td class="num">0.85</td><td class="num">0.10</td><td class="num">0.03</td><td class="num">0.02</td><td class="num">0.5518</td></tr>
+<tr><td>t3 <code>of</code></td><td class="num">0.95</td><td class="num">0.03</td><td class="num">0.01</td><td class="num">0.01</td><td class="num">0.2460</td></tr>
+<tr><td>t4 <code>France</code></td><td class="num">0.10</td><td class="num">0.60</td><td class="num">0.20</td><td class="num">0.10</td><td class="num">1.0889</td></tr>
+<tr><td>t5 <code>is</code></td><td class="num">0.90</td><td class="num">0.05</td><td class="num">0.03</td><td class="num">0.02</td><td class="num">0.4280</td></tr>
+<tr><td>t6 <code>Paris</code></td><td class="num">0.02</td><td class="num">0.05</td><td class="num">0.13</td><td class="num">0.80</td><td class="num">0.6718</td></tr>
+<tr><th>column mean</th><th class="num">0.6200</th><th class="num">0.1483</th><th class="num">0.0717</th><th class="num">0.1600</th><th></th></tr>
+</table>
+
+<pre class="box">version A:  mean of the six H's        =  3.4014 / 6  =  0.5669
+version B:  H of the column means      =                  1.0616
+maximum possible (ln 4)                =                  1.3863</pre>
+
+<h3>Case 2 — collapse (what the term exists to stop)</h3>
+<p>Every token says (0.01, 0.02, 0.07, 0.90). Averaging identical rows changes nothing, so both
+versions read <b>0.4053</b>.</p>
+
+<h3>The comparison</h3>
+<table class="tbl">
+<tr><th></th><th>H_A (paper)</th><th>H_B (marginal)</th></tr>
+<tr><td>good adaptive behavior</td><td class="num">0.5669</td><td class="num good">1.0616</td></tr>
+<tr><td>collapsed to depth 4</td><td class="num">0.4053</td><td class="num">0.4053</td></tr>
+<tr><td><b>gap</b></td><td class="num bad">0.1616</td><td class="num good">0.6563</td></tr>
+<tr><td>penalty at β = 0.05, good case</td><td class="num">0.0410</td><td class="num good">0.0162</td></tr>
+<tr><td>penalty at β = 0.05, collapse</td><td class="num">0.0490</td><td class="num">0.0490</td></tr>
+</table>
+
+<div class="take"><h4>Version A can barely tell the two situations apart</h4>
+Its loss difference between "perfect adaptive gate" and "total collapse" is
+<code>0.05 × 0.1616 = 0.008</code>. Against an LM loss around 2.3 that is <b>0.3%</b>. It is not
+really detecting collapse — it is applying a flat "be less confident" pressure to everything, and
+punishing good behavior 2.5× harder than the marginal version would. Version B keeps the full
+anti-collapse strength while leaving per-token sharpness alone.</div>
+
+<h3>The clean reframe</h3>
+<pre class="box">H_B − H_A  =  mutual information between input and exit depth
+
+good behavior:  1.0616 − 0.5669  =  0.4947
+collapse:       0.4053 − 0.4053  =  0.0000     ← exactly zero</pre>
+
+<p>MI is zero <b>precisely</b> when depth stops depending on the input — which <em>is</em> the failure
+mode. So the objective you probably want is:</p>
+
+<pre class="box">L  =  task_loss  −  β · ( H_marginal  −  H_conditional_avg )
+
+"spread the depths across the batch, but be sharp on each token"</pre>
+
+<p>The paper has only the second half, with the wrong sign.</p>
+
+<pre class="box">eps = 1e-8
+# version A (paper)
+H_A = -(p * (p+eps).log()).sum(-1).mean()
+
+# version B (marginal)
+p_bar = p.reshape(-1, T).mean(0)                 # [T]
+H_B   = -(p_bar * (p_bar+eps).log()).sum()
+
+loss = task_loss - beta * (H_B - H_A)            # mutual information version</pre>
+
+<div class="analogy"><b>This is exactly the MoE load-balancing pattern.</b> In MoE you balance how
+often each expert is used <em>across the batch</em> — you never force a single token to spread itself
+over all experts. Ouro's entropy term is the "force each token to spread" version.
+By Jensen, <code>H(mean of p) ≥ mean of H(p)</code>, so the paper's choice is the strictly harsher
+constraint.<br><br>
+Two gotchas if you implement B: padding positions must be masked out of the column mean, and under
+data parallel each GPU's local marginal is a noisy estimate, so you need an <code>all_reduce</code> on
+the column sums first — same as MoE balancing does. Version A needs neither. That is very likely why
+they chose it.</div>
+
+<div class="callout"><b>Possible receipt.</b> Section 4.3 reports dropping β from 0.1 to 0.05 to reduce
+"conflicting gradients between task loss and the KL penalty". The conflict is baked into which entropy
+they picked.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🔬 §6.1 — how they measure "knowledge capacity" in bits</h2>
+
+<p>The question: <b>does looping let the model store more facts?</b> Following Allen-Zhu's
+physics-of-LMs <code>bioS(N)</code> setup.</p>
+
+<h3>Fake people, on purpose</h3>
+<pre class="box">name + 5 attributes: gender, birth date, university, major, employer
+each picked at RANDOM from a fixed list, then wrapped in a RANDOM template
+
+"Anya Briar Forger was born on October 2, 1996. She studied
+ Communications at MIT. She worked for Meta Platforms."</pre>
+
+<p>Fake data is the point: because generation is random you know <b>exactly</b> how much information
+is in there. With real Wikipedia you never do. Random templates also stop the model cheating with
+surface patterns. Train to saturation — <b>1000 exposures</b>.</p>
+
+<h3>Turning cross-entropy into bits</h3>
+<p>Suppose the university list has 300 entries. A model that knows <em>nothing</em> spreads its guess
+evenly, 1/300 each, and its cross-entropy is:</p>
+
+<pre class="box">CE = −Σ (1/300)·log₂(1/300) = log₂(300) = 8.23 bits</pre>
+
+<div class="callout"><b>Why log₂(300) = 8.23.</b> log₂ answers "how many yes/no questions to pin down
+one of 300?". Each question doubles what you can separate: 8 bits → 256 things, 9 bits → 512 things.
+300 sits between, so 8.23. It is also literally a binary search — halve 300 nine times and you are
+down to one; 8.23 is the exact fractional cost under an optimal code.<br><br>
+Note the conversion: papers compute loss in <b>nats</b> (natural log).
+<code>ln(300) = 5.70 nats</code>, and <code>5.70 / ln 2 = 8.23 bits</code>. Same quantity, different
+ruler.</div>
+
+<p>So "knows nothing" = 8.23 and "memorized perfectly" = 0. The gap is what got stored:</p>
+
+<pre class="box">bits stored  =  raw uncertainty  −  model's cross-entropy
+
+one person's university:   8.23  −  2.23  =  6.00 bits stored</pre>
+
+<p>Sum over 5 attributes × N people. With ~40 bits per person and N = 100,000, the dataset holds about
+4,000,000 bits. Measure the model's cross-entropy at the <b>attribute token positions only</b>,
+subtract, add it up. That total is the capacity.</p>
+
+<h3>Why they sweep N as well as model size</h3>
+<table class="tbl">
+<tr><th>regime</th><th>what happens</th><th>what you measure</th></tr>
+<tr><td>N small (20K)</td><td>model memorizes everything easily</td><td>the dataset's size — useless</td></tr>
+<tr><td>N large (500K)</td><td>model runs out of room, starts forgetting</td><td class="good">the model's real ceiling</td></tr>
+</table>
+<p>That is why Figure 6 has separate curves for #20k / #50k / #100k / #200k / #500k — you take the
+<b>upper envelope</b>. Models are GPT-2 style, 1M to 40M params.</p>
+
+<h3>The result</h3>
+<pre class="box">bits stored  ≈  2 × (number of parameters)
+
+loop-1, 10M params  →  ~20M bits
+loop-4, 10M params  →  ~20M bits      SAME LINE</pre>
+
+<div class="take"><h4>4× the compute buys 0× the storage</h4>
+Memory lives in the weights and is capped by weight count. Running the same weights again is
+<b>re-reading the same book, not buying a second book</b>. So "24 layers looped 4 times" is not
+"96 layers" for memory purposes — it is still 24 layers of memory.<br><br>
+Which forces §6.2: if the gain is not storage, it must be <em>use</em> of storage.</div>
+
+<div class="warn"><h4>Limits of this experiment</h4>
+Models are 1M–40M — Ouro itself is 35× bigger, and the constant could bend. <code>bioS</code> tests
+only <b>atomic single-hop</b> facts, so it says nothing about whether looping helps store
+<em>procedures</em>, which is arguably also knowledge. And the 2 bits/param constant is Allen-Zhu's
+finding reproduced here; Ouro's contribution is showing looping doesn't move it.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🔗 §6.2 — where the gain actually comes from</h2>
+
+<p>Two synthetic manipulation tasks, same parameter budget:</p>
+<ul>
+  <li><b>Mano</b> — parse an arithmetic tree and evaluate it mod 23, with no intermediate thinking
+  allowed. Needs (a) the modular arithmetic rules stored in weights, (b) tree parsing to compose them.
+  Looped beats iso-parameter every time, and often beats the <b>iso-FLOP</b> deep baseline too.</li>
+  <li><b>Multi-hop QA</b> — "who is the teacher of the instructor of A?". Looped models reach the same
+  accuracy with <b>far fewer unique training samples</b>, and learn faster at fixed sample count.</li>
+</ul>
+
+<h3>The theory piece</h3>
+<table class="tbl">
+<tr><th>latent reasoning method</th><th>sequential steps for graph reachability</th></tr>
+<tr><td>Discrete CoT</td><td class="num">O(n²)</td></tr>
+<tr><td>Continuous CoT (Coconut-style)</td><td class="num">O(D)</td></tr>
+<tr><td class="good">Looped / Universal Transformer</td><td class="num good">O(log D)</td></tr>
+</table>
+<p>D is the graph diameter. Their Theorem 1: a <b>one-layer</b> transformer looped <code>O(log² D)</code>
+times decides reachability on the combined context-plus-parametric knowledge graph.</p>
+
+<div class="take"><h4>The intuition</h4>
+CoT <b>walks</b> the knowledge graph one hop per token — sequential. A loop does
+<b>squaring of the reachability matrix</b> — every pass doubles the horizon, so you cover distance D
+in log D passes. Looping is parallel search; CoT is a sequential walk.</div>
+
+<div class="callout"><b>The sample-efficiency conjecture.</b> Expressivity does not explain why looped
+models <em>learn</em> from fewer examples. Their guess: an untied deep model must search a huge
+function class where every block is independent, while weight tying restricts the hypothesis class to
+"one repeated procedure" — which is exactly the right shape for a recursive task. Smaller realizable
+class → lower sample complexity. This is a conjecture in the paper, not a theorem.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🪞 Faithfulness — the nicest experiment in the paper</h2>
+
+<p>Setup: Quora Question Pairs ("do these two questions mean the same?"), deliberately chosen because
+many items are genuinely ambiguous, so a thinking process has room to change its mind.</p>
+
+<table class="tbl">
+<tr><th>model</th><th>probe result</th><th>reading</th></tr>
+<tr><td>Qwen3-4B-Thinking</td><td class="num bad">0.99 ROC AUC</td><td>final answer readable <em>before</em> any thinking text → the CoT is a story told after the decision</td></tr>
+<tr><td>Ouro 1.4B</td><td>probe at end of loop <code>i−1</code> does <b>not</b> predict the loop-<code>i</code> answer</td><td class="good">each pass does real new work</td></tr>
+</table>
+
+<pre class="box">step-to-step agreement over 1,000 pairs (out of 1000)
+
+A[2,3] = 551        only 55.1% of step-2 answers survive to step 3
+A[2,4] = 361        only 36.1% survive to step 4
+A[i,i+1] → ~1000 once i ≥ 4    (untrained depth; answers converge to a fixed point)</pre>
+
+<div class="take"><h4>Disagreement is the evidence</h4>
+If the latent trace were a rationalization, the answer would be locked in from step 1 and every row of
+that matrix would read 1000. The fact that it <em>doesn't</em> is what "causally faithful" means here.
+The reasoning substrate is the sequence of hidden states; decoding text from an intermediate step is
+an <b>instrumented readout</b>, not the mechanism.</div>
+
+<div class="warn"><h4>Caveat they state themselves</h4>
+The gold standard for faithfulness is <b>intervention</b> — edit the reasoning and check the answer
+changes. You cannot easily edit a latent state, so they use an <em>observational proxy</em>
+(step-by-step predictability + agreement). Weaker evidence than a counterfactual, and they say so.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>❌ §4.5 — the RL section, and why both attempts failed</h2>
+
+<p>After SFT they ran RLVR with DAPO and GRPO on DAPO-17K. Neither beat the SFT checkpoint. The stated
+root cause: <b>vLLM and SGLang get their speed from a fixed execution path, and variable depth breaks
+that.</b></p>
+
+<h3>Attempt 1 — off-policy rollouts (mathematically broken)</h3>
+<pre class="box">1. run all 4 steps in vLLM  →  4 sets of logits per token
+2. pick the step where the exit threshold is crossed, pretend it exited there
+3. update using the loss up to THAT step, discard the deeper ones</pre>
+
+<p>GRPO and DAPO are ratio methods. The gradient contains
+<code>π_new(token) / π_old(token)</code>, and <code>π_old</code> must be
+<b>the exact probability that produced the token</b>. Here the token was sampled at one depth and the
+loss computed at another. The paper says it plainly: "tokens are produced with the final depth, and
+losses computed at an earlier depth."</p>
+
+<pre class="box">token "7" sampled at depth 4 with prob 0.60
+same token at depth 2 has prob        0.15
+ratio is off by 4× before training even starts  →  clipping fires on noise, not on policy drift</pre>
+
+<h3>Attempt 2 — fixed 4 rounds (correct, but no gain)</h3>
+<p>Force exactly 4 steps in rollout and update. No early exit, no mismatch. Training ran normally and
+simply never beat SFT. Their explanation: <b>scale</b> — 1.4B/2.6B models after 8.3M SFT examples have
+little headroom left.</p>
+
+<div class="callout"><b>The odd observation.</b> Trained at fixed 4 rounds, the model still used fewer
+rounds at inference when that helped; they call the mechanism "unclear". My read: fixed-4 training
+never invokes the gate, so <code>φ</code> is never updated and the Stage II gate survives intact. The
+mild surprise is that RL moved the hidden states enough to change LM behavior but not enough to
+invalidate the gate reading those same states.</div>
+
+<div class="warn"><h4>The deeper blocker (my analysis, not the paper's words)</h4>
+<b>1. Batching dies.</b> vLLM batches many sequences into one pass, often with a compiled static CUDA
+graph. If token A exits at loop 2 and token B needs loop 4, they no longer share a compute path — you
+either pad everyone to 4 (losing the savings) or split the batch (losing throughput).<br><br>
+<b>2. The KV cache gets holes.</b> If position 5 exits after loop 2, no loop-3 or loop-4 key/value is
+ever written there. Later, position 9 running its loop 3 needs to attend back to position 5's loop-3
+cache — which does not exist. And you cannot substitute a shallow entry: their own Table 14 shows
+first-step-only reuse collapses GSM8K from 78.92 to <b>18.73</b>.<br><br>
+So <b>Ouro-Thinking is an SFT-only model.</b> In 2025 RLVR is where reasoning gains come from. The
+comparison to Qwen3 / DeepSeek-Distill is fair (also distillation-heavy), but the reported numbers are
+LoopLM's SFT ceiling, not its real ceiling — and nobody has shown LoopLM can absorb RL at all. The fix
+is probably infrastructure, not a better algorithm.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>⚙️ Deployment findings worth stealing</h2>
+
+<h3>KV cache sharing (Table 14)</h3>
+<table class="tbl">
+<tr><th>strategy</th><th>GSM8K</th><th>MATH-500</th><th>memory</th></tr>
+<tr><td>Full (4× cache)</td><td class="num">78.92</td><td class="num">82.40</td><td class="num">1.00×</td></tr>
+<tr><td class="bad">First-step only</td><td class="num bad">18.73</td><td class="num bad">8.43</td><td class="num">4.00×</td></tr>
+<tr><td class="good">Last-step only</td><td class="num good">78.85</td><td class="num good">80.40</td><td class="num">4.00×</td></tr>
+<tr><td>Averaged</td><td class="num">78.73</td><td class="num">78.52</td><td class="num">4.00×</td></tr>
+</table>
+<p>Prefill genuinely needs all four caches (reuse costs &gt;10 points on GSM8K). <b>Decoding does not</b> —
+last-step reuse gives 4× memory back for 0.07 points. That single result is what makes LoopLM
+deployable at a normal transformer's memory footprint.</p>
+
+<h3>Free speculative decoding</h3>
+<p>Loop <code>s</code>'s head proposes, loop <code>T</code>'s head verifies. Same weights, shared KV up
+to step <code>s</code>, <b>no draft model to train</b>. And you can run a safety screen on the draft
+before any token is surfaced. The recurrent structure is a native draft–verify primitive rather than
+an add-on.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section">
+<h2>🚨 The claim that does not survive the tables</h2>
+
+<p>The paper's framing is "loop depth is a <b>third scaling axis</b> beyond parameters and data".
+Tables 10–13 say otherwise.</p>
+
+<table class="tbl">
+<tr><th></th><th>T=1</th><th>T=2</th><th>T=3</th><th>T=4</th><th>T=5</th><th>T=6</th><th>T=7</th><th>T=8</th></tr>
+<tr><td>1.4B base, MMLU</td><td class="num">41.21</td><td class="num">60.43</td><td class="num">66.71</td><td class="num good">67.45</td><td class="num">66.64</td><td class="num">65.77</td><td class="num">65.28</td><td class="num bad">64.49</td></tr>
+<tr><td>1.4B Thinking, AIME24</td><td class="num">0.00</td><td class="num">37.33</td><td class="num">62.33</td><td class="num good">65.00</td><td class="num">60.67</td><td class="num">50.67</td><td class="num">42.33</td><td class="num bad">38.67</td></tr>
+<tr><td>2.6B Thinking, OlympiadBench</td><td class="num">18.96</td><td class="num">68.59</td><td class="num">75.56</td><td class="num good">76.44</td><td class="num">71.85</td><td class="num">69.19</td><td class="num">57.63</td><td class="num bad">39.26</td></tr>
+</table>
+
+<div class="warn"><h4>Performance peaks at the trained depth and falls off a cliff</h4>
+You <b>cannot buy accuracy at inference by looping more</b>. Depth is a training-time hyperparameter
+here, not a test-time dial — which is the opposite of what "scaling axis" implies and the opposite of
+what Geiping et al.'s recurrent-depth work aims for. The 2.6B Thinking model drops 37 points from T=4
+to T=8.<br><br>
+And they could not train at 8 anyway (Stage 1a instability), so the axis is bounded from both ends:
+training stability caps it above, and extrapolation failure caps it at inference.</div>
+
+<div class="callout"><b>The unexplained asymmetry.</b> Safety <em>keeps improving</em> through T=5–8 on
+HEx-PHI while task accuracy degrades. They note it and move on. One uncharitable reading: deeper
+extrapolation may just push the model toward refusal in general, which reads as "safer" on a
+harmfulness benchmark and as "worse" on everything else. The PCA plot showing benign/harmful
+separation improving is suggestive but not decisive.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 What I take away</h2>
+
+<div class="take"><h4>1. The storage/manipulation split is the real contribution</h4>
+Everything else in the paper is engineering. The clean statement — <b>looping does not add memory
+(~2 bits/param either way) but does add manipulation</b> — is the thing that transfers to other work.
+It explains why gains concentrate on MMLU-Pro, BBH, GSM8K, MATH500 and stay flat on knowledge-heavy
+benchmarks, and it tells you the loop is a <em>procedure</em> mechanism, not a capacity mechanism.</div>
+
+<div class="take"><h4>2. The entropy term is the most fixable weakness</h4>
+Conditional entropy fights the input-dependence it is supposed to enable, and by their own numbers
+barely separates collapse from good behavior (gap 0.008 in loss). Swapping to marginal entropy — or
+directly to mutual information — costs one <code>all_reduce</code> and is the same fix MoE load
+balancing already made. Cheap experiment, clear hypothesis.</div>
+
+<div class="take"><h4>3. "Third scaling axis" is not earned yet</h4>
+It would be earned if performance kept rising past the trained depth. It falls. Until someone trains
+stably at large <code>Tmax</code>, or finds a depth-invariance trick (step-conditioning? relative
+depth embedding?), loop count is a hyperparameter you pick once.</div>
+
+<div class="take"><h4>4. RL is the blocking issue for the whole architecture</h4>
+Not the algorithm — the serving stack. Variable per-token depth versus batched static execution and a
+complete KV cache is a genuine systems conflict, and until it is solved LoopLM ships at its SFT
+ceiling while everyone else compounds RLVR gains. That is a bigger risk to the research direction than
+any of the modeling choices.</div>
+
+<h3>Open threads</h3>
+<ul>
+  <li>Does the 2 bits/param result hold at 1B+? Everything in §6.1 is 1M–40M.</li>
+  <li>Does the <code>max(0,·)</code> clip in the Stage II label (floor 0.44) measurably bias the gate
+  toward over-thinking? Easy to check by symmetrizing the label.</li>
+  <li>Marginal vs conditional entropy — direct ablation on the 776M setup they already used in
+  Appendix A.</li>
+  <li>Can a step-conditioned adapter (AdaLN-style, per-loop) fix extrapolation, or does it break the
+  weight-tying that §6.2 credits for the sample efficiency? These two pull in opposite directions,
+  which is the interesting part.</li>
+</ul>
+</section>
+
+</body>
+</html>
