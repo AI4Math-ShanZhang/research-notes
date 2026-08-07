@@ -241,6 +241,14 @@ const BLOG = {
       blurb: "Technical reports from Moonshot AI's Kimi team — architecture changes reported at production scale.",
       notes: [
         {
+          title:   "Kimi Linear — An Expressive, Efficient Attention Architecture",
+          file:    "posts/kimi-linear.html",
+          date:    "2026-08-07",
+          paper:   "Kimi Team (Moonshot AI) · arXiv:2510.26692",
+          tags:    ["KIMI report", "linear attention", "delta rule", "gating", "hybrid attention", "long context", "empirical"],
+          summary: "Why \"linear\" means two things and the second follows from the first: o_t = S_t^T q_t is literally a matrix times a vector (double q, double the output — softmax re-weights instead), and once the exp is gone you can re-associate (QK^T)V into Q(K^T V), turning T²·d into T·d². The pivot is that q_t escapes the sum — with exp(q_t·k_i) in the way the query is trapped inside a nonlinear function and must be scored against every key separately. Worked out with a d=1 four-token example (10 terms naive vs 4 adds + 4 multiplies factored) and the reason it matters: if q is outside, the sum contains no q at all, so it can be built before any query arrives and shared by all of them — which is also why the individual k_i and v_i can be discarded and there is no KV cache. Then the ladder that fixes the resulting crosstalk without breaking associativity — linear attention, DeltaNet's reconstruction loss, GDN's scalar forget gate, and KDA's per-channel Diag(α_t) — plus the 3:1 KDA-to-MLA hybrid, NoPE on the MLA layers (KDA is itself a learnable data-dependent positional encoding), and the results: 1.16× compute efficiency, 54.5 long-context average against full attention's 52.2, 75% less KV cache, 6× decoding at 1M.",
+        },
+        {
           title:   "Attention Residuals — Softmax Attention Over Depth",
           file:    "posts/attention-residuals.html",
           date:    "2026-08-07",
@@ -250,6 +258,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "Kimi Linear: An Expressive, Efficient Attention Architecture",
+          link:    "https://arxiv.org/abs/2510.26692",
+          summary: "Kimi Team (Moonshot AI) technical report, and the backbone the Attention Residuals paper later builds on. Argues that softmax attention's quadratic time and linearly growing KV cache are the binding constraint for agentic and RL test-time scaling, and that linear attention's counterpart weakness — finite-state memory — can be bought off cheaply with a few global layers. Kimi Delta Attention (KDA) is the core module: it takes Gated DeltaNet's update S_t = α_t (I − β_t k_t k_t^T) S_(t-1) + β_t k_t v_t^T and replaces the coarse head-wise scalar α_t with a per-channel Diag(α_t), so each feature dimension carries its own forgetting rate — the GLA idea applied to the gated delta rule, on the argument that with a fixed-size state, precision of forgetting is what determines how well the memory is used. Transitions are parameterized as a specialized Diagonal-Plus-Low-Rank variant that cuts computation against general DPLR while staying closer to the classical delta rule, enabling a bespoke chunkwise kernel. Around it: ShortConv + Swish + L2Norm on q/k for eigenvalue stability, low-rank per-channel decay, and a sigmoid low-rank output gate that also alleviates attention sink. The architecture interleaves 3 KDA layers per 1 full MLA layer, layerwise rather than headwise, on a Moonlight MoE backbone with 8 of 256 experts activated (48B total, 3B active). MLA layers use NoPE — §6.1 shows the gated delta rule is itself a multiplicative positional encoding whose transition matrix is data-dependent and free of RoPE's orthogonality constraint, so KDA carries position and adding RoPE on the global layer over-weights short range; Kimi Linear (RoPE) matches on short context but falls to 51.8 long-context average vs 54.5. Results on 1.4T tokens: scaling-law fits 2.3092·C^−0.0536 (MLA) vs 2.2879·C^−0.0527 (Kimi Linear) for ~1.16× compute efficiency, wins on most short-context base and SFT benchmarks (MMLU-Pro 51.0 vs 47.2; GPQA-Diamond 62.1 vs 57.1 after SFT), and — the headline — beats full attention on long context, RULER 84.3 vs 81.3 and MRCR 29.6 vs 22.6. Efficiency: up to 75% KV cache reduction, 2.3×/2.9× prefill speedup at 512k/1M, 6× decoding throughput at 1M. Ablations set the hybrid ratio at 3:1 (val PPL 5.65); 7:1 ties on training loss but degrades validation to 5.70, 15:1 to 5.82 — worse than pure full attention's 5.77 — and on synthetic palindrome / MQAR / stack-tracking tasks KDA leads GDN at every length while Mamba2, which has decay but no delta rule, fails all three.",
+        },
         {
           name:    "Attention Residuals",
           link:    "https://arxiv.org/abs/2603.15031",

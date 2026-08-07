@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kimi Linear — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .win{ color:#2EAF8E; font-weight:600; }
+  .lose{ color:#F06B7F; font-weight:600; }
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem;
+            overflow-x:auto; }
+  .step{ background:#fff; border:1px solid #e0e5ea; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Kimi Linear — An Expressive, Efficient Attention Architecture</h1>
+<p class="paper-meta">Paper: <em>Kimi Linear</em> — Kimi Team (Moonshot AI),
+<a href="https://arxiv.org/abs/2510.26692">arXiv:2510.26692</a> ·
+<a href="https://github.com/MoonshotAI/Kimi-Linear">code</a>. Technical report, v2 November 2025.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>The claim:</b> first hybrid linear-attention architecture to <em>beat</em> full attention under fair
+  comparison — short context, long context, and RL scaling — rather than merely trading quality for speed.</li>
+  <li><b>The core module:</b> Kimi Delta Attention (KDA) extends Gated DeltaNet by replacing its single
+  head-wise scalar forget gate with a <b>per-channel</b> gate, so every feature dimension forgets at its own rate.</li>
+  <li><b>The architecture:</b> 3 KDA layers to 1 full MLA layer, and the MLA layers use <b>NoPE</b> — all
+  positional information is delegated to KDA.</li>
+  <li><b>Numbers:</b> 48B total / 3B activated, 1.4T tokens. Up to <b>75% less KV cache</b>, <b>6×</b> decoding
+  throughput at 1M context, 1.16× compute efficiency on the scaling-law fit.</li>
+  <li><b>Not pure linear.</b> One in four layers is still real softmax attention. The paper is explicit that
+  finite-state memory can't do long-context retrieval alone.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The problem</h3>
+<p>Softmax attention has two costs that hurt most in agentic and RL settings, where models chew through long
+trajectories at inference time:</p>
+<ul>
+  <li><b>Quadratic time</b> — every query is scored against every key.</li>
+  <li><b>A KV cache that grows linearly with context</b> — you must keep every past key and value.</li>
+</ul>
+<p>Linear attention removes both, but has historically been worse at language modelling, even on short
+sequences. Two lines of work narrowed the gap: <b>gating/decay</b> and the <b>delta rule</b>. This paper
+combines them, and then hedges the remainder with a few real softmax layers.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>Why is it called "linear"? Two meanings</h3>
+<p>The starting equation in §2.2 is plain linear attention:</p>
+<pre class="diag">S_t = S_(t-1) + k_t v_t^T          state update
+o_t = S_t^T q_t                    read out</pre>
+<p>There are two meanings of "linear" here, and <b>the second follows from the first</b>.</p>
+
+<h4>Meaning 1 — the output is a linear function of q</h4>
+<p>Softmax attention:</p>
+<pre class="diag">o_t = sum_i [ exp(q_t · k_i) / Z ] · v_i</pre>
+<p>The <code>exp</code> wraps the query–key dot product. Double <code>q_t</code> and the output does
+<em>not</em> double — softmax re-weights and sharpens instead.</p>
+<p>Linear attention drops the <code>exp</code>:</p>
+<pre class="diag">o_t = S_t^T q_t</pre>
+<p>That is literally a matrix times a vector. Double <code>q_t</code>, and <code>o_t</code> doubles. That is
+the textbook definition of a linear map. Softmax attention is not one.</p>
+
+<h4>Meaning 2 — linear time, and here is why</h4>
+<p>Once the <code>exp</code> is gone, you can re-associate the matrix product. That is the whole trick:</p>
+<pre class="diag">o_t = sum_i (q_t · k_i) v_i
+    = sum_i v_i (k_i^T q_t)          reorder — it's just a scalar
+    = ( sum_i v_i k_i^T ) q_t        pull q_t OUT of the sum
+    = S_t^T q_t                      where  S_t = sum_i k_i v_i^T</pre>
+<p>The critical line is the third: <b><code>q_t</code> escapes the sum</b>. With
+<code>exp(q_t · k_i)</code> sitting there, it cannot — the query is trapped inside a nonlinear function, so you
+must evaluate it separately against every single key.</p>
+<p>In matrix form, this is just associativity:</p>
+<table>
+  <tr><th>Order</th><th>Who must use it</th><th>Cost</th></tr>
+  <tr><td><code>(Q K^T) V</code></td><td>softmax — forced, because <code>exp</code> sits between</td><td>T² · d</td></tr>
+  <tr><td><code>Q (K^T V)</code></td><td>linear — allowed</td><td>T · d²</td></tr>
+</table>
+<p>With T = 1,000,000 and d = 128:</p>
+<ul>
+  <li><code>(QK^T)V</code> ≈ 1.28 × 10<sup>14</sup> operations</li>
+  <li><code>Q(K^T V)</code> ≈ 1.6 × 10<sup>10</sup> operations</li>
+</ul>
+<p>About 8000× fewer. And <code>K^T V</code> is exactly <code>S_t</code> — a fixed d_k × d_v matrix that does
+not grow with context. That is why there is no KV cache, and why the paper reports 75% less KV memory and 6×
+decoding throughput at 1M context.</p>
+<pre class="diag">softmax:  keep all T (k,v) pairs  →  memory grows with context
+linear:   keep one matrix S       →  memory is constant</pre>
+
+<!-- ---------------------------------------------------------- -->
+<h3>Why does q_t need to escape the sum?</h3>
+<p>Because if <code>q_t</code> stays inside the sum, the sum is different for every query — so you have to redo
+it every time. If it escapes, the sum is the <b>same</b> for every query, so you compute it once and reuse it
+forever.</p>
+
+<div class="callout"><strong>The real question: can you pre-combine k and v?</strong>
+<pre class="diag">q_t inside:   o_t = sum_i  f(q_t, k_i) · v_i     the summand depends on t AND i
+q_t outside:  o_t = ( sum_i k_i v_i^T ) · q_t    the summand depends on i ONLY</pre>
+Look at the second line. That sum has <b>no q in it</b>. It doesn't care which query is coming. So you can build
+it before any query arrives, and every future query reads the same object.</div>
+
+<p>In the first line the weight on <code>v_i</code> depends on <code>q_t</code>, which hasn't arrived yet. So
+you're stuck keeping <code>k_i</code> and <code>v_i</code> apart, waiting.</p>
+
+<table>
+  <tr><th></th><th>Can you merge k_i and v_i early?</th><th>Consequence</th></tr>
+  <tr><td>Softmax</td><td class="lose">No — the weight needs q, which hasn't arrived</td><td>must store every k_i and v_i → KV cache</td></tr>
+  <tr><td>Linear</td><td class="win">Yes — <code>k_i v_i^T</code> is self-contained</td><td>store only the running total → one matrix</td></tr>
+</table>
+
+<p><b>A small worked example.</b> Take d = 1 so everything is a plain number, four tokens:</p>
+<pre class="diag">k = [2, 3, 1, 4]
+v = [10, 20, 30, 40]</pre>
+<p><em>Naive (q inside the sum)</em> — the 4th query needs</p>
+<pre class="diag">o_4 = q_4·2·10 + q_4·3·20 + q_4·1·30 + q_4·4·40      4 terms</pre>
+<p>Query 3 needs 3 terms, query 2 needs 2, query 1 needs 1 — <b>10 terms</b> total, i.e. T²/2.</p>
+<p><em>Factored (q escapes)</em> — build a running total instead:</p>
+<pre class="diag">S_1 = 20
+S_2 = 20 + 60   = 80
+S_3 = 80 + 30   = 110
+S_4 = 110 + 160 = 270</pre>
+<p>Then every query is one multiply: <code>o_4 = q_4 · 270</code>. Total <b>4 adds + 4 multiplies</b>, i.e. T.
+At T = 1,000,000 that's 10<sup>12</sup> versus 10<sup>6</sup>.</p>
+
+<p><b>Why softmax can't do this.</b> The weight <code>exp(q_t · k_i)</code> is a different number for every
+(t, i) pair, and <code>exp</code> refuses to factor over sums — <code>exp(a+b) = exp(a)·exp(b)</code> gives
+products, not sums. Attention needs sums to combine. The two don't fit.</p>
+
+<div class="callout"><strong>Two things escaping buys you.</strong> (1) The sum is built once and shared by all
+T queries — compute drops from T² to T. (2) Once <code>k_i v_i^T</code> is folded into S, the individual
+<code>k_i</code> and <code>v_i</code> can be thrown away — which is why the update is written as a recurrence
+<code>S_t = S_(t-1) + k_t v_t^T</code>. Linear attention is an RNN with a matrix-valued state, and the escaping
+is what makes it one.</div>
+
+<p><b>And the price.</b> Reading out gives
+<code>o_t = S_t^T q_t = sum_i (k_i^T q_t) v_i</code> — you wanted <code>v_3</code>, you get <code>v_3</code>
+plus a little of every other <code>v_i</code>, weighted by however much <code>q_t</code> happens to overlap
+<code>k_i</code>. Nothing suppresses the wrong ones, because there is no <code>exp</code> to sharpen them away.
+The paper says it directly: the objective "continually reinforces recent key–value pairs without any forgetting,"
+so "the accumulated state grows unbounded, leading to interference over long contexts."</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>The ladder: fixing that interference without breaking linearity</h3>
+<p>Everything after §2.2 adds capability while carefully preserving the associativity that makes the whole thing
+linear. Each rung is an online-learning objective on the state <code>S</code>:</p>
+
+<div class="step"><b>1. Linear attention</b> — gradient descent on <code>L_t(S) = −&lt;S^T k_t, v_t&gt;</code>
+<pre class="diag">S_t = S_(t-1) + k_t v_t^T</pre>
+Pure accumulation. No forgetting, no error correction.</div>
+
+<div class="step"><b>2. DeltaNet</b> — gradient descent on a <em>reconstruction</em> loss
+<code>L_t(S) = ½‖S^T k_t − v_t‖²</code>
+<pre class="diag">S_t = (I − β_t k_t k_t^T) S_(t-1) + β_t k_t v_t^T</pre>
+The classical delta rule: the state corrects itself toward the mapping k_t → v_t. The rank-1 update is a
+generalized Householder transformation, which is what makes chunkwise parallel training possible.</div>
+
+<div class="step"><b>3. Gated DeltaNet (GDN)</b> — add a scalar forget gate α_t ∈ [0,1]
+<pre class="diag">S_t = α_t (I − β_t k_t k_t^T) S_(t-1) + β_t k_t v_t^T</pre>
+α_t acts as weight decay on the fast weights — data-dependent L2 regularization, controlling memory lifespan.</div>
+
+<div class="step"><b>4. KDA (this paper)</b> — make the gate <em>per-channel</em>
+<pre class="diag">S_t = (I − β_t k_t k_t^T) Diag(α_t) S_(t-1) + β_t k_t v_t^T</pre>
+<code>Diag(α_t)</code> instead of a scalar: every feature dimension gets its own forgetting rate. GDN and
+Mamba2 use one coarse head-wise gate; KDA borrows the channel-wise idea from GLA. With a finite-size state,
+how precisely you forget is how well you use the memory you have.</div>
+
+<p>KDA parameterizes this as a <b>specialized variant of Diagonal-Plus-Low-Rank (DPLR)</b> transitions — cheaper
+than the general DPLR formulation while staying closer to the classical delta rule, which is what lets them write
+a bespoke chunkwise kernel.</p>
+
+<p>Around the core, the neural parameterization is:</p>
+<pre class="diag">q_t, k_t = L2Norm(Swish(ShortConv(W x_t)))    L2Norm for eigenvalue stability
+v_t      = Swish(ShortConv(W_v x_t))
+α_t      = f(W↑ W↓ x_t) ∈ [0,1]^dk            per-channel decay, low-rank projection
+β_t      = Sigmoid(W_β x_t)                    learning rate
+o_t      = W_o [ Sigmoid(W↑_g W↓_g x_t) ⊙ RMSNorm(KDA(...)) ]</pre>
+<p>The output gate is low-rank and sigmoid — the paper notes it also alleviates the attention-sink problem.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>The architecture</h3>
+<div class="mermaid">
+flowchart TD
+  I[Input tokens] --> B1[KDA layer]
+  B1 --> B2[KDA layer]
+  B2 --> B3[KDA layer]
+  B3 --> M[Full MLA layer · NoPE]
+  M --> R[repeat ...]
+  R --> O[Output]
+</div>
+<ul>
+  <li><b>3:1 hybrid.</b> Three KDA layers per one full MLA layer, chosen layerwise (whole layers alternate)
+  rather than headwise, for infrastructure simplicity and training stability.</li>
+  <li><b>NoPE on the MLA layers.</b> No positional encoding at all on the full-attention layers — KDA carries
+  all positional information. This also lets MLA convert to efficient MQA at inference and removes RoPE
+  frequency-base tuning from long-context training.</li>
+  <li><b>MoE backbone</b> following Moonlight: 8 of 256 experts activated plus one shared expert, first layer
+  dense for stability. 48B total, 3B activated.</li>
+</ul>
+
+<h3>Why NoPE works here (§6.1)</h3>
+<p>Write attention in a generalized form where the query–key score carries a cumulative product of transition
+matrices between positions <code>i</code> and <code>t</code>. RoPE makes that transition a fixed 2D rotation
+with hand-set frequencies. The gated delta rule makes it <code>A_j (I − β_j k_j k_j^T)</code> — <b>data-dependent
+and learned</b>, and free of RoPE's orthogonality constraint.</p>
+<p>So KDA <em>is</em> a positional encoding, just a learnable one. That is the argument for giving MLA NoPE:
+if the linear layers already encode position, adding RoPE on top puts a strong explicit short-range bias in the
+global layer, which helps short contexts but hurts adaptation to long ones. The numbers agree — Kimi Linear
+(RoPE) matches on short context but drops to 51.8 long-context average against 54.5.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>Results</h3>
+
+<p><b>Synthetic tasks</b> (palindrome, multi-query associative recall, LIFO stack tracking). KDA has the highest
+accuracy at every sequence length from 256 to 2048 and converges faster than GDN on palindrome and MQAR.
+<b>Mamba2 fails all three</b> — it has multiplicative decay but no delta rule.</p>
+
+<p><b>Ablations</b> (matched FLOPs, perplexity, lower is better):</p>
+<table>
+  <tr><th>Setting</th><th>Train PPL</th><th>Val PPL</th></tr>
+  <tr><td><b>Hybrid 3:1</b></td><td><b>9.23</b></td><td><b>5.65</b></td></tr>
+  <tr><td>Hybrid 1:1</td><td>9.29</td><td>5.66</td></tr>
+  <tr><td>Hybrid 7:1</td><td>9.23</td><td>5.70</td></tr>
+  <tr><td>Hybrid 15:1</td><td>9.34</td><td>5.82</td></tr>
+  <tr><td>Hybrid 0:1 (pure full attention)</td><td>9.45</td><td>5.77</td></tr>
+  <tr><td>w/o output gate</td><td>9.25</td><td>5.67</td></tr>
+  <tr><td>w/ swish output gate</td><td>9.43</td><td>5.81</td></tr>
+  <tr><td>w/o convolution layer</td><td>9.29</td><td>5.70</td></tr>
+</table>
+<p>7:1 matches 3:1 on <em>training</em> loss but is clearly worse on validation — more linear layers overfit the
+pretraining distribution. Pure full attention (0:1) is the worst row in the table.</p>
+
+<p><b>Scaling law</b> (5 MoE sizes, 653M–1.7B activated):</p>
+<pre class="diag">MLA:          Loss = 2.3092 × C^(−0.0536)
+Kimi Linear:  Loss = 2.2879 × C^(−0.0527)     ≈ 1.16× compute efficiency</pre>
+<p>The paper notes MLA's hyperparameters were grid-searched per size while Kimi Linear simply reused them, so it
+expects tuning would improve the KDA curve.</p>
+
+<p><b>Long context</b> (1.4T tokens, average over 8 benchmarks):</p>
+<table>
+  <tr><th>Model</th><th>RULER</th><th>MRCR</th><th>RepoQA</th><th>Avg</th></tr>
+  <tr><td>MLA (full attention)</td><td>81.3</td><td>22.6</td><td>63.0</td><td>52.2</td></tr>
+  <tr><td>GDN-H</td><td>80.5</td><td>23.9</td><td>63.0</td><td>51.2</td></tr>
+  <tr><td>Kimi Linear (RoPE)</td><td>78.8</td><td>22.0</td><td>66.5</td><td>51.8</td></tr>
+  <tr><td><b>Kimi Linear</b></td><td class="win"><b>84.3</b></td><td class="win"><b>29.6</b></td><td class="win"><b>68.5</b></td><td class="win"><b>54.5</b></td></tr>
+</table>
+<p>This is the headline: the linear-attention model beats full attention on <em>long context</em>, which is where
+finite-state memory was supposed to lose.</p>
+
+<p><b>Short context</b> — Kimi Linear leads on most base and instruction-tuned benchmarks (MMLU-Pro 51.0 vs
+47.2 MLA; GPQA-Diamond after SFT 62.1 vs 57.1), with a few exceptions (EvalPlus, MATH500, LiveBench go to a
+baseline).</p>
+
+<p><b>Efficiency</b> (48B setting):</p>
+<table>
+  <tr><th>Context</th><th>Prefill speedup vs MLA</th></tr>
+  <tr><td>4k–16k</td><td>comparable</td></tr>
+  <tr><td>512k</td><td>2.3×</td></tr>
+  <tr><td>1M</td><td>2.9×</td></tr>
+</table>
+<p>Decoding throughput at 1M context is <b>6×</b> faster than full attention. Against GDN-H, KDA's finer-grained
+decay adds essentially no prefill latency — the curves are indistinguishable.</p>
+
+<p><b>RL scaling.</b> On math RL post-training, Kimi Linear improves faster than MLA on both training and test
+accuracy — the setting the introduction motivates the whole architecture with.</p>
+
+<h3>The honest framing</h3>
+<p>Kimi Linear is <b>not</b> a pure linear-attention model. One layer in four is full softmax MLA, and the paper
+states plainly why: "purely linear structure remain fundamentally constrained by the finite-state capacity,
+making long-sequence modeling and in-context retrieval theoretically challenging." The 3:1 ablation confirms
+it — push to 15:1 and validation PPL degrades to 5.82, worse than pure full attention's 5.77. The contribution
+is finding the ratio where the crosstalk stays survivable, plus a gate fine-grained enough to make each linear
+layer worth its slot.</p>
+</section>
+
+</body>
+</html>
