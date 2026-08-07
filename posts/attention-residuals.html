@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attention Residuals — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .win{ color:#2EAF8E; font-weight:600; }
+  .lose{ color:#F06B7F; font-weight:600; }
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Attention Residuals — Softmax Attention Over Depth</h1>
+<p class="paper-meta">Paper: <em>Attention Residuals</em> — Kimi Team (Moonshot AI),
+<a href="https://arxiv.org/abs/2603.15031">arXiv:2603.15031</a> ·
+<a href="https://github.com/MoonshotAI/Attention-Residuals">code</a>. Technical report, March 2026.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>The move:</b> a residual connection is a <em>uniform sum</em> over all earlier layer outputs.
+  Replace it with <b>softmax attention over depth</b> so each layer picks which earlier layers it wants.</li>
+  <li><b>Why it works:</b> softmax weights sum to 1, so the hidden state stops growing — that kills
+  PreNorm dilution. And the weights are <em>input-dependent</em>, so a layer can reach back selectively.</li>
+  <li><b>The cost trick:</b> Full AttnRes needs O(Ld) memory <em>and cross-stage communication</em>, which
+  breaks under pipeline parallelism. <b>Block AttnRes</b> groups layers into N≈8 blocks and attends over
+  block summaries → O(Nd), recovering nearly all the gain.</li>
+  <li><b>Result:</b> matches a baseline trained with <b>1.25× more compute</b>; 48B/3B-active model on 1.4T
+  tokens improves on every downstream benchmark (GPQA-Diamond +7.5, Math +3.6, HumanEval +3.1).</li>
+  <li><b>The ablation that carries the paper:</b> DenseFormer also gives every layer access to all previous
+  outputs, but with <em>fixed</em> coefficients — and it scores <b>1.767 vs baseline 1.766</b>, i.e. nothing.
+  Cross-layer access is not the contribution. <b>Input-dependence is.</b></li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The problem: PreNorm dilution</h3>
+<p>A standard PreNorm block is <code>h_l = h_(l-1) + f_l(Norm(h_(l-1)))</code>. Unroll it:</p>
+<pre class="diag">h_L = h_0 + f_1(...) + f_2(...) + ... + f_L(...)</pre>
+<p>Every layer's output is added with weight <b>exactly 1</b>. Not learned, not input-dependent. Three things
+follow, and the paper names all three:</p>
+<ul>
+  <li><b>Output growth.</b> You add L things and never divide, so <code>‖h_l‖</code> grows as O(L). Nothing
+  regulates it — hence "uncontrolled".</li>
+  <li><b>No selective access.</b> Every layer reads the same pre-mixed blob <code>h_(l-1)</code>. An attention
+  layer and an MLP layer get identical input even though they might want different weightings.</li>
+  <li><b>Irreversible loss.</b> Whatever the sum squashes cannot be dug back out later.</li>
+</ul>
+
+<div class="callout"><strong>The feedback loop that makes it worse.</strong> Layer <em>l</em> reads
+<code>Norm(h_(l-1))</code> — <em>normalized</em>, so always the same scale no matter how big the stream got.
+So its natural output stays around size 1. But 1 out of 60 is nothing. The only way a deep layer can matter
+is to <b>learn to emit much larger outputs</b> — and large activations are exactly what destabilizes training.
+Depth creates pressure toward instability.</div>
+
+<table>
+  <tr><th>After layer</th><th>Size of h</th><th>Newest layer's share</th></tr>
+  <tr><td>1</td><td>1</td><td>100%</td></tr>
+  <tr><td>5</td><td>5</td><td>20%</td></tr>
+  <tr><td>20</td><td>20</td><td>5%</td></tr>
+  <tr><td>60</td><td>60</td><td>1.7%</td></tr>
+</table>
+<p>Independent evidence this is real: a large fraction of layers in trained LLMs can be pruned with almost no
+loss. If deep layers were contributing much, that wouldn't be possible.</p>
+
+<h3>The idea: depth is just another sequence</h3>
+<p>Residual connections compress everything before layer <em>l</em> into one state — exactly what an RNN does
+over <em>time</em>. Attention fixed that for sequences. This paper does the same fix for <b>depth</b>.</p>
+
+<div class="mermaid">
+flowchart LR
+  subgraph Standard["Standard residual — uniform sum"]
+    S1[v0] --> SS[h_l]
+    S2[v1] --> SS
+    S3[v2] --> SS
+    S4[v3] --> SS
+  end
+  subgraph Attn["AttnRes — softmax over depth"]
+    A1[v0] -->|a0| AA[h_l]
+    A2[v1] -->|a1| AA
+    A3[v2] -->|a2| AA
+    A4[v3] -->|a3| AA
+  end
+</div>
+
+<pre class="diag">before:  h_l = v_0 + v_1 + ... + v_(l-1)                      all weights = 1
+after:   h_l = a_0·v_0 + a_1·v_1 + ... + a_(l-1)·v_(l-1)      weights sum to 1</pre>
+
+<p>The weights come from softmax attention: <code>a_(i→l) = softmax_i( w_l · RMSNorm(k_i) )</code>, where</p>
+<ul>
+  <li><b>query</b> <code>q_l = w_l</code> — one <em>learned</em> d-dimensional vector per layer. Not computed
+  from the input.</li>
+  <li><b>key = value</b> <code>k_i = v_i = f_i(h_i)</code> — the actual layer outputs, which <em>are</em>
+  input-dependent.</li>
+  <li>the <b>RMSNorm on keys</b> stops a layer with big-magnitude outputs from hogging the attention weights.</li>
+</ul>
+<p>All pseudo-queries <code>w_l</code> <b>must</b> be zero-initialized. That makes every score 0, so softmax gives
+uniform weights and AttnRes starts as an equal-weight <em>average</em> of previous layers. The paper reports that
+non-zero init caused training volatility. Cost per layer is one RMSNorm and one d-dimensional vector — negligible
+against total parameters.</p>
+<p>Cost is O(L²d) arithmetic and O(Ld) memory per token. Since depth is small (L &lt; 1000, unlike sequence
+length which hits millions), O(L²) over depth is cheap.</p>
+
+<h3>Block AttnRes — the part that makes it shippable</h3>
+<p>In plain training, Full AttnRes is nearly free: the layer outputs it needs are already kept around for
+backprop. At scale it breaks, because real training uses <b>activation recomputation</b> (those activations
+were supposed to be freed) and <b>pipeline parallelism</b> (every layer output must now cross stage
+boundaries). That O(Ld) communication is the killer, and local batching can't fix it.</p>
+<p>Block AttnRes partitions L layers into N blocks. <b>Inside</b> a block, outputs are summed the normal way.
+<b>Across</b> blocks, full softmax attention runs over just the N block summaries plus the token embedding.
+Memory and communication drop to O(Nd), compute to O(N²).</p>
+<pre class="diag">N = 1  →  standard residual connection
+N = 8  →  the sweet spot (recovers most of the gain)
+N = L  →  Full AttnRes</pre>
+
+<h3>Results</h3>
+<p><b>Scaling law</b> (5 sizes, 194M–528M activated, MoE):</p>
+<table>
+  <tr><th>Variant</th><th>Fitted curve</th></tr>
+  <tr><td>Baseline (PreNorm)</td><td>L = 1.891 × C<sup>−0.057</sup></td></tr>
+  <tr><td>Block AttnRes</td><td>L = 1.870 × C<sup>−0.058</sup></td></tr>
+  <tr><td>Full AttnRes</td><td>L = 1.865 × C<sup>−0.057</sup></td></tr>
+</table>
+<p>At 5.6 PFLOP/s-days, Block AttnRes hits 1.692 vs baseline 1.714 — a <b>1.25× compute advantage</b>. The
+gap between Full and Block shrinks to 0.001 at the largest size.</p>
+
+<p><b>Downstream</b> (Kimi Linear 48B total / 3B activated, 1T pre-train + 400B mid-train):</p>
+<table>
+  <tr><th>Benchmark</th><th>Baseline</th><th>AttnRes</th><th>Δ</th></tr>
+  <tr><td>GPQA-Diamond</td><td>36.9</td><td>44.4</td><td class="win">+7.5</td></tr>
+  <tr><td>Math</td><td>53.5</td><td>57.1</td><td class="win">+3.6</td></tr>
+  <tr><td>HumanEval</td><td>59.1</td><td>62.2</td><td class="win">+3.1</td></tr>
+  <tr><td>C-Eval</td><td>79.6</td><td>82.5</td><td class="win">+2.9</td></tr>
+  <tr><td>TriviaQA</td><td>69.9</td><td>71.8</td><td class="win">+1.9</td></tr>
+  <tr><td>BBH</td><td>76.3</td><td>78.0</td><td class="win">+1.7</td></tr>
+  <tr><td>MMLU</td><td>73.5</td><td>74.6</td><td class="win">+1.1</td></tr>
+  <tr><td>MMLU-Pro</td><td>52.2</td><td>52.2</td><td class="lose">0.0</td></tr>
+</table>
+<p>Gains concentrate on multi-step reasoning and code — consistent with the story that better depth-wise flow
+helps <em>compositional</em> tasks, where late layers want to build on specific earlier representations.</p>
+
+<p><b>Training dynamics.</b> The baseline's output magnitude climbs monotonically with depth. Block AttnRes
+shows a bounded sawtooth — selective aggregation at each block boundary resets the accumulation. Gradients
+also spread out: the baseline piles disproportionately large gradients into the earliest layers, while the
+softmax forces sources to compete for probability mass.</p>
+
+<p><b>Ablations</b> (16-layer model, baseline 1.766):</p>
+<table>
+  <tr><th>Variant</th><th>Loss</th><th>Read</th></tr>
+  <tr><td>DenseFormer (all layers, <em>fixed</em> coefficients)</td><td>1.767</td><td class="lose">no gain at all</td></tr>
+  <tr><td>SWA (last 8 layers + embedding)</td><td>1.764</td><td class="lose">barely moves</td></tr>
+  <tr><td>mHC (m streams, learned mixing)</td><td>1.747</td><td>input-dependence helps</td></tr>
+  <tr><td>Block AttnRes (S = 4)</td><td>1.746</td><td>matches mHC at far less memory I/O</td></tr>
+  <tr><td>Full AttnRes, w/o RMSNorm</td><td>1.743</td><td>norm is worth 0.006</td></tr>
+  <tr><td>Full AttnRes, sigmoid instead of softmax</td><td>1.741</td><td>competition matters a little</td></tr>
+  <tr><td><b>Full AttnRes</b></td><td><b>1.737</b></td><td class="win">the design</td></tr>
+  <tr><td>Full AttnRes, w/ input-dependent query</td><td>1.731</td><td class="win">even better — but not used</td></tr>
+</table>
+<p>Block size sweep: S = 2, 4, 8 all land near 1.746; S = 16, 32 drift back toward baseline.</p>
+
+<h3>The unified view (§6)</h3>
+<p>Write any residual scheme as a <b>depth mixing matrix</b> M, where <code>M_(i→l)</code> is how much of layer
+<em>i</em>'s output reaches layer <em>l</em>. Then:</p>
+<table>
+  <tr><th>Scheme</th><th>M looks like</th></tr>
+  <tr><td>Standard residual</td><td>all-ones lower triangular — rank 1, fixed</td></tr>
+  <tr><td>Highway</td><td>1-semiseparable — same rank, but input-dependent</td></tr>
+  <tr><td>(m)HC / mHC</td><td>m-semiseparable — state expansion along depth</td></tr>
+  <tr><td>Full AttnRes</td><td>dense, rank L</td></tr>
+  <tr><td>Block AttnRes</td><td>rank between N and N+S</td></tr>
+</table>
+<p>The punchline: every prior residual variant is <b>depth-wise <em>linear</em> attention</b>. AttnRes is
+depth-wise <b>softmax</b> attention — the same linear→softmax transition that transformed sequence modeling,
+now applied to depth.</p>
+
+<p><b>Overhead:</b> &lt;4% end-to-end training under pipeline parallelism, &lt;2% inference latency. It needs
+cross-stage caching (each block stored once across virtual stages) and a two-phase inference strategy using
+online softmax.</p>
+</section>
+
+</body>
+</html>

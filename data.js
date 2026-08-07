@@ -236,6 +236,29 @@ const BLOG = {
     },
 
     {
+      id: "kimi-report",
+      name: "KIMI Report",
+      blurb: "Technical reports from Moonshot AI's Kimi team — architecture changes reported at production scale.",
+      notes: [
+        {
+          title:   "Attention Residuals — Softmax Attention Over Depth",
+          file:    "posts/attention-residuals.html",
+          date:    "2026-08-07",
+          paper:   "Kimi Team (Moonshot AI) · arXiv:2603.15031",
+          tags:    ["KIMI report", "architecture", "residual connections", "PreNorm", "depth", "empirical"],
+          summary: "Standard PreNorm residuals add every layer output with a fixed weight of 1, so the hidden state grows as O(L) and each layer's relative share shrinks — and since PreNorm feeds each layer a fixed-scale normalized input, deep layers can only stay influential by emitting ever-larger outputs. AttnRes replaces the uniform sum with softmax attention over depth: a per-layer learned pseudo-query scores the previous layer outputs, which serve as both keys and values, so weights are normalized (bounded) and input-dependent (selective); queries are zero-initialized so training starts from an equal-weight average. Block AttnRes cuts the O(Ld) memory and cross-stage communication to O(Nd) by summing within N≈8 blocks and attending only over block summaries. Results: scaling-law fits of 1.891·C^−0.057 (baseline), 1.870·C^−0.058 (Block), 1.865·C^−0.057 (Full) — same slope, lower constant, worth 1.25× compute; a 48B/3B-active Kimi Linear model on 1.4T tokens gains on every benchmark, concentrated on compositional tasks (GPQA-Diamond +7.5, Math +3.6, HumanEval +3.1) with MMLU-Pro flat at 0.0. The decisive ablation is DenseFormer, which also grants every layer access to all previous outputs but combines them with fixed coefficients and scores 1.767 against a 1.766 baseline: cross-layer access alone buys nothing, input-dependence is the contribution. Includes the unified structured-matrix view where prior residual variants are depth-wise linear attention and AttnRes is depth-wise softmax attention.",
+        },
+      ],
+      papers: [
+        {
+          name:    "Attention Residuals",
+          link:    "https://arxiv.org/abs/2603.15031",
+          summary: "Kimi Team (Moonshot AI) technical report. Observes a formal duality between depth-wise residual accumulation and RNN recurrence over time: both compress all prior information into one state. PreNorm residuals sum every layer output with fixed unit weight, so ‖h_l‖ grows as O(L), each layer's relative share shrinks, and because PreNorm feeds each layer a fixed-scale normalized input, deep layers can only stay influential by learning ever-larger outputs — which destabilizes training and is why many layers can be pruned for free. AttnRes replaces the sum with softmax attention over depth: a per-layer learned pseudo-query w_l scores the previous layer outputs (which serve as both keys and values, so input-dependence enters through the keys), with RMSNorm on keys to stop large-magnitude layers dominating, and all w_l zero-initialized so training starts from a uniform average. Full AttnRes costs O(L²d) compute and O(Ld) memory — free in vanilla training since backprop already retains those activations, but fatal under activation recomputation and pipeline parallelism where every layer output must cross stage boundaries. Block AttnRes partitions L layers into N blocks, sums within a block and attends over the N block summaries, cutting memory and communication to O(Nd); N=1 recovers the standard residual and N=L recovers Full AttnRes, with N≈8 capturing most of the gain. Scaling law over five MoE sizes: baseline 1.891·C^−0.057, Block 1.870·C^−0.058, Full 1.865·C^−0.057 — same slope, lower constant, worth 1.25× compute. Ablations at 16 layers (baseline 1.766) are the real argument: DenseFormer's fixed input-independent coefficients give 1.767 (nothing), sliding-window over the 8 nearest layers gives 1.764, mHC 1.747, Block AttnRes 1.746, Full AttnRes 1.737 — and an input-dependent query would reach 1.731 but is rejected because decoupling the query from the forward pass is what lets attention weights for a group of layers be computed in parallel. Final model integrates Block AttnRes into Kimi Linear 48B total / 3B activated, pre-trained on 1T tokens plus 400B mid-training, improving on every evaluated benchmark with the largest gains on compositional tasks (GPQA-Diamond 36.9→44.4, Math 53.5→57.1, HumanEval 59.1→62.2) and none on MMLU-Pro. Training dynamics confirm the mechanism: bounded periodic output magnitudes instead of monotone growth, and gradients spread across depth instead of piling into the earliest layers. Unified structured-matrix view shows standard residuals, Highway and (m)HC are all depth-wise linear attention with rank-1 to m-semiseparable mixing matrices, while AttnRes is depth-wise softmax attention. Overhead under 4% training and under 2% inference latency.",
+        },
+      ],
+    },
+
+    {
       id: "spatial-intelligence",
       name: "Spatial Intelligence",
       blurb: "How MLLMs perceive and reason about 3D structure — diagnostic benchmarks, occlusion, counting, mental rotation.",
