@@ -10,7 +10,6 @@
 <style>
   .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
   .win{ color:#2EAF8E; font-weight:600; }
-  .lose{ color:#F06B7F; font-weight:600; }
   pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
             border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem;
             overflow-x:auto; }
@@ -113,50 +112,13 @@ q_t outside:  o_t = ( sum_i k_i v_i^T ) · q_t    the summand depends on i ONLY<
 Look at the second line. That sum has <b>no q in it</b>. It doesn't care which query is coming. So you can build
 it before any query arrives, and every future query reads the same object.</div>
 
-<p>In the first line the weight on <code>v_i</code> depends on <code>q_t</code>, which hasn't arrived yet. So
-you're stuck keeping <code>k_i</code> and <code>v_i</code> apart, waiting.</p>
-
-<table>
-  <tr><th></th><th>Can you merge k_i and v_i early?</th><th>Consequence</th></tr>
-  <tr><td>Softmax</td><td class="lose">No — the weight needs q, which hasn't arrived</td><td>must store every k_i and v_i → KV cache</td></tr>
-  <tr><td>Linear</td><td class="win">Yes — <code>k_i v_i^T</code> is self-contained</td><td>store only the running total → one matrix</td></tr>
-</table>
-
-<p><b>A small worked example.</b> Take d = 1 so everything is a plain number, four tokens:</p>
-<pre class="diag">k = [2, 3, 1, 4]
-v = [10, 20, 30, 40]</pre>
-<p><em>Naive (q inside the sum)</em> — the 4th query needs</p>
-<pre class="diag">o_4 = q_4·2·10 + q_4·3·20 + q_4·1·30 + q_4·4·40      4 terms</pre>
-<p>Query 3 needs 3 terms, query 2 needs 2, query 1 needs 1 — <b>10 terms</b> total, i.e. T²/2.</p>
-<p><em>Factored (q escapes)</em> — build a running total instead:</p>
-<pre class="diag">S_1 = 20
-S_2 = 20 + 60   = 80
-S_3 = 80 + 30   = 110
-S_4 = 110 + 160 = 270</pre>
-<p>Then every query is one multiply: <code>o_4 = q_4 · 270</code>. Total <b>4 adds + 4 multiplies</b>, i.e. T.
-At T = 1,000,000 that's 10<sup>12</sup> versus 10<sup>6</sup>.</p>
-
-<p><b>Why softmax can't do this.</b> The weight <code>exp(q_t · k_i)</code> is a different number for every
-(t, i) pair, and <code>exp</code> refuses to factor over sums — <code>exp(a+b) = exp(a)·exp(b)</code> gives
-products, not sums. Attention needs sums to combine. The two don't fit.</p>
-
-<div class="callout"><strong>Two things escaping buys you.</strong> (1) The sum is built once and shared by all
-T queries — compute drops from T² to T. (2) Once <code>k_i v_i^T</code> is folded into S, the individual
-<code>k_i</code> and <code>v_i</code> can be thrown away — which is why the update is written as a recurrence
-<code>S_t = S_(t-1) + k_t v_t^T</code>. Linear attention is an RNN with a matrix-valued state, and the escaping
-is what makes it one.</div>
-
-<p><b>And the price.</b> Reading out gives
-<code>o_t = S_t^T q_t = sum_i (k_i^T q_t) v_i</code> — you wanted <code>v_3</code>, you get <code>v_3</code>
-plus a little of every other <code>v_i</code>, weighted by however much <code>q_t</code> happens to overlap
-<code>k_i</code>. Nothing suppresses the wrong ones, because there is no <code>exp</code> to sharpen them away.
-The paper says it directly: the objective "continually reinforces recent key–value pairs without any forgetting,"
-so "the accumulated state grows unbounded, leading to interference over long contexts."</p>
-
 <!-- ---------------------------------------------------------- -->
-<h3>The ladder: fixing that interference without breaking linearity</h3>
-<p>Everything after §2.2 adds capability while carefully preserving the associativity that makes the whole thing
-linear. Each rung is an online-learning objective on the state <code>S</code>:</p>
+<h3>The ladder: adding forgetting without breaking linearity</h3>
+<p>Plain accumulation into a fixed-size state means old associations never fade — the paper notes the objective
+"continually reinforces recent key–value pairs without any forgetting," so "the accumulated state grows
+unbounded, leading to interference over long contexts." Everything after §2.2 adds capability while carefully
+preserving the associativity that makes the whole thing linear. Each rung is an online-learning objective on the
+state <code>S</code>:</p>
 
 <div class="step"><b>1. Linear attention</b> — gradient descent on <code>L_t(S) = −&lt;S^T k_t, v_t&gt;</code>
 <pre class="diag">S_t = S_(t-1) + k_t v_t^T</pre>
