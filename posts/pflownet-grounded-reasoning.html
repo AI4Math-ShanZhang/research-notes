@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PFlowNet — Perceptual Flow Network — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .win{ color:#2EAF8E; font-weight:600; }
+  .lose{ color:#F06B7F; font-weight:600; }
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem;
+            overflow-x:auto; }
+  .qa{ background:#fdf6ec; border-left:5px solid #F79A38; padding:.7rem 1rem; margin:1.4rem 0 .8rem;
+       border-radius:0 6px 6px 0; }
+  .qa h3{ margin:0; color:#a35f08; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>PFlowNet — Don't Copy the Detector's Box, Stay <em>Near</em> It</h1>
+<p class="paper-meta">Paper: <em>Perceptual Flow Network for Visually Grounded Reasoning</em> —
+Li, Gong, Zhan, Li, Lyu, Chen, Liu, Huang, Zhong, Zheng &amp; Lu
+(ECNU · SCU · HKUST · SJTU · Ant Group · Shanghai AI Lab),
+<a href="https://arxiv.org/abs/2605.02730">arXiv:2605.02730</a>. ICML 2026, May 2026.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>The finding that starts everything:</b> they grew the detector's box outward from its center and fed
+  only that crop to the model. The <em>tightest, most precise box gave worse answers</em> than a looser one.
+  A tight crop cuts away context the model needs — they call it <b>tunnel vision</b>. So training a VLM to
+  match GroundingDINO exactly is aiming at the wrong target.</li>
+  <li><b>Why you can't just fix it by hand:</b> the right amount of looseness is different for every image and
+  every question. No fixed rule works.</li>
+  <li><b>The move:</b> replace the hard "match the expert box" constraint with a <em>learned distribution</em>
+  over <b>perceptual flows</b> — plan → (box + caption) × K → answer. The geometry term only says
+  <b>stay inside a ball of radius ε around the expert box</b>; inside that ball the model is free.</li>
+  <li><b>How the step-wise signal appears:</b> the reward is defined on <em>partial</em> flows (after 1 box,
+  after 2 boxes, …), so every prefix has its own scalar. SubTB's flow-conservation constraint between every
+  pair of prefixes turns those scalars into a per-step gradient — <b>no value network</b>.</li>
+  <li><b>Result:</b> on Qwen3-VL-8B — V* <b>90.6</b> (+13), MME-RealWorld-lite <b>67.0</b> (+18.4),
+  TreeBench <b>55.3</b> (+10.4). The 8B model beats the 4× bigger Qwen3-VL-32B on the hard visual-search tasks.</li>
+  <li><b>The theory framing:</b> λ→0 degenerates to plain MLE, λ→∞ degenerates to expert-forced RLVR. Both
+  existing approaches are <em>special cases</em>; the in-between is provably tighter.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The problem they found</h3>
+<p>Vision-language models hallucinate. The popular fix: run a detector like GroundingDINO, get a box around
+the important object, then train the model with RL so its own box matches that box. The detector box is the
+<b>expert prior</b>.</p>
+
+<p>They tested whether this is actually good. On V* Bench, they took the expert box and slowly grew it
+outward from the center, then fed <em>only that crop</em> to the model and measured accuracy.</p>
+
+<div class="callout"><strong>Counter-intuitive result.</strong> The tightest box was <span class="lose">not</span>
+the best. Accuracy peaked at some medium looseness. A tight crop removes the surrounding context the model
+needs to reason. The most <em>geometrically precise</em> evidence is not the most <em>useful</em> evidence.</div>
+
+<p>Follow-up problem: the best looseness is <b>instance-specific</b>. You cannot write it down as a heuristic.</p>
+
+<h3>Perceptual Flow</h3>
+<p>The model's visual thinking, written out as a chain:</p>
+<ul>
+  <li><b>Planning state</b> <code>z0</code> (inside <code>&lt;analyze&gt;</code> tags): plain text that breaks
+  the question down and lists what to look for.</li>
+  <li><b>Perceptual states</b> <code>z1 … zK</code> (inside <code>&lt;localize&gt;</code> tags): each one is a
+  box (relative coordinates 0–1000) plus a caption describing what is in it.</li>
+</ul>
+
+<h3>Decoupled, two stages</h3>
+<p>First generate the whole flow. Then crop those boxes out of the image, feed the crops back in, and
+<em>only then</em> write the answer. The answer is conditioned on the model's own perception instead of being
+tangled together with it.</p>
+
+<pre class="mermaid">
+flowchart LR
+  X["image + question"] --> P["z0 — plan<br/>&lt;analyze&gt;"]
+  P --> B1["z1 — box + caption"]
+  B1 --> B2["z2 — box + caption"]
+  B2 --> Bk["… zK"]
+  Bk --> T["⊤ = &lt;/localize&gt;<br/>stop looking"]
+  T --> C["crop the boxes,<br/>feed crops back in"]
+  C --> A["answer Y"]
+  style P fill:#e8e0f5,stroke:#9B72CF
+  style B1 fill:#dbeafe,stroke:#4A8ED4
+  style B2 fill:#dbeafe,stroke:#4A8ED4
+  style Bk fill:#dbeafe,stroke:#4A8ED4
+  style A fill:#d9f2e6,stroke:#2EAF8E
+</pre>
+
+<h3>Training, three parts</h3>
+<ol>
+  <li><b>Data.</b> Take samples that have detector boxes. <em>Randomly expand each box first</em> — on purpose,
+  to kill the detector bias. Teacher models (Gemini 3 Flash, GPT-4o) write the plan and the per-crop captions.
+  A verifier then answers each sample twice, with the flow and without it. Trivial samples and useless flows
+  get dropped; the rest split into a cold-start SFT set and an RL set.</li>
+  <li><b>Cold start.</b> Ordinary supervised fine-tuning on those synthetic flows.</li>
+  <li><b>Variational RFT.</b> Sub-Trajectory Balance (from GFlowNets) instead of PPO, because it gives a signal
+  at every step of the chain rather than only at the end.</li>
+</ol>
+
+<h3>The three reward pieces</h3>
+<table>
+  <tr><th>Piece</th><th>What it measures</th></tr>
+  <tr><td><b>Quality</b></td>
+      <td>For each box: how likely is this caption given the crop <em>inside</em> the box, versus given the
+      image with that region <em>cut out</em>. A high ratio means the caption really describes that region and
+      is not generic filler.</td></tr>
+  <tr><td><b>Efficacy</b></td>
+      <td>Does having this flow raise the probability of the correct final answer? The
+      "was this perception actually useful" term.</td></tr>
+  <tr><td><b>Geometry<br/>(vicinal shaping)</b></td>
+      <td>Instead of forcing a match, draw a ball of radius ε around the detector box and penalize only for
+      leaving it. Inside the ball, the model picks whatever box helps reasoning most.</td></tr>
+</table>
+
+<h3>The theory part</h3>
+<p>They bound the distance between what the model learns and the ideal target. Two limits fall out:</p>
+<ul>
+  <li><b>λ → 0:</b> the geometry term vanishes → plain supervised training (MLE).</li>
+  <li><b>λ → ∞:</b> → normal expert-forced RL, stuck at the detector's bias.</li>
+</ul>
+<p>With λ and ε tuned in between, the bound is strictly tighter than both. Both existing approaches are special
+cases of theirs, so theirs is provably at least as good.</p>
+
+<h3>Numbers (all vs. base Qwen3-VL-8B)</h3>
+<table>
+  <tr><th>Benchmark</th><th>PFlowNet</th><th>gain</th></tr>
+  <tr><td>V* Bench</td><td><b>90.6</b></td><td class="win">+13</td></tr>
+  <tr><td>MME-RealWorld-lite</td><td><b>67.0</b></td><td class="win">+18.4</td></tr>
+  <tr><td>TreeBench</td><td><b>55.3</b></td><td class="win">+10.4</td></tr>
+  <tr><td>HR-Bench 4K / 8K</td><td><b>80.4 / 75.9</b></td><td class="win">+8.0 / +7.0</td></tr>
+  <tr><td>ScreenSpot v2 / Pro</td><td><b>95.1 / 61.8</b></td><td class="win">+2.4 / +7.2</td></tr>
+</table>
+<p>SOTA on 17 of 19 subtasks. The 8B model beats the 4× larger Qwen3-VL-32B on the hard visual-search tasks.
+It also beats agent-style methods (DeepEyes, Thyme) while using <em>shorter</em> context and lower latency,
+because it writes a compact flow instead of calling tools and running code. And its Pass@k keeps climbing to
+k=8, while TreeVGR flattens out — rigid box matching makes the output distribution too sharp.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="qa"><h3>Q1 — How does the paper use SubTB, and where does the step-wise supervision come from?</h3></div>
+
+<h3>First: what is a "step" here?</h3>
+<p>Not a token. One step = one <b>perceptual state</b> <code>z_k</code> = (one box + its caption). A flow with
+3 RoIs has 4 states: <code>z0</code> (the plan), <code>z1</code>, <code>z2</code>, <code>z3</code>.</p>
+<p>The probability of one step, <code>p_theta(z_k | z_0:k-1)</code>, is the product of the token probabilities
+of that whole block — the box coordinates plus the caption text.</p>
+<p><code>⊤</code> = the terminal state = emitting the <code>&lt;/localize&gt;</code> token, i.e.
+"I stop looking, now answer".</p>
+
+<h3>The key move: make the reward computable at every prefix</h3>
+<pre class="diag">R(z_0:k , ⊤)  =  [ prod_{i=1..k}  p+(z_i) / p-(z_i) ]  *  p(Y | z_0:k , ⊤ , X)</pre>
+<p>The product runs <code>i = 1..k</code> — it is a <b>running product</b>. And the second term asks:
+"if I stop right now, after only k boxes, how likely is the correct answer Y?"</p>
+
+<div class="callout"><strong>This is the whole trick.</strong> You can evaluate the reward after 1 box, after
+2 boxes, after 3 boxes. <b>Every prefix gets its own scalar.</b> The step-wise signal does not come from a
+value network — it comes from the reward being defined on partial flows.</div>
+
+<p>Then the geometry gate multiplies in:</p>
+<pre class="diag">R_lambda(z_0:k, ⊤) = R(z_0:k, ⊤) * omega_lambda(z_0:k, E)
+
+omega = exp(-lambda)  if the boxes so far wandered outside the eps-ball of the expert prior
+      = 1             if inside</pre>
+
+<h3>How SubTB uses it</h3>
+<p>A GFlowNet has a state flow <code>F(z)</code>. The paper does not <em>learn</em> F — it <b>defines</b> it
+from the reward:</p>
+<pre class="diag">F(z_i) = R_lambda(z_0:i , ⊤) / p_theta(⊤ | z_0:i)
+
+  "total flow through state i"  =  "reward if you stop here" / "probability you stop here"</pre>
+
+<p>SubTB then requires, for <b>every pair</b> of prefixes i &lt; j, that flow is conserved:</p>
+<pre class="diag">F(z_i) * p_theta(z_i+1 | ...) * ... * p_theta(z_j | ...)  =  F(z_j)</pre>
+
+<p>Substituting F gives the paper's Eq. 2. In log space the residual for pair (i, j) is:</p>
+<pre class="diag">res(i,j) = log R_i - log R_j
+         + sum_{k=i+1..j} log p_theta(z_k | z_0:k-1)
+         + log p_theta(⊤ | z_0:j)
+         - log p_theta(⊤ | z_0:i)</pre>
+
+<p>Loss = sum of <code>res(i,j)²</code> over all pairs. With K states that is about K²/2 constraints per
+sample — that is the "dense supervision". (Appendix B.4 notes many pairs share prefixes, so the shared
+computation is batched.)</p>
+
+<div class="callout"><strong>Small notation catch.</strong> Eq. 1 has a backward term <code>T_B</code>, but
+Eq. 2 does not. That is because a perceptual flow is a straight chain, not a branching graph — going backward
+is deterministic, probability 1, so it drops out.</div>
+
+<h3>Worked example</h3>
+<p>Three RoIs. Suppose the frozen reward model gives:</p>
+<table>
+  <tr><th>after k boxes</th><th>caption ratio p+/p- of box k</th><th>p(Y | prefix)</th>
+      <th>running product</th><th>R (before geometry)</th><th>omega</th><th>R_lambda</th></tr>
+  <tr><td>k=0</td><td>—</td><td>0.10</td><td>1.0</td><td>0.10</td><td>1</td><td><b>0.10</b></td></tr>
+  <tr><td>k=1</td><td>2.0</td><td>0.20</td><td>2.0</td><td>0.40</td><td>1</td><td><b>0.40</b></td></tr>
+  <tr><td>k=2</td><td>3.0</td><td>0.60</td><td>6.0</td><td>3.60</td><td>1</td><td><b>3.60</b></td></tr>
+  <tr><td>k=3</td><td>0.5</td><td>0.55</td><td>3.0</td><td>1.65</td><td>0.368</td><td><b>0.607</b></td></tr>
+</table>
+<p>Reward goes up, up, then <span class="lose">down</span>. Box 3 had a generic caption (ratio 0.5) and its
+box drifted outside the ε-ball, so omega = exp(−1) = 0.368.</p>
+
+<p>Now check two pairs. Say the current policy has <code>p_theta(z2|z0:1) = 0.05</code>,
+<code>p_theta(z3|z0:2) = 0.40</code>, and stop-probabilities <code>p(⊤|z0:1) = 0.3</code>,
+<code>p(⊤|z0:2) = 0.3</code>, <code>p(⊤|z0:3) = 0.5</code>.</p>
+
+<p><b>Pair (1, 2):</b></p>
+<pre class="diag">res = log(0.40) - log(3.60) + log(0.05) + log(0.30) - log(0.30)
+    = -0.916 - 1.281 + (-3.00) + (-1.204) - (-1.204)
+    = -5.20        (squared: 27.0)</pre>
+<p>Negative and big → left side too small → the gradient pushes <code>p_theta(z2 | z0:1)</code>
+<span class="win">up</span>, and pushes the stop-probability after box 1 <span class="lose">down</span>.
+Meaning: <em>"adding box 2 tripled the reward, so take that step more often, and do not stop at box 1."</em></p>
+
+<p><b>Pair (2, 3):</b></p>
+<pre class="diag">res = log(3.60) - log(0.607) + log(0.40) + log(0.50) - log(0.30)
+    = 1.281 + 0.499 - 0.916 - 0.693 + 1.204
+    = +1.375       (squared: 1.89)</pre>
+<p>Positive → left side too big → push <code>p_theta(z3 | z0:2)</code> <span class="lose">down</span>, and push
+the stop-probability after box 2 <span class="win">up</span>. Meaning: <em>"box 3 hurt, stop after two."</em></p>
+
+<div class="callout"><strong>The point.</strong> Blame lands exactly on the 2→3 transition. Boxes 1 and 2 are
+untouched.</div>
+
+<h3>Why not PPO</h3>
+<p>With PPO you get one number at the end — here that would be <b>0.607</b> for the whole trajectory. A critic
+network has to guess how to split that across the three steps, and the guess is bootstrapped and noisy. Worse,
+PPO's objective pushes mass onto the single best trajectory, so the policy gets sharp — which is exactly why
+the paper's Figure 7 shows TreeVGR's Pass@k flattening out.</p>
+<p>SubTB targets come straight from the reward at each prefix, no critic. And it is a
+<em>distribution-matching</em> objective — it tries to make p(Z) proportional to R(Z), so many good flows keep
+nonzero mass. That is why their Pass@k keeps climbing to k=8.</p>
+
+<!-- ---------------------------------------------------------- -->
+<div class="qa"><h3>Q2 — Why is the caption ratio p+/p- a scalar, and not something of size |V|?</h3></div>
+
+<p><code>p+</code> is <b>not</b> a next-token distribution. It is the likelihood of one specific caption string
+<em>that was already sampled</em>.</p>
+
+<pre class="diag">p+(z_i) = p_phi( c_i | I_ri )</pre>
+
+<p><code>c_i</code> is a fixed string — the caption the policy already wrote for box i, e.g.
+<code>"a white spherical sculpture on a wooden side table"</code>. <code>I_ri</code> is the crop.</p>
+
+<p>To get that number you run the frozen reward model on the crop, teacher-force the caption, and multiply the
+token probabilities:</p>
+
+<pre class="diag">p+(z_i) = prod_{t=1..|c_i|}  p_phi( c_i[t] | c_i[&lt;t], I_ri )</pre>
+
+<div class="callout"><strong>Where |V| goes.</strong> Each factor is <em>one entry picked out of a |V|
+softmax</em> — the entry for the token that actually appears in <code>c_i</code>. You throw away the other
+|V|−1 entries. Multiply across positions → one scalar.</div>
+
+<p><code>p-</code> is the same string scored against the image with that region cut out.</p>
+
+<h3>Numbers</h3>
+<p>Caption = <code>"a red car"</code>, 3 tokens.</p>
+<table>
+  <tr><th>token</th><th>p_phi given crop</th><th>p_phi given image-minus-crop</th></tr>
+  <tr><td>a</td><td>0.40</td><td>0.40</td></tr>
+  <tr><td>red</td><td>0.50</td><td>0.20</td></tr>
+  <tr><td>car</td><td>0.80</td><td>0.40</td></tr>
+  <tr><td><b>product</b></td><td><b>0.160</b></td><td><b>0.032</b></td></tr>
+</table>
+<pre class="diag">p+/p- = 0.160 / 0.032 = 5.0
+log ratio = 1.61</pre>
+<p>One number. Read it as: <em>"this caption is 5× more likely when you can see inside the box than when you
+cannot."</em> So the caption really describes <em>that region</em>. If the caption were generic filler like
+<code>"an object in a room"</code>, both columns would be nearly equal, the ratio would sit near 1.0, and there
+would be no reward.</p>
+
+<h3>Why it has to be a scalar</h3>
+<p>GFlowNet flow conservation is scalar arithmetic:</p>
+<pre class="diag">F(z_i) * p_theta(z_i+1 | z_i) = F(z_j)</pre>
+<p><code>F</code> is a non-negative real number — "how much probability mass flows through this state". You
+cannot conserve a |V|-dimensional flow; there is nothing to multiply and balance. So the reward feeding into
+<code>F</code> must collapse to a single non-negative number.</p>
+
+<p>Also: <code>p_phi</code> is <b>frozen</b>. The ratio is a constant with respect to θ, computed once per
+sampled flow. No gradient passes through it — it behaves like a reward handed back by an environment.</p>
+
+<p>The |V| dimension <em>does</em> appear in training, but on the other side: inside
+<code>log p_theta(z_k | z_0:k-1)</code> in the SubTB residual. That is where backprop touches the logits.</p>
+
+<h3>The one place a full distribution shows up</h3>
+<p>In the "Key Insights in Reward Design" paragraph the paper takes the <em>expectation</em> of that log-ratio
+over sampled captions:</p>
+<pre class="diag">E_{c ~ q_theta} [ log p+/p- ]
+    =  KL( q_theta || p_phi(·|image minus crop) )  -  KL( q_theta || p_phi(·|crop) )</pre>
+<p>Now <code>p_phi(·|crop)</code> with the dot <em>is</em> a full distribution — but over the space of all
+caption strings, not over |V| tokens. And this is only the analysis: it explains <em>why</em> maximizing the
+ratio pulls the policy's captions toward the "privileged" teacher that saw the crop and away from the one that
+did not. Per sample, you still only compute the scalar ratio.</p>
+
+</section>
+
+</body>
+</html>
