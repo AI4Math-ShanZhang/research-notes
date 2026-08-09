@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AURORA-LM — Continuous-Latent Diffusion LM — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .win{ color:#2EAF8E; font-weight:600; }
+  .lose{ color:#F06B7F; font-weight:600; }
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem;
+            overflow-x:auto; }
+  .qa{ background:#fdf6ec; border-left:5px solid #F79A38; padding:.7rem 1rem; margin:1.6rem 0 .8rem;
+       border-radius:0 6px 6px 0; }
+  .qa h3{ margin:0; color:#a35f08; }
+  .warn{ background:#fdeef0; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0;
+         border-radius:0 6px 6px 0; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>AURORA-LM — Keep the Fat Latent, Fix the Diffusion Model</h1>
+<p class="paper-meta">Paper: <em>AURORA-LM: Autoencoding Unified Representation for Continuous-Latent
+Diffusion Language Modeling</em> — Liang, Liao, Cao, Wei, Li, Tan, Zhang, Cui, Yang, Guo, Yang, Yang, Shan,
+Liu &amp; Si (PRLab Nanjing University · S-Lab NTU · Imperial College London),
+<a href="https://arxiv.org/abs/2608.02602">arXiv:2608.02602</a> ·
+<a href="https://github.com/fyv587/AURORA-LM">code</a>. August 2026, 40 pages. Trained on Ascend NPUs.</p>
+
+<!-- ===== Conclusion ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>The trap they name:</b> prior latent-space text diffusion squeezes two goals through one
+  representation. A small smooth latent is easy for diffusion to model but loses exact words, syntax and
+  ordering. A rich latent reconstructs well but has a harder distribution to generate.</li>
+  <li><b>Their move:</b> stop shrinking the representation to please the generative model. Keep the
+  <b>high-capacity decodable latent</b>, freeze it, and redesign the diffusion side to cope with a wide target.</li>
+  <li><b>The representation:</b> a Query-based Encoder-Decoder trained on nothing but token cross-entropy.
+  Latent position i reads token <em>prefix</em> <code>w[1 : ceil(i·L/N)]</code>, which makes the latent
+  sequence left-to-right ordered — that ordering is what lets you generate block by block.</li>
+  <li><b>Three fixes on the diffusion side:</b> bottleneck only the <em>noisy input</em> (D_b=128) while
+  predicting the full-width clean target; shift training noise toward high corruption because wider latents
+  want it; and self-trajectory consistency, which is what buys few-step sampling.</li>
+  <li><b>Result:</b> OpenWebText Gen-PPL <b>23.56</b> / MAUVE <b>0.890</b> (AR: 39.40 / 0.851),
+  XSum ROUGE-1/2/L <b>36.6 / 13.4 / 28.9</b>. Scaled to a 1B denoiser it beats Cola-DLM's 1.8B DiT on all nine
+  benchmarks, 32.6 vs 25.1 average.</li>
+  <li><b>Read carefully:</b> headline parameter counts exclude the autoencoder, entropy is <em>lower</em> than
+  AR, and the 1B benchmark numbers sit near chance. It is a formulation study, not a capability claim.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The question they start from</h3>
+<p>Images, video and audio are all generated the same way now: encode to a continuous latent, run diffusion
+there, decode back. Text is the odd one out — still discrete tokens.</p>
+
+<p>People have tried continuous text. Two families, both with the same trap:</p>
+<ul>
+  <li><b>Embedding-space</b> (Diffusion-LM, PLAID, TEncDM): denoise inside an embedding space you inherited.
+  That space was never designed to be both generated <em>and</em> decoded.</li>
+  <li><b>Latent-space</b> (LD4LG, COSMOS, Cola-DLM, TextLDM): learn your own latent — but then
+  <b>compress and smooth it</b> so diffusion can model it more easily.</li>
+</ul>
+
+<div class="callout"><strong>The trap.</strong> A small, smooth latent is easy for diffusion to learn — but
+compression throws away the exact words, syntax and local ordering you need to get the text back. Keep more
+information and reconstruction improves, but now the distribution is wider and harder to generate. Both goals
+are squeezed through <em>one</em> representation.</div>
+
+<p>Their answer: stop simplifying the representation to please the generative model. <b>Keep the fat,
+decodable latent, and fix the diffusion model instead.</b></p>
+
+<h3>Stage 1 — Query-based Encoder-Decoder</h3>
+<p>Trained on nothing but token cross-entropy reconstruction. No KL, no VAE.</p>
+<ul>
+  <li>N learnable queries (all starting from the same vector) squeeze L tokens into N latent positions of
+  width D. <code>N = round(cL)</code>; <code>c = 1</code> means no compression.</li>
+  <li><b>The causal trick:</b> query i can see latent states 1..i <em>and</em> the token prefix
+  <code>w[1 : ceil(i·L/N)]</code>. Each later latent position reads a longer stretch of text than the one
+  before it.</li>
+</ul>
+<p>That is what makes the latent sequence <b>prefix-ordered</b> — latent position i means "the text up to
+roughly here". Exactly what you need for left-to-right block generation later. The order is baked into the
+autoencoder, not imposed by the diffusion model.</p>
+<ul>
+  <li>Decoder mirrors it: output token j may only look at latent prefix
+  <code>z[1 : floor((j-1)N/L)+1]</code>. Matched visibility, so token prefixes and latent prefixes stay in
+  correspondence even under compression.</li>
+  <li>Regularized with token-embedding dropout and latent dropout, both switched off at the end. Then
+  <b>frozen</b> — which fixes the target distribution so every later design choice can be studied on the
+  diffusion side alone.</li>
+</ul>
+
+<h3>Stage 2 — Block-causal diffusion, flow matching</h3>
+<p>Standardize the latents per channel, cut the N positions into blocks of size Q, factorize left to right:</p>
+<pre class="diag">p(alpha) = prod_b  p( alpha^b | alpha^&lt;b )</pre>
+<p>Sequential <em>across</em> blocks, parallel denoising <em>within</em> a block. Linear path
+<code>alpha_t = (1-t)·alpha + t·eps</code>, predicting the <b>clean endpoint</b>, not the velocity.</p>
+<p>Training does not roll out. A <b>two-stream attention mask</b> lets block b attend to its own noisy
+positions plus the <em>clean</em> prefix from the frozen encoder, but not to future clean blocks or other
+blocks' noisy states. So every block conditional trains in a single forward pass.</p>
+
+<h3>The three fixes that make a full-width latent learnable</h3>
+
+<p><b>1. Bottleneck only the noisy input.</b> The output still predicts the full D=1024 clean block (the frozen
+decoder needs it). But the <em>noisy input</em> goes through <code>W_up · W_down</code> with an inner width of
+only <code>D_b = 128</code>. Reasoning: at high noise, most of what is in the noisy latent is Gaussian junk,
+not structure, so there is no point reading it at full width.</p>
+<table>
+  <tr><th>D_b</th><td>32</td><td><b>128</b></td><td>256</td><td>512</td><td>1024</td></tr>
+  <tr><th>MAUVE</th><td>0.786</td><td><b>0.808</b></td><td>0.760</td><td>0.748</td><td>0.790</td></tr>
+</table>
+
+<p><b>2. Match the noise schedule to the latent width.</b> With a tan-d schedule, larger d puts more training
+weight on heavily corrupted states. Their finding: <b>wider latents need more high-noise supervision.</b>
+MAUVE rises with high-noise allocation across all three schedule families they tried, so it is the calibration
+that matters, not the particular schedule. They ship d=7.</p>
+
+<p><b>3. Self-trajectory consistency.</b> Flow matching trains on noisy states drawn independently, but
+sampling walks one connected trajectory — so errors compound step to step. Fix: fix a budget S=16, take one
+detached Euler step from t down to t', have an EMA copy predict the clean latent at t', and force the current
+model's prediction at t to match it.</p>
+<table>
+  <tr><th>denoising steps</th><td>8</td><td>16</td><td>32</td><td>128</td></tr>
+  <tr><th>consistency off</th><td>~0.15</td><td>~0.31</td><td>~0.58</td><td>~0.76</td></tr>
+  <tr><th><b>consistency on</b></th><td><b>~0.66</b></td><td><b>~0.79</b></td><td><b>~0.82</b></td><td><b>~0.82</b></td></tr>
+</table>
+<p>They also use <b>self-conditioning</b> (the Analog Bits idea), which then enables a guidance trick at
+inference, SC-CFG: push away from the un-self-conditioned prediction.</p>
+
+<h3>Ablations worth keeping</h3>
+<ul>
+  <li><b>Width.</b> At zero corruption every width D ∈ {128…1024} reconstructs almost perfectly — so
+  reconstruction alone tells you nothing. Under corruption they separate sharply: wide latents hold token
+  recovery far longer. Generation MAUVE peaks at D=1024.</li>
+  <li><b>Compression.</b> 100% → 0.82, 90% → 0.81, 80% → 0.73, 70% → 0.67. Dropping 10% is nearly free; past
+  that it falls off.</li>
+  <li><b>Prediction target.</b> x0-target with x0-loss = <b>0.815</b>. v-target/v-loss = 0.653. x0-target with
+  v-loss = <span class="lose">0.059</span> — near collapse. Why: converting to v-space weights the clean-latent
+  error by 1/sigma², piling supervision onto <em>low</em>-noise states, fighting the high-noise allocation from
+  fix #2.</li>
+  <li><b>Block size.</b> Q = 4 → 0.909, 8 → 0.86, <b>16 → 0.816</b>, 32 → 0.68, 64 → 0.631. Quality drops
+  monotonically as blocks get bigger. Q=16 is chosen knowingly — a speed-for-quality trade, not a free lunch.</li>
+</ul>
+
+<h3>Results</h3>
+<p><b>OpenWebText, 1024 tokens, unconditional</b> (130M denoiser):</p>
+<table>
+  <tr><th>Model</th><th>Gen-PPL ↓</th><th>Entropy ↑</th><th>MAUVE ↑</th></tr>
+  <tr><td>AR (85M)</td><td>39.40</td><td>5.605</td><td>0.851</td></tr>
+  <tr><td>MDLM (92M)</td><td>121.36</td><td><b>5.664</b></td><td>0.668</td></tr>
+  <tr><td>ELF-B (105M)</td><td>24.11</td><td>5.155</td><td>0.229</td></tr>
+  <tr><td><b>AURORA-LM-S (130M)</b></td><td><b>23.56</b></td><td>5.241</td><td><b>0.890</b></td></tr>
+</table>
+<p><b>XSum summarization:</b> ROUGE-1/2/L = <b>36.6 / 13.4 / 28.9</b>, beating ELF-B (36.0/12.2/27.8) and
+AR (30.5/10.2/24.4).</p>
+<p><b>Scaling:</b> AURORA-LM-L, 1.01B denoiser, ~1500 EFLOPs, versus Cola-DLM's 1.8B DiT at ~2000 EFLOPs.
+Macro average <b>32.6 vs 25.1</b>, ahead on all nine tasks.</p>
+
+<h3>Three things to read carefully</h3>
+<ol>
+  <li><b>Parameter counts exclude the autoencoder.</b> "130M" and "1.01B" are the denoiser only. Table 5 does
+  report the totals — 267.8M and ≈1.34B.</li>
+  <li><b>Entropy is lower than AR</b> (5.241 vs 5.605) even though MAUVE is higher. Better distribution match,
+  less lexical variety. Reported but not dug into.</li>
+  <li><b>The 1B benchmark numbers are near chance.</b> MMLU 22.2, ARC-C 21.2, HellaSwag 18.4, WinoGrande 50.3
+  (chance is 50). The Cola-DLM comparison is real, but this is a research-scale demonstration, and the paper is
+  honest about being a formulation study.</li>
+</ol>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+<p>These came out of working through the Query-based Encoder-Decoder step by step, because the length
+bookkeeping was not obvious on a first read.</p>
+
+<!-- ---------------------------------------------------------- -->
+<div class="qa"><h3>Q1 — What is <code>h</code> in "we initialize all L decoder queries from a second shared
+learnable query q_dec, so that h_j⁽⁰⁾ = q_dec"?</h3></div>
+
+<p><code>h</code> is the <b>decoder's hidden state</b>. Two indices: <code>h_j^(l)</code> is output position j
+(which token slot, j = 1..L) at layer l. The final one <code>h_j = h_j^(L_dec)</code> becomes logits via
+<code>o_j = h_j · E^T</code>. Same role as the hidden state in any transformer.</p>
+
+<p><b>The odd part:</b> <code>h_j^(0) = q_dec</code> for <em>every</em> j. All L slots start as the same
+learnable vector. Position 1 and position 500 begin identical. That is what "query-based" means — Perceiver /
+DETR style, start from blank learned queries and let attention fill them in.</p>
+
+<h3>Then how do the positions ever differ?</h3>
+<ol>
+  <li><b>RoPE</b> — slot j and slot j' get different rotations.</li>
+  <li><b>Different visibility windows</b> — each slot sees a different amount of the latent sequence.</li>
+  <li><b>Causal self-attention</b> to earlier slots <code>h_1:j</code>, which by then are no longer identical.</li>
+</ol>
+<p>Eq. 3 is one attention where the keys/values are a <b>concatenation</b>:</p>
+<pre class="diag">attend over:  [ h_1:j   ;   z_enc[1 : floor((j-1)N/L)+1] ]
+                 ^                    ^
+        earlier decoder slots     latent prefix
+           (causal)              (how much depends on j)</pre>
+
+<div class="callout"><strong>Why it has to start blank.</strong> The paper says plainly that the decoder does
+not receive the original tokens as input. If <code>h_j^(0)</code> were <code>E[w_j]</code> — normal teacher
+forcing — the decoder could reconstruct the text by copying its own input and <b>ignore the latent
+completely</b>. Reconstruction loss would go to zero and the encoder would learn nothing. Starting from a
+content-free <code>q_dec</code> closes that door: the only possible source of token content is
+<code>z_enc</code>.</div>
+
+<table>
+  <tr><th></th><th>normal transformer decoder</th><th>AURORA-LM query decoder</th></tr>
+  <tr><td><code>h_j^(0)</code></td><td><code>E[w_j]</code> — the real token</td><td><code>q_dec</code> — same blank vector for all j</td></tr>
+  <tr><td>where content comes from</td><td>its own input tokens</td><td>only the latent <code>z_enc</code></td></tr>
+  <tr><td>how slots differ initially</td><td>different tokens</td><td>only RoPE + visibility window</td></tr>
+</table>
+
+<!-- ---------------------------------------------------------- -->
+<div class="qa"><h3>Q2 — If the encoder makes fewer latents than tokens, how does the decoder get the full
+length back?</h3></div>
+
+<p>The decoder <b>does not take the latents as its input sequence.</b> It spawns its own L slots.</p>
+<pre class="diag">encoder:   w1 w2 w3 w4 w5 w6 w7 w8      (L = 8 tokens)
+                     ↓
+latents:      z1   z2   z3   z4          (N = 4,  c = 0.5)
+                     ↓
+decoder:   [q][q][q][q][q][q][q][q]      (L = 8 blank slots, spawned)
+                     ↓   each slot attends to a prefix of z
+logits:    o1 o2 o3 o4 o5 o6 o7 o8       (L = 8)</pre>
+
+<p>Output length is set by <b>how many queries you create</b>. The latents are keys/values, never the input
+stream. That is exactly why the decoder is query-based instead of a normal seq2seq decoder — a normal one
+would be stuck at N outputs. At generation time L is known too: produce N latents, then
+<code>L = N / c</code> with c fixed for the trained autoencoder.</p>
+
+<h3>The windows line up exactly</h3>
+<p>Encoder latent i reads <code>w[1 : ceil(i·L/N)]</code>; decoder slot j reads
+<code>z[1 : floor((j-1)N/L)+1]</code>. With L=8, N=4:</p>
+
+<table>
+  <tr><th>latent</th><th>encoded from</th></tr>
+  <tr><td>z1</td><td>w1–w2</td></tr>
+  <tr><td>z2</td><td>w1–w4</td></tr>
+  <tr><td>z3</td><td>w1–w6</td></tr>
+  <tr><td>z4</td><td>w1–w8</td></tr>
+</table>
+
+<table>
+  <tr><th>slot j</th><th>sees latents</th><th>must output</th><th>is it there?</th></tr>
+  <tr><td>1</td><td>z1</td><td>w1</td><td class="win">✓ z1 holds w1–w2</td></tr>
+  <tr><td>2</td><td>z1</td><td>w2</td><td class="win">✓</td></tr>
+  <tr><td>3</td><td>z1–z2</td><td>w3</td><td class="win">✓ z2 holds w1–w4</td></tr>
+  <tr><td>4</td><td>z1–z2</td><td>w4</td><td class="win">✓</td></tr>
+  <tr><td>5</td><td>z1–z3</td><td>w5</td><td class="win">✓ z3 holds w1–w6</td></tr>
+  <tr><td>6</td><td>z1–z3</td><td>w6</td><td class="win">✓</td></tr>
+  <tr><td>7</td><td>z1–z4</td><td>w7</td><td class="win">✓ z4 holds w1–w8</td></tr>
+  <tr><td>8</td><td>z1–z4</td><td>w8</td><td class="win">✓</td></tr>
+</table>
+<p>Every slot has exactly enough and never more. No slot can peek at a token its latents did not encode. That
+is the "matched visibility" claim, and it comes out tight.</p>
+
+<!-- ---------------------------------------------------------- -->
+<div class="qa"><h3>Q3 — How does one latent produce two tokens? Step by step, with tensor shapes.</h3></div>
+
+<div class="warn"><strong>First, a correction to my own example.</strong> Table 5 in the appendix shows both
+released models use <b>c = 1 — no compression at all</b>. One latent = one token position. Compression only
+appears in the Fig. 5(c) ablation, and only down to c = 0.7, which they rejected because MAUVE falls
+0.82 → 0.67. My c = 0.5 example was outside even their tested range.</div>
+
+<table>
+  <tr><th></th><th>AURORA-LM-S</th><th>AURORA-LM-L</th></tr>
+  <tr><td>latent length M</td><td>1024 (<b>c=1</b>)</td><td>512 (<b>c=1</b>)</td></tr>
+  <tr><td>latent channel D</td><td>768</td><td>1024</td></tr>
+  <tr><td>enc / dec layers</td><td>6 / 6</td><td>6 / 6</td></tr>
+  <tr><td>hidden / heads / head dim</td><td>768 / 12 / 64</td><td>1024 / 16 / 64</td></tr>
+  <tr><td>token embedding init</td><td>GPT-2 small</td><td>Qwen3-0.6B</td></tr>
+  <tr><td>denoiser</td><td>12 layers, 768/12/64</td><td>24 layers, 1536/12/128</td></tr>
+  <tr><td>D_b / block size Q</td><td>128 / 16</td><td>128 / 16</td></tr>
+  <tr><td>total system params</td><td>267.8M</td><td>≈1.34B</td></tr>
+</table>
+<p>Note <code>D = hidden size</code> in both. That is why no projection is needed when latents act as
+keys/values.</p>
+
+<p>Walking the c = 0.5 case anyway, with AURORA-LM-S numbers: d = D = 768, 12 heads × 64, FFN 3072,
+|V| = 50257, L_dec = 6. Batch omitted.</p>
+
+<h3>Encoder — getting 2 tokens INTO one latent</h3>
+<table>
+  <tr><th>step</th><th>tensor</th><th>shape</th></tr>
+  <tr><td>input tokens <code>w</code></td><td>int ids</td><td><code>(8,)</code></td></tr>
+  <tr><td>embedding table <code>E</code></td><td></td><td><code>(50257, 768)</code></td></tr>
+  <tr><td><code>E[w]</code></td><td></td><td><code>(8, 768)</code></td></tr>
+  <tr><td>latent queries <code>z^(0)</code></td><td>all rows = same <code>q</code></td><td><code>(4, 768)</code></td></tr>
+  <tr><td>latent 1's query</td><td></td><td><code>(1, 768)</code></td></tr>
+  <tr><td>latent 1's keys/values</td><td><code>[z_1] ⊕ [E[w1], E[w2]]</code></td><td><code>(3, 768)</code></td></tr>
+  <tr><td>→ attention out</td><td></td><td><code>(1, 768)</code></td></tr>
+  <tr><td>after 6 layers, <code>z_enc</code></td><td></td><td><code>(4, 768)</code></td></tr>
+</table>
+<p><code>z1</code> is <b>one vector of 768 floats</b> that attended over both <code>w1</code> and
+<code>w2</code>. Capacity check: two tokens need about 2 × log2(50257) ≈ 31 bits. 768 float channels is
+enormous headroom — that is the paper's capacity argument.</p>
+
+<h3>Decoder — getting 2 tokens back OUT</h3>
+<table>
+  <tr><th>step</th><th>tensor</th><th>shape</th></tr>
+  <tr><td><code>h^(0)</code></td><td>every row = <code>q_dec</code></td><td><code>(8, 768)</code></td></tr>
+  <tr><td>slot j=2, query</td><td></td><td><code>(1, 768)</code></td></tr>
+  <tr><td>slot j=2, keys/values</td><td><code>[h_1, h_2] ⊕ [z1]</code></td><td><code>(3, 768)</code></td></tr>
+  <tr><td>split to heads: Q</td><td></td><td><code>(12, 1, 64)</code></td></tr>
+  <tr><td>split to heads: K, V</td><td></td><td><code>(12, 3, 64)</code></td></tr>
+  <tr><td>scores</td><td></td><td><code>(12, 1, 3)</code></td></tr>
+  <tr><td>attn out → merge heads</td><td></td><td><code>(1, 768)</code></td></tr>
+  <tr><td>FFN 768→3072→768</td><td></td><td><code>(1, 768)</code></td></tr>
+  <tr><td>after 6 layers, <code>h</code></td><td></td><td><code>(8, 768)</code></td></tr>
+  <tr><td>logits <code>o = h · Eᵀ</code></td><td><code>(8,768) @ (768,50257)</code></td><td><code>(8, 50257)</code></td></tr>
+</table>
+<p>Output length is 8 because there were 8 query slots. Nothing in the shape chain forces it to be 4.</p>
+
+<h3>The real question: slots 1 and 2 both see only z1</h3>
+<p><b>Layer 1.</b> Both queries start as <code>q_dec</code>. RoPE rotates them by position 1 vs 2, so the
+attention <em>scores</em> differ. But RoPE touches only Q and K — <b>not V</b>. So both slots pull the same
+value vector <code>V(z1)</code>:</p>
+<pre class="diag">h_1^(1) = q_dec + a1·V(q_dec) + b1·V(z1)
+h_2^(1) = q_dec + a2·V(q_dec) + b2·V(z1)</pre>
+<p>They differ only by scalar mixing weights — they sit in the <b>same 2-D span</b>. One layer alone cannot
+produce two different tokens.</p>
+
+<p><b>Layer 2 onward.</b> Two things break it open:</p>
+<ol>
+  <li><b>The FFN is nonlinear.</b> <code>768 → 3072 → SwiGLU → 768</code> maps two different scalar mixtures
+  onto genuinely different directions. This is where the span gets escaped.</li>
+  <li><b>Causal self-attention.</b> Slot 2's key set now contains <code>h_1^(1)</code>, already leaning toward
+  token 1. So slot 2 can compute <em>"z1 holds a span, slot 1 took the first element, I emit the second."</em></li>
+</ol>
+<p>By layers 3–6 that resolves into two different logit rows. It is an autoregressive readout inside the span —
+unrolled across <b>layers</b>, in one parallel forward pass, not across time.</p>
+
+<div class="callout"><strong>Caveat.</strong> That layer-by-layer mechanism is my reading of Eq. 3. The paper
+does not spell it out. But it does explain the compression curve: the more tokens per latent, the more
+within-span disambiguation the decoder must do with only 6 layers of depth — which is why 100% → 0.82 but
+70% → 0.67, and why they shipped c = 1.</div>
+
+<!-- ---------------------------------------------------------- -->
+<div class="qa"><h3>Q4 — So <code>h</code> is initialized from a learnable vector, the same way as the encoder
+queries?</h3></div>
+
+<p>Yes. Same pattern used twice — but <b>two separate learnable vectors</b>. The paper says "a <em>second</em>
+shared learnable query <code>q_dec</code>".</p>
+<table>
+  <tr><th></th><th>Encoder</th><th>Decoder</th></tr>
+  <tr><td>the vector</td><td><code>q ∈ R^D</code></td><td><code>q_dec</code></td></tr>
+  <tr><td>how many copies</td><td><b>N</b> (latent positions)</td><td><b>L</b> (token positions)</td></tr>
+  <tr><td>init</td><td><code>z_i^(0) = q</code> for all i</td><td><code>h_j^(0) = q_dec</code> for all j</td></tr>
+  <tr><td>attends over</td><td><code>[ z_1:i ; E[w_1:ceil(iL/N)] ]</code></td><td><code>[ h_1:j ; z_enc_1:floor((j-1)N/L)+1 ]</code></td></tr>
+  <tr><td>i.e. sees</td><td>earlier latents + <b>token</b> prefix</td><td>earlier decoder states + <b>latent</b> prefix</td></tr>
+  <tr><td>writes</td><td>latents</td><td>logits</td></tr>
+</table>
+<p>A mirror: the encoder reads tokens and writes latents, the decoder reads latents and writes tokens. Same
+trick both directions — one blank vector broadcast everywhere, then RoPE plus each position's visibility
+window pull the copies apart. Each vector is tiny: 768 floats, against 49.6M encoder and 88.2M decoder params.</p>
+<p><b>One asymmetry:</b> the encoder's keys/values <em>include</em> the token embeddings <code>E[w]</code>.
+The decoder's do not — it never sees tokens. That gap is deliberate, and it is what forces the latent to carry
+the text.</p>
+
+<!-- ---------------------------------------------------------- -->
+<div class="qa"><h3>Q5 — Why does z2 see w1–w4 and not just w3–w4?</h3></div>
+
+<p>Because the formula is a <b>prefix</b>, not a window: latent i reads <code>w[1 : ceil(i·L/N)]</code>, always
+starting from <code>w1</code>.</p>
+
+<h3>Start with the shipped case, c = 1</h3>
+<p>Then N = L, so <code>ceil(i·L/N) = i</code>:</p>
+<table>
+  <tr><th>latent</th><th>sees tokens</th></tr>
+  <tr><td>z1</td><td>w1</td></tr>
+  <tr><td>z2</td><td>w1, w2</td></tr>
+  <tr><td>z3</td><td>w1, w2, w3</td></tr>
+  <tr><td>z4</td><td>w1 … w4</td></tr>
+</table>
+<div class="callout">That is <b>exactly the visibility of a causal transformer's hidden state at position
+i</b>. So in the released models the encoder is literally a causal LM over tokens, and <code>z_i</code> is "a
+summary of everything up to token i" — just trained to be <em>decodable</em> instead of trained to predict the
+next token. Once you see that, the prefix design stops looking odd; chunking would be the odd choice.</div>
+
+<h3>Why prefix and not chunks — the stated reason</h3>
+<p>The block-causal prior is <code>p(alpha) = prod_b p( alpha^b | alpha^&lt;b )</code>. For that to mean
+"continue the document", the conditioning set <code>alpha^&lt;b</code> has to actually <b>be</b> the text so
+far. The paper says this directly:</p>
+<blockquote>Because the encoder has organized latent prefixes to represent text prefixes,
+<code>α^(&lt;b)</code> represents the textual context preceding block b. Each factor therefore describes a
+continuation conditioned on an already determined prefix.</blockquote>
+<p>With prefix encoding the alignment is exact and direct. With chunks, "the text so far" would exist only as
+something the denoiser has to stitch together from pieces. This pays off at inference: for prompt-conditioned
+generation they encode the prompt and use the resulting latents <b>as</b> the prefix, unchanged — which works
+only because a latent already means "text up to here".</p>
+
+<h3>And you would get the prefix anyway</h3>
+<p>Eq. 2 has latent i attend over <b>two</b> things:</p>
+<pre class="diag">[ z_1:i  ;  E[w_1 : ceil(iL/N)] ]
+   ↑              ↑
+earlier latents   token window</pre>
+<p>Even if the token window were just <code>w3–w4</code>, latent 2 still attends to <code>z1</code>, and
+<code>z1</code> saw <code>w1–w2</code>. So z2 would end up with w1–w2 information anyway, just
+<em>indirectly</em>, through one extra hop. Making the token window a prefix removes the hop — one attention
+pattern for both streams instead of a causal mask on one and a banded mask on the other.</p>
+<p><b>What chunks would cost:</b> each token would live in exactly one latent. If the diffusion model got that
+one latent slightly wrong, those tokens have no other source. With prefixes, later latents also carry earlier
+text, so the representation is redundant.</p>
+
+<!-- ---------------------------------------------------------- -->
+<div class="qa"><h3>Q6 — So this is all in contrast to full attention, where every latent could see every
+token.</h3></div>
+
+<p>Yes. Full bidirectional attention in the encoder is the normal choice — LD4LG resamples over a full encoder
+output, TEncDM diffuses full-length representations from a pretrained bidirectional encoder.</p>
+
+<table>
+  <tr><th></th><th>full attention over all tokens</th><th>causal prefix (AURORA-LM)</th></tr>
+  <tr><td>reconstruction</td><td><b>easier</b> — every latent sees everything</td><td>harder — z1 only ever sees w1</td></tr>
+  <tr><td>what z_i means</td><td>a global summary</td><td>"the text up to here"</td></tr>
+  <tr><td>order in the latent sequence</td><td>none — z1 and z2 are interchangeable</td><td>left-to-right</td></tr>
+  <tr><td>how you generate</td><td>all N latents at once, like an image</td><td>block by block, <code>p(α^b | α^&lt;b)</code></td></tr>
+  <tr><td>prompt conditioning</td><td>awkward — a prompt's latents are not a valid prefix of a longer document</td><td>encode the prompt, use it directly as the prefix</td></tr>
+</table>
+
+<p>So the causal mask <b>costs</b> reconstruction quality — you are deliberately handicapping the autoencoder.
+What you buy is that the latent sequence gains a left-to-right meaning, which is the only thing that makes the
+block-causal factorization a language model rather than a one-shot joint sample. Same trade as BERT vs GPT:
+bidirectional is better as a representation, causal is what you need to generate.</p>
+
+<p>That is also why the paper insists on <b>high capacity D</b>. Causal masking makes each latent's job harder,
+so you compensate by giving it more channels rather than by relaxing the mask.</p>
+
+</section>
+
+</body>
+</html>
