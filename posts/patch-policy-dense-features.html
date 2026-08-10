@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Patch Policy — Dense Visual Features for Embodied Control — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Patch Policy — Efficient Embodied Control via Dense Visual Representations</h1>
+<p class="paper-meta">Paper: Gaoyue Zhou, Zichen Jeff Cui, Ada Langford, Bowen Tan, Yann LeCun &amp; Lerrel Pinto
+(NYU Courant · Meta-FAIR · AMI Labs), July 2026, <a href="https://arxiv.org/abs/2607.18236">arXiv:2607.18236</a> ·
+<a href="https://patch-policy.github.io">project page</a>.
+Short note — the questions I actually had while reading, in plain words.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>The idea in one line.</b> Small robot policies should feed the ViT's <b>patch tokens</b> into the
+policy, instead of squashing the image into <b>one vector</b> (CLS token or average pool). Keep the
+encoder frozen. That's it.</p>
+
+<p>Everything else in the paper is evidence for that sentence.</p>
+
+<pre class="calc">normal VLA:     image + text instruction → VLM (7B) → action head
+Patch Policy:   images → frozen ViT (no gradient) → small transformer (~10-30M) → action head</pre>
+
+<p>There is <b>no text anywhere</b>. The task is specified by a <b>goal image</b> or a <b>goal vector</b>,
+not by a sentence. That is why "Goal Image / or / Goal Vector" is its own input box in Figure 2.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Key Notes</h2>
+
+<div class="qa">
+<div class="q">The vision encoders are DINOv2 and WebSSL — both public and frozen. So what is the contribution?</div>
+<p>This is an <b>empirical / systems paper</b>, not a new-model paper. Fair to be suspicious. What it
+actually contributes:</p>
+<ol>
+  <li><b>The main claim with controlled evidence.</b> Hold the policy head fixed, swap only the visual
+  input: CLS vs avg-pool vs raw patches. Cube task: CLS 0.21, avg-pool 0.21, patches <b>1.73</b>.</li>
+  <li><b>One small architecture piece — the block-causal mask.</b> The only "method" in the paper.
+  Honestly a known trick (video models, and the authors' own DINO-WM use it).</li>
+  <li><b>A head-to-head benchmark of 5 frozen encoders for control.</b> DINOv2 and WebSSL win,
+  SigLIP 2 loses. Their reading: SigLIP 2 optimizes language-image matching and trades away the fine
+  geometry you need to insert a plug. Genuinely useful — people usually pick an encoder by vibes.</li>
+  <li><b>The efficiency headline.</b> Beats fine-tuned OpenVLA-OFT (7.6B, 61.7 ms) with ~0.7–5% of the
+  params at ~11 ms. Real Franka cable insertion, 2 mm tolerance: 0.70 vs 0.30.</li>
+</ol>
+<p>The argument is: <em>the good visual features already exist and are free — robotics just isn't using
+them properly.</em> The gap is not "we need better vision", it is "the plumbing between free vision and
+small policies is wrong."</p>
+</div>
+
+<div class="warn">
+<b>Where to push back.</b>
+Component novelty is near zero — ACT already uses patch tokens, VLAs already use patch tokens, and the
+authors' own DINO-WM already used frozen DINOv2 patches for world models. This is essentially
+"DINO-WM, but for policies." And the OpenVLA-OFT comparison is on the VLA's <em>weak</em> side: VLAs
+are built for language following and cross-task generalization, but every task here is in-domain,
+single-task, no language. The paper half-admits this ("for in-domain task learning"). Also: frozen
+encoder only, behavior cloning only, and the "40% relative improvement" is against their own
+global-feature baselines.
+</div>
+
+<h3>1. Figure 2 — what the framework actually is</h3>
+
+<p>Concrete numbers, using their real setup (DINOv2 ViT-S/14, 224×224 image, 2 camera views, T=5):</p>
+
+<table>
+  <tr><th>step</th><th>shape</th></tr>
+  <tr><td>one image</td><td>224 × 224 × 3</td></tr>
+  <tr><td>after frozen ViT</td><td>256 patches × 384 dim</td></tr>
+  <tr><td>view0 + view1</td><td>512 tokens × 384</td></tr>
+  <tr><td>over T=5 frames</td><td>5 × 512 tokens × 384</td></tr>
+</table>
+
+<p>Two things get combined, and they combine in <b>two different directions</b>:</p>
+
+<div class="keypt">
+<b>Multiple views → stacked along the TOKEN axis</b> (the sequence gets longer).
+Blue = view0's patches, orange = view1's patches, sitting on top of each other in the z<sub>t</sub>
+column. One timestep is 256 + 256 = 512 tokens. Nothing is repeated here, they are just appended.
+</div>
+
+<div class="keypt">
+<b>Goal → stacked along the FEATURE axis</b> (each token gets fatter).
+Every row of z<sub>t</sub> in the figure has <b>two cells side by side</b>: left = the observation patch,
+right = <b>gray = the goal</b>. So one token is <code>[obs patch (384), goal (384)] → 768 dim</code>.
+</div>
+
+<p>And here is the thing that looked wrong at first — one goal image, many tokens, many timesteps.
+The goal features are <b>broadcast (copied)</b>:</p>
+
+<ul>
+  <li>copied across all T timesteps (the goal doesn't change during the episode, so this is free)</li>
+  <li>copied across both views (view0's patch 5 and view1's patch 5 both get glued to goal patch 5)</li>
+</ul>
+
+<p>The paper writes the shape as <code>T × P × 2D</code>. The <code>2D</code> is exactly the
+"obs half + goal half" glue, and the fact that D doubled while T and P did <em>not</em> is the proof
+that it's a broadcast, not new tokens.</p>
+
+<p>One detail worth noticing: goal patch <code>i</code> is paired with observation patch <code>i</code>
+— <b>same spatial slot</b>. So the token says "here is what patch 5 looks like now, and here is what
+patch 5 should look like at the end." That pairing is only meaningful because the camera is fixed. For
+the goal-vector case there are no patches at all, so the vector is just copied onto every token.</p>
+
+<div class="mermaid">
+flowchart LR
+  V0["view0 224×224"] --> E0["frozen ViT"] --> P0["256 tokens"]
+  V1["view1 224×224"] --> E1["frozen ViT"] --> P1["256 tokens"]
+  G["goal image"] --> EG["frozen ViT"] --> PG["256 tokens<br/>(broadcast)"]
+  P0 --> Z["z_t : 512 tokens × 768<br/>[obs | goal] per token"]
+  P1 --> Z
+  PG --> Z
+  Z --> TR["8-layer transformer, dim 512<br/>block-causal mask"]
+  TR --> H["action head<br/>(VQ-BeT or Diffusion Policy)"]
+  H --> A["action chunk a_t … a_t+k"]
+</div>
+
+<h3>2. The policy side and the mask</h3>
+
+<pre class="calc">frames:   [ z_t (512 tok) ][ z_t+1 (512 tok) ][ z_t+2 (512 tok) ]  → flatten to 1536 tokens
+          + learned 1D position embedding
+          ↓
+   8-layer transformer, dim 512, block-causal mask
+          ↓
+   take the LAST token of each frame as the readout
+          ↓
+   Action Head  →  â_t, â_t+1, ... â_t+k   (an action chunk)
+          ↓
+   loss vs ground truth a_t ... a_t+k</pre>
+
+<p>The yellow staircase in Figure 2 is the mask: lower-triangular <b>by frame block</b>. Frame 2 sees
+frames 1 and 2, not frame 3. The zoom-in shows one block fully filled — inside a single frame all 512
+patches see each other freely, both directions.</p>
+
+<p><b>Why it matters:</b> they read the action out of the <em>last token of each frame</em>. If attention
+were not causal across frames, the readout for frame t would peek at frame t+1, so the model would cheat
+during training and break at test time.</p>
+
+<h3>3. The action head is not new</h3>
+
+<p>This is the part the paper deliberately borrows. The head is a plug-in slot, and they test two
+off-the-shelf ones:</p>
+
+<ul>
+  <li><b>VQ-BeT</b> — a VQ-VAE over action chunks (codebook 16, 2 residual groups). The transformer
+  predicts which code (classification) plus a small offset (regression). Fast: ~11 ms.</li>
+  <li><b>Diffusion Policy</b> — the token conditions a denoiser that refines the action chunk. Slow:
+  ~450 ms, and that cost is the denoising loop, <em>not</em> the vision.</li>
+</ul>
+
+<p>Both unchanged. The point is that swapping global features for patch features helps <em>either</em>
+head, which is what makes the claim about representations rather than about architecture.</p>
+
+<p>So the framework is three parts, and the middle one is what they added:
+<b>frozen ViT</b> (can be precomputed and cached) → <b>small policy transformer</b> (where the mask lives)
+→ <b>action head</b>. Trainable params: ~9M (Diffusion) to ~30M (VQ-BeT), against OpenVLA-OFT's 7.6B.</p>
+
+<h3>4. The four simulated environments (Section 3.1 / Appendix A.2)</h3>
+
+<table>
+  <tr><th></th><th>Push-T</th><th>LIBERO Goal</th><th>BlockPush</th><th>Cube</th></tr>
+  <tr><td>Source</td><td>Diffusion Policy</td><td>LIBERO</td><td>Implicit BC</td><td>OGBench</td></tr>
+  <tr><td>Robot</td><td>2D pusher</td><td>7-DoF Franka</td><td>2D pusher</td><td>6-DoF UR5e</td></tr>
+  <tr><td>Action dim</td><td>2</td><td>7</td><td>2</td><td>~7</td></tr>
+  <tr><td>Cameras</td><td>1 top-down</td><td>2 (3rd-person + wrist)</td><td>2 (3rd-person)</td><td>1 (3rd-person)</td></tr>
+  <tr><td>Demos</td><td>206 expert</td><td>50 × 10 tasks = 500</td><td>1000 expert</td><td>550 successful</td></tr>
+  <tr><td>Eval</td><td>100 rollouts</td><td>100 trials (10 per goal)</td><td>100 rollouts</td><td>100 rollouts</td></tr>
+  <tr><td>Metric</td><td>target coverage</td><td>success rate</td><td>mean blocks placed</td><td>mean blocks placed</td></tr>
+  <tr><td><b>Metric max</b></td><td><b>1.0</b></td><td><b>1.0</b></td><td><b>2.0</b></td><td><b>2.0</b></td></tr>
+</table>
+
+<div class="warn">
+<b>The trap when reading Table 1.</b> BlockPush and Cube are scored out of <b>2.0</b>, not 1.0. So Cube
+"1.73" means 1.73 of 2 blocks stacked, and the CLS baseline "0.21" means it basically never finishes
+even one. Figure 5 normalizes to [0,1] so the plot is comparable — Table 1 does not.
+</div>
+
+<p><b>What each one tests.</b></p>
+<ul>
+  <li><b>Push-T</b> — push a green T into a fixed gray T zone, scored by final overlap. Sanity check.
+  The goal is fixed, so no goal image is needed.</li>
+  <li><b>LIBERO Goal</b> — 10 tasks in <em>one</em> scene. The scene looks the same every time, only the
+  instruction differs. This is the one environment where the goal input really matters, and since Patch
+  Policy has no language it has to come through the goal image. Also the only place OpenVLA-OFT's number
+  is copied from the original paper rather than re-run.</li>
+  <li><b>BlockPush</b> — two blocks, two targets, assignment can be same-colored <em>or</em>
+  opposite-colored. So the expert data is <b>multi-modal</b>: two valid behaviors from the same state.
+  That is exactly why VQ-BeT and Diffusion Policy are the heads — a plain regression head would average
+  the two modes and push the block into the gap between targets.</li>
+  <li><b>Cube</b> — UR5e stacks two cubes, randomized starts, 200-step budget. The training data was
+  <em>not</em> a clean expert: it came from an expert policy with <b>temporally correlated noise</b>
+  (OGBench's protocol), so the demos are deliberately imperfect. Hardest of the four, and where the gap
+  is widest: patches 1.73 vs CLS 0.21 vs OpenVLA-OFT 1.50.</li>
+</ul>
+
+<p><b>Details that change how you read the numbers.</b></p>
+<ul>
+  <li><b>Vision only, no proprioception</b> — "All policies receive only visual inputs." Joint angles are
+  not given. This makes the CLS-vs-patch comparison clean, but it also makes the global-feature baselines
+  look worse than they would in a normal setup. Keep that in mind next to the 40% headline.</li>
+  <li><b>Context windows differ per environment</b> (Table 9): Push-T 5 frames / 5-step chunk, LIBERO
+  Goal 10 frames / 1 step, BlockPush 3 / 1, Cube 5 / 5. So token counts vary a lot.</li>
+  <li><b>LIBERO Goal uses a much smaller policy</b> — 6 layers, dim 120, versus 8 layers, dim 512 for the
+  other three. Big difference, unexplained.</li>
+  <li><b>Best checkpoint per run is selected.</b> Common in this literature, but it inflates everyone's
+  numbers, theirs and the baselines'.</li>
+  <li><b>A fifth simulated suite exists but is not in Section 3.1</b> — CAP-EgoGym (Appendix A.3): pickup,
+  door/drawer open, door/drawer close, built on ~20k real handheld-tool demos with procedurally generated
+  textures. The only place they test generalization rather than in-domain imitation.</li>
+</ul>
+
+<h3>5. What "100 rollouts" and "100 trials (10 per goal)" actually mean</h3>
+
+<p>A rollout (also called an episode, or a trial — the paper uses all three for the same thing) is:
+reset the sim to a fresh starting state, let the policy run until it finishes or times out, write down one
+score. 100 rollouts = do that 100 times and average.</p>
+
+<p>"100 trials (10 per goal)" just says the 100 runs are split evenly over LIBERO's 10 tasks — 10 runs each
+— not 90 runs on one easy task and 10 on the rest.</p>
+
+<pre class="calc">LIBERO Goal, score 0.98    (each run is pass/fail)
+  98 succeeded, 2 failed
+  (98×1 + 2×0) / 100 = 0.98
+
+Cube, score 1.73           (each run scores 0, 1, or 2 cubes placed)
+  75 runs placed 2 cubes
+  23 runs placed 1 cube
+   2 runs placed 0 cubes
+  (75×2 + 23×1 + 2×0) / 100 = 173 / 100 = 1.73
+
+Push-T, score 0.80         (each run already gives a fraction)
+  run 1: 0.91,  run 2: 0.66,  run 3: 0.88,  ...
+  average of the 100 numbers = 0.80</pre>
+
+<div class="callout">
+<b>Where the ± comes from.</b> In Table 1, <code>1.73 ±0.02</code> — that spread is <b>not</b> across the
+100 rollouts. It is across <b>3 random seeds</b>:
+<pre class="calc">seed 1: train a policy → 100 rollouts → 1.71
+seed 2: train a policy → 100 rollouts → 1.73
+seed 3: train a policy → 100 rollouts → 1.75
+reported: 1.73 ±0.02   ← std over these 3 numbers</pre>
+So each cell is really 300 rollouts and 3 separately trained models. A small ± means "retraining is
+stable", not "the policy behaves the same every episode." Some rows have no ± at all (DynaMo,
+OpenVLA-OFT) — single runs or copied numbers, so you can't tell how noisy they are. And 3 seeds is a
+small sample; don't read ±0.02 as a hard confidence interval.
+</div>
+
+<p>The <b>real robot</b> is different: only <b>20 trials</b> per task, one model, no seeds, because a human
+has to reset the table by hand each time. A real-robot 0.70 vs 0.60 is 14 successes vs 12 out of 20 — a
+2-episode difference. Treat those gaps with more caution than the sim ones.</p>
+
+<h3>6. Are the 100 runs the same scenario, or different arrangements?</h3>
+
+<p>Different arrangement each run — but the <b>same scene and the same objects</b>. Only placement changes.</p>
+
+<p><b>What the paper states explicitly.</b> Only for <b>Cube</b>: "the initial positions of the cube blocks
+are randomized." And for the real tasks: <b>Cable Insertion</b> — cable start pose randomized in a
+2 cm × 2 cm square, socket <em>fixed</em>; <b>Pen Collection</b> — 3 pens permutable across trials, each
+jittered ±1 cm and ±15°.</p>
+
+<p><b>What it leaves unstated.</b> Push-T, LIBERO Goal and BlockPush get no randomization description at
+all — they inherit the benchmark defaults. From those benchmarks: Push-T re-draws the T-block pose and
+pusher start each episode; BlockPush varies block positions and which target each block goes to; LIBERO
+ships a fixed pool of saved initial states per task and evaluation draws from that pool (varied, but from
+a predefined list).</p>
+
+<div class="warn">
+<b>What never changes</b> across the 100 runs: the objects, the background, table, lighting, camera
+positions, the goal configuration, the robot. "Different arrangement" means <em>the same stuff in
+different places</em>. Nothing new ever appears.
+<br><br>
+So these 100 runs measure <b>precision and robustness to placement</b> — can the policy handle a cube 5 cm
+left of where it saw one in training. They do <b>not</b> measure <b>generalization</b> — a new object, a
+different table, different lights.
+</div>
+
+<p>That is exactly why the OpenVLA-OFT comparison is lopsided. A 7B VLA carries huge visual and language
+priors that buy generalization. If you only test placement variation inside one fixed scene, those priors
+never get to pay off, and the VLA is just a slow way to do something small.</p>
+
+<p>The paper does have one real generalization test, but it's in the appendix: <b>Franka Pickup</b>
+(A.3), 10 objects never seen in training, 10 trials each = 100 trials; plus <b>CAP-EgoGym</b> with
+procedurally generated textures. Those are the only places where new stuff appears.</p>
+
+</section>
+
+</body>
+</html>
