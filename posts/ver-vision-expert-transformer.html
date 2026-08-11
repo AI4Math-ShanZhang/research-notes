@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VER — Vision Expert Transformer: Figure 2, tensor shapes, and the MI loss — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table.shapes{ border-collapse:collapse; margin:1rem 0; font-size:.92rem; }
+  table.shapes th, table.shapes td{ border:1px solid #d8dee6; padding:.4rem .7rem; text-align:left; }
+  table.shapes th{ background:#f3f6fa; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>VER — Vision Expert Transformer for Robot Learning</h1>
+<p class="paper-meta">Paper: Yixiao Wang, Mingxiao Huo, Zhixuan Liang, Yushi Du, Lingfeng Sun, Haotian Lin,
+Jinghuan Shang, Chensheng Peng, Mohit Bansal, Mingyu Ding &amp; Masayoshi Tomizuka · ICLR 2026 ·
+<a href="https://arxiv.org/abs/2510.05213">arXiv:2510.05213</a> ·
+<a href="https://yixiaowang7.github.io/ver_page/">project page</a>.
+Reading log — the questions I actually asked while going through Figure 2 and Equation 3.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 What the paper does</h2>
+
+<p>Distill three vision foundation models (DINOv2, ViT, CLIP) into <b>one shared pool of MoE experts</b>
+instead of into one merged representation. Then for a robot task, freeze everything and train only a
+small router (&lt; 0.4% of parameters) that picks which experts to use.</p>
+
+<pre class="calc">Theia:  3 teachers → one fixed unified representation → policy
+VER:    3 teachers → 18 experts (6 per layer × 3 layers) → router picks 2 per token → policy</pre>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Reading log</h2>
+
+<div class="qa">
+<div class="q">What is the pipeline of Figure 2?</div>
+
+<p>Two rows = two stages. The MoE block (Vision Expert Library) appears in <b>both</b> rows — it is the
+same network, only what is trainable changes.</p>
+
+<p><b>Top row — Pretraining (distillation)</b></p>
+<pre class="calc">ImageNet-1K image
+   ↓
+Base Vision Transformer (BVT)      ← trainable, first 9 plain ViT layers
+   ↓  "unified representation" z
+Vision Expert Library (VEL)  ×N    ← N = 3 MoE layers
+   each layer = [Teacher-Specific Router] + [6 experts, 2 active]
+   ↓  "student representation" y_i
+Projection head h_i (small CNN)
+   ↓
+compare with teacher feature map → DINOv2 / ViT / CLIP   ← all frozen</pre>
+
+<p><b>Bottom row — Downstream robot task</b></p>
+<pre class="calc">robot images
+   ↓
+BVT (frozen)
+   ↓ z
+VEL ×N, experts FROZEN, but router is NEW and trainable
+   Robot Router  (&lt; 0.4% of params)
+   ↓ "structured representation"
+Policy Head  →  actions</pre>
+
+<p>The legend "inactive / active vision experts" is the grey vs coloured little boxes: only K of the L
+experts fire per token.</p>
+</div>
+
+<div class="qa">
+<div class="q">How does the distillation from the three teachers work?</div>
+
+<p>The important point: <b>the experts are not one-per-teacher</b>. There is one shared pool of 6 experts
+per MoE layer. What is per-teacher is the <b>router</b>.</p>
+
+<ul>
+  <li>L = 6 experts per MoE layer, K = 2 active, N = 3 MoE layers.</li>
+  <li>There are I = 3 <b>Teacher-Specific (TS) routers</b> per layer: R_dino, R_vit, R_clip.</li>
+  <li>One image goes through the BVT <b>once</b> → z.</li>
+  <li>The VEL then runs <b>three times</b> on the same z, once per teacher router. Each run picks its own
+  2-of-6 experts, so you get y_dino, y_vit, y_clip.</li>
+  <li>Each y_i goes through its own small CNN head h_i and is matched to that teacher's real feature map.</li>
+  <li>Teachers can share experts. Figure 4 shows ViT uses fewer experts, DINOv2 and CLIP spread over more.</li>
+</ul>
+
+<p>Loss (Eq. 2), per teacher, averaged with alpha_i = 1/3:</p>
+<pre class="calc">L_distill = (1/3) * sum_i [ 0.9 * cosine(h_i(y_i), t_i(x)) + 0.1 * smoothL1(h_i(y_i), t_i(x)) ]</pre>
+
+<p>Routing itself (Eq. 1) is noisy top-K gating: the router MLP outputs both a score s1 and a noise scale
+s2, adds Gaussian noise, softmax, keeps the top-2, weights the 2 expert outputs by their probabilities.</p>
+</div>
+
+<div class="qa">
+<div class="q">What are the specific tensor sizes?</div>
+
+<p>The paper does not list shapes, but they are fully determined: VER is initialized from Theia and copies
+its setup (224×224 input, ViT-B/16 for VER-B). The expert width checks out against the reported parameter
+counts.</p>
+
+<p><b>VER-B (ViT-Base, d = 768):</b></p>
+<table class="shapes">
+<tr><th>Stage</th><th>Tensor</th></tr>
+<tr><td>Input image</td><td>[B, 3, 224, 224]</td></tr>
+<tr><td>Patch embed (16×16)</td><td>[B, 197, 768] &nbsp; (196 patches = 14×14, + CLS)</td></tr>
+<tr><td>After BVT (9 layers)</td><td>z: [B, 197, 768]</td></tr>
+<tr><td>TS router input (per token)</td><td>[1, 768]</td></tr>
+<tr><td>TS router output</td><td>[1, 12] = 6 scores s1 + 6 noise scales s2</td></tr>
+<tr><td>Routing probs p / mask m</td><td>[B, 197, 6], mask has exactly 2 ones</td></tr>
+<tr><td>One expert (MLP)</td><td>768 → 1536 → 768</td></tr>
+<tr><td>MoE layer output</td><td>[B, 197, 768]</td></tr>
+<tr><td>VEL output, per teacher</td><td>y_i: [B, 197, 768], three of them</td></tr>
+<tr><td>Drop CLS, reshape to grid</td><td>[B, 768, 14, 14]</td></tr>
+<tr><td>Projection head h_i (deconv + 2 conv + linear)</td><td>14×14 → 16×16</td></tr>
+<tr><td>Teacher targets</td><td>DINOv2-L [B,1024,16,16] · CLIP-L [B,1024,16,16] · ViT-H [B,1280,16,16]</td></tr>
+</table>
+
+<p>Expert hidden width = 4d/K = 4·768/2 = <b>1536</b> (the paper says "scale the MLP hidden dimension by
+1/K" to keep active FLOPs constant). Check:</p>
+
+<pre class="calc">experts:  3 layers × 6 experts × (768·1536·2)  = 42.5M
+minus the 3 original FFNs                      = -14.2M
+Theia-B 81.8M + 42.5M - 14.2M                  = 110.1M   ← matches the paper's total
+only 2 of 6 fire                               →  82.2M   ← matches the paper's active</pre>
+
+<p>Same check works for VER-T (5.3 → 7.0M) and VER-S (20.7 → 27.7M). Smaller sizes: VER-T d = 192, expert
+192→384→192; VER-S d = 384, expert 384→768→384.</p>
+</div>
+
+<div class="qa">
+<div class="q">If two experts are active, how do I merge them into one?</div>
+
+<p>You don't pick one — you <b>add them with weights</b>. The router probability is the weight.</p>
+
+<pre class="calc">y = sum over all L experts of  R(x,l) * E_l(x),    R(x,l) = m_l * p_l
+
+m_l is 0/1 (top-K mask), so the 4 inactive experts multiply by 0:
+
+y = p_a * E_a(x) + p_b * E_b(x)</pre>
+
+<p>Small example, one patch token, softmax over 6 experts:</p>
+<pre class="calc">p = [0.05, 0.40, 0.10, 0.25, 0.15, 0.05]     top-2 = expert 2 and expert 4
+m = [0,    1,    0,    1,    0,    0   ]
+
+E2(x) = [ 2, 0, -1]        (toy 3-dim instead of 768)
+E4(x) = [ 0, 4,  1]
+
+y = 0.40*[2,0,-1] + 0.25*[0,4,1] = [0.8, 1.0, -0.15]</pre>
+
+<p>One vector out, same shape as one expert's output. It goes back in as the FFN output: x_out = x + y.</p>
+
+<ul>
+  <li><b>It is per token, not per image.</b> Each of the 196 patches picks its own 2 experts. Densely that
+  is weights [B, 197, 6] × expert outputs [B, 197, 6, 768] → sum over the expert axis → [B, 197, 768]. Real
+  code gathers tokens per expert and scatter-adds instead.</li>
+  <li><b>The weights do not sum to 1</b> (0.40 + 0.25 = 0.65). That is on purpose in Shazeer noisy top-k:
+  the leftover mass means "the router was not confident", and it is how the router gets gradient. Switch /
+  Mixtral renormalize to 0.615 / 0.385; the paper's Eq. 1 does not.</li>
+  <li><b>Merging is safe</b> because every expert is an MLP 768→1536→768 reading the same x, so they all
+  live in the same space.</li>
+  <li>With Curriculum Top-K Annealing, training <b>starts at K = 6</b> (full soft mixture) and anneals to
+  K = 2. Proposition 1 is the reason: inactive experts are multiplied by 0, so they get no real gradient.</li>
+</ul>
+</div>
+
+<div class="qa">
+<div class="q">Does N have to equal the number of teachers?</div>
+
+<p><b>No. They just happen to both be 3 here.</b></p>
+
+<table class="shapes">
+<tr><th>Symbol</th><th>Meaning</th><th>Value</th><th>Where it comes from</th></tr>
+<tr><td>N</td><td>how many layers at the end of the ViT are MoE layers</td><td>3</td><td>12-layer ViT split into 9 plain + 3 MoE (Appendix F)</td></tr>
+<tr><td>I</td><td>how many teachers you distill from</td><td>3</td><td>DINOv2, ViT, CLIP (following Theia)</td></tr>
+<tr><td>L</td><td>experts per MoE layer</td><td>6</td><td>ablation: (K,L) = (2,6) is the sweet spot</td></tr>
+<tr><td>K</td><td>experts firing per token</td><td>2</td><td>same ablation</td></tr>
+</table>
+
+<p>The only place I shows up in the architecture is the router count:</p>
+<pre class="calc">number of TS routers = N × I = 3 layers × 3 teachers = 9</pre>
+
+<p>Add SAM as a 4th teacher: I = 4, N stays 3 → 12 routers, and the table in Eq. 3 becomes 4×6. Make the
+last 6 layers MoE: N = 6, I stays 3 → 18 routers, and L_mi sums over 6 layers. And L = 6 is <b>not</b>
+"2 experts per teacher" — the pool is shared, and the MI loss is what pushes teachers apart.</p>
+</div>
+
+<div class="qa">
+<div class="q">So each layer selects its own 2 experts for each teacher?</div>
+
+<p>Yes — and one level further: <b>per layer, per teacher, and per token</b>.</p>
+
+<p>The 6 experts in layer 1 are different MLPs from the 6 in layer 2 (N × L = 18 separate expert MLPs), and
+the choice restarts at every layer:</p>
+<pre class="calc">teacher DINOv2, one patch token:
+  layer 1:  picks E2, E5   (of layer 1's six)
+  layer 2:  picks E1, E3   (of layer 2's six)
+  layer 3:  picks E4, E6   (of layer 3's six)
+
+full pass for one teacher:
+  z  = BVT(image)                                  [B, 197, 768]
+       ↓ layer 1: R_dino^1 → top-2 of 6 → weighted sum
+       ↓ layer 2: R_dino^2 → top-2 of 6 → weighted sum
+       ↓ layer 3: R_dino^3 → top-2 of 6 → weighted sum
+  y_dino                                           [B, 197, 768]</pre>
+
+<p>Router input granularity is a single patch (Table 7), so patch 5 may take experts {1,4} while patch 90
+takes {2,3}. One image, one teacher = 3 × 196 = 588 top-2 decisions.</p>
+
+<p>This is also why the MI loss is computed per layer and then summed: L_mi = −( I(I;E¹) + I(I;E²) +
+I(I;E³) ). Three separate 3×6 tables — layer 1 can be balanced while layer 3 is collapsing.</p>
+</div>
+
+<div class="qa">
+<div class="q">Equation 3 — how do you compute the joint and the marginal?</div>
+
+<pre class="calc">L_mi = - sum_n I(I ; E^n)
+     = - sum_n sum_l sum_i  p(I_i, E_l^n) * log[ p(I_i, E_l^n) / ( p(I_i) * p(E_l^n) ) ]</pre>
+
+<p>Two random variables: <b>I</b> = which teacher (3 values), <b>E^n</b> = which expert at layer n (6
+values). Per layer you build a small <b>3 × 6</b> table. Appendix D.2 gives the recipe:</p>
+
+<ol>
+  <li><b>Prior over teachers:</b> p(I_i) = 1/I = 1/3, assumed uniform.</li>
+  <li><b>Conditional:</b> p(E_l^n | I_i) = the softmax routing score of teacher-router i for expert l at
+  layer n. In practice averaged over all patch tokens and the batch, so each row sums to 1.</li>
+  <li><b>Joint:</b> p(I_i, E_l^n) = p(I_i) · p(E_l^n | I_i) = (1/3) · router_i(l). The whole table sums to 1.</li>
+  <li><b>Marginal:</b> p(E_l^n) = sum over i of the joint = column sums = average usage of expert l across
+  the three teachers.</li>
+</ol>
+
+<p>Then sum over the 3 layers and negate. Weight in the total loss: gamma = 0.0005 (Eq. 4).</p>
+
+<p><b>Shapes</b></p>
+<pre class="calc">router i, layer n, softmax over experts, per token:  [B, 197, 6]
+   ↓ average over batch and tokens
+p(E^n | I_i)                                          [6]      sums to 1
+   ↓ stack the 3 teachers
+p(E^n | I)                                            [3, 6]   each ROW sums to 1
+   ↓ multiply by p(I_i) = 1/3
+p(I, E^n)   = joint                                   [3, 6]   WHOLE TABLE sums to 1
+   ↓ sum over the teacher axis (column sums)
+p(E^n)      = marginal                                [6]      sums to 1
+p(I)                                                  [3]      = [1/3, 1/3, 1/3]
+I(I ; E^n)                                            scalar
+L_mi                                                  scalar</pre>
+
+<p><b>Conditional vs joint — the difference</b> is only the normalization, because p(I) is uniform here.
+The conditional answers "given that the teacher is DINOv2, how does it spread over the 6 experts" — three
+separate distributions, straight from the router. The joint answers "pick a random sample, how likely is
+this (teacher, expert) pair" — one distribution over all 18 cells. joint = (1/3) × row. MI needs the joint
+because it is an average weighted by how often each pair actually happens; using the conditional as the
+weight would make the total 3× too big. If teachers were weighted unevenly, say p(I) = [0.5, 0.3, 0.2],
+each row would shrink by a different amount and the two tables would no longer be a simple rescale.</p>
+
+<p><b>Worked numbers, one layer</b></p>
+<pre class="calc">p(E|I), rows = DINOv2 / ViT / CLIP, cols = 6 experts
+
+DINOv2  [0.30, 0.25, 0.20, 0.15, 0.05, 0.05]
+ViT     [0.05, 0.05, 0.10, 0.20, 0.30, 0.30]
+CLIP    [0.10, 0.10, 0.30, 0.30, 0.10, 0.10]
+
+joint = each entry / 3:
+        [0.100, 0.083, 0.067, 0.050, 0.017, 0.017]
+        [0.017, 0.017, 0.033, 0.067, 0.100, 0.100]
+        [0.033, 0.033, 0.100, 0.100, 0.033, 0.033]     all 18 add to 1.0
+
+marginal p(E) = column sums:
+        [0.150, 0.133, 0.200, 0.217, 0.150, 0.150]</pre>
+
+<p><b>A cleaner toy case</b> (3 teachers, 3 experts, natural log) showing what the loss wants:</p>
+<pre class="calc">DINOv2: [0.8, 0.1, 0.1]     marginal = [0.333, 0.333, 0.333] → H(E)   = ln 3 = 1.099
+ViT:    [0.1, 0.8, 0.1]     H(E|I) = entropy of [0.8,0.1,0.1] = 0.639
+CLIP:   [0.1, 0.1, 0.8]     MI = 1.099 - 0.639 = 0.46 nats  → contributes -0.46 to L_mi</pre>
+
+<p>Both failure modes give MI = 0: all three routers flat and identical (H(E) high but H(E|I) equally high
+→ no specialization), or all three collapsing onto one expert (H(E) = 0). That is the decomposition the
+paper stresses — maximize H(E^n) for load balancing, minimize H(E^n | I) so each teacher keeps its own
+small predictable expert subset and the three teachers' gradients do not fight inside the shared pool.</p>
+</div>
+
+</section>
+
+</body>
+</html>
