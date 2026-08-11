@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AVA-VLA — Active Visual Attention — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table.res{ border-collapse:collapse; margin:1rem 0; font-size:.9rem; }
+  table.res th, table.res td{ border:1px solid #d8dee9; padding:.35rem .7rem; text-align:right; }
+  table.res th:first-child, table.res td:first-child{ text-align:left; }
+  table.res th{ background:#eef2f7; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>AVA-VLA — Improving Vision-Language-Action Models with Active Visual Attention</h1>
+<p class="paper-meta">Paper: L. Xiao, J. Li, J. Gao, F. Ye, Y. Jin, J. Qian, J. Zhang, Y. Wu &amp; X. Yu,
+<a href="https://arxiv.org/abs/2511.18960">arXiv:2511.18960</a> ·
+<a href="https://openaccess.thecvf.com/content/CVPR2026/papers/Xiao_AVA-VLA_Improving_Vision-Language-Action_models_with_Active_Visual_Attention_CVPR_2026_paper.pdf">CVPR 2026</a>.
+Baseline throughout: <b>OpenVLA-OFT</b>.
+Written up from a reading session — the questions I actually asked, in order, in plain words.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>One line.</b> Take OpenVLA-OFT, fill its zero action placeholders with a <b>recurrent state</b>,
+and use that same state to turn each visual token up or down.</p>
+
+<pre class="calc">OFT:      A_t ~ P(A_t | x_t)              Markov — current observation only
+AVA-VLA:  A_t ~ P(A_t | x_t, r_(t-1))     POMDP — plus a belief-like memory</pre>
+
+<p>The paper's framing is that a VLA built on a VLM processes dense visual input independently at every
+timestep, which implicitly treats the task as an MDP. They reformulate it as a POMDP and approximate the
+belief state <code>b_(t-1) = P(s_(t-1) | x_(&lt;t), A_(&lt;t))</code> with a learned vector
+<code>r_(t-1)</code>, because the exact belief is intractable.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Background — what OpenVLA-OFT actually does</h2>
+
+<p>Everything in AVA-VLA is a modification of one equation, so it is worth unpacking that equation first.</p>
+
+<div class="qa">
+<div class="q">What does p_t = 0̄ = [0_0, 0_1, …, 0_(L_c−1)] ∈ R^(L_c × D × d) mean?</div>
+<p>Symbol by symbol:</p>
+<ul>
+  <li><b>t</b> — the current control timestep (one decision moment).</li>
+  <li><b>z_I^t</b> — visual tokens from the cameras.</li>
+  <li><b>z_S^t</b> — language instruction + robot proprioceptive state.</li>
+  <li><b>p^t</b> — the <b>placeholder</b> tokens.</li>
+  <li><b>L_c</b> — chunk length, how many future action steps are predicted at once (8).</li>
+  <li><b>D</b> — action dimension (7: x, y, z, roll, pitch, yaw, gripper).</li>
+  <li><b>d</b> — model hidden size (4096).</li>
+  <li><b>M_parallel</b> — the VLM run in <b>one</b> forward pass, bidirectional attention.</li>
+  <li><b>Q</b> — the MLP head turning hidden states into real numbers.</li>
+</ul>
+<p>So you create <b>L_c × D = 8 × 7 = 56 tokens</b>, each a vector of size 4096. And in OpenVLA-OFT
+<b>every one of those vectors is all zeros</b>. That is what the equation says: a list of L_c blocks,
+each block D zero vectors. They are empty <b>seats</b> for actions not yet predicted.</p>
+
+<p>The process:</p>
+<pre class="calc">1. encode images  -> z_I^t
+2. encode text + state -> z_S^t
+3. make 56 zero placeholder tokens
+4. concat: [ z_I^t | z_S^t | p^t ]
+5. ONE forward pass, bidirectional attention
+6. read the hidden states at the 56 placeholder positions
+7. Q maps them to A^t  (8 steps x 7 dims)
+8. execute, go to t+1, repeat</pre>
+
+<div class="warn"><b>The catch the paper is setting up.</b> Since all placeholders are identical zeros,
+the token content carries <b>zero information</b>. The only thing telling slot 3 apart from slot 40 is
+the positional encoding. Those 56 slots are free real estate sitting in the sequence doing nothing.</div>
+</div>
+
+<div class="qa">
+<div class="q">Do z_I and z_S also see each other?</div>
+<p>Yes. OFT does not only make the action slots bidirectional — it <b>drops the causal mask for the
+whole sequence</b>. Its own wording: the model "takes empty action embeddings as input and replaces the
+causal attention mask with bidirectional attention."</p>
+<pre class="calc">            sees ->   z_I    z_S    p (actions)
+  z_I  (images)        v      v        v
+  z_S  (lang+state)    v      v        v
+  p    (placeholders)  v      v        v</pre>
+<p>Why it matters. With a <b>causal</b> mask and order <code>[images, language, state, actions]</code>,
+image token 5 sees images 1–4 only — it does <b>not</b> see the language. So the visual features are
+computed <b>blind to the task</b>. Bidirectional attention lets image tokens attend to the instruction
+and the state, so visual features become task-aware inside the LLM, and action slots see each other.</p>
+<p>Keep separate: inside the vision encoder (SigLIP / DINOv2 ViT) patches were <b>always</b>
+bidirectional. ViTs never use a causal mask. The change is about the LLM backbone.</p>
+</div>
+
+<div class="qa">
+<div class="q">Why does the policy see only x_t? Why the Markov assumption?</div>
+<p>Five reasons, and only the last is a real argument:</p>
+<ol>
+  <li><b>That is how the data is stored.</b> RLDS / Open X-Embodiment / LeRobot dump episodes as flat
+  (observation, action) pairs. Sampling one frame is trivial; a consistent history window is extra work.</li>
+  <li><b>Images are expensive.</b> One 224×224 view ≈ 256 tokens; two cameras ≈ 512. Eight history
+  frames = ~4000 extra tokens, and attention is quadratic.</li>
+  <li><b>Control must be fast.</b> 10–50 Hz. Long context = slow pass. Speed is exactly what OFT was
+  optimizing, so history works against the whole point.</li>
+  <li><b>History often <em>hurts</em> — the copycat problem.</b> Feed past frames or past actions and
+  the model finds a shortcut: next action ≈ last action. Training loss drops, real performance
+  collapses. Known as causal confusion. Many groups tried history, got worse, went back to single-frame.</li>
+  <li><b>The theory gives cover.</b> In a fully observed MDP the optimal policy only needs the current
+  state. If you <em>assume</em> the camera sees everything, x_t is enough.</li>
+</ol>
+<p>Reason 5 is the weak link, and it is what the paper attacks. Real manipulation is a <b>POMDP</b>:</p>
+<ul>
+  <li><b>Occlusion</b> — the arm covers the object it is about to grasp.</li>
+  <li><b>Motion is invisible in one frame</b> — direction and velocity need at least two frames.</li>
+  <li><b>Task progress is not visible</b> — "put 3 blocks in the box", box closed, did I do 2 or 3?</li>
+  <li><b>Hidden physical state</b> — is the drawer locked, is the bottle empty, did the grasp fail once?</li>
+  <li><b>Repetitive scenes</b> — two stages look identical but need different next actions.</li>
+</ul>
+<p>In all these, two different correct actions map to the <b>same</b> x_t. A Markov policy can only
+output the average, which is usually wrong.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 The data pipeline — why "Markov" is really a dataloader artifact</h2>
+
+<p><b>On disk (RLDS / tfrecord shards):</b></p>
+<pre class="calc">episode_00042  (task: "pick up the red cup", 120 steps)
+ |- step 0   : {img_third, img_wrist, state[7], action[7], lang, is_first=1}
+ |- step 1   : {img_third, img_wrist, state[7], action[7], lang}
+ |- ...
+ |- step 119 : {..., is_last=1, is_terminal=1}</pre>
+
+<p><b>Making one batch:</b></p>
+<ol>
+  <li><b>Pick a dataset.</b> Weighted draw over the mixture (Bridge 13%, Fractal 12%, …).</li>
+  <li><b>Read an episode.</b> Random shard, 120 steps into memory.</li>
+  <li><b>Standardize the action space.</b> Every robot logs differently →
+  <code>[dx, dy, dz, droll, dpitch, dyaw, grip]</code>.</li>
+  <li><b>Normalize</b> with per-dataset 1st/99th percentile stats:
+  <code>dx = 0.0031, q01 = −0.021, q99 = 0.024 → 2·(0.0031+0.021)/(0.024+0.021) − 1 = 0.071</code>.
+  Everything lands in ~[−1, 1]; gripper stays 0/1.</li>
+  <li><b>Chunk the actions.</b> At step 57 gather 57…64 →
+  <code>A_57 = [a57 … a64]</code>, shape 8×7. Near the episode end it pads by repeating the last
+  action, with a mask so padding does not count in the loss.</li>
+  <li><b>Flatten the episode into loose frames.</b> The episode structure is <b>destroyed</b> —
+  120 independent samples. Nothing knows sample 57 and 58 came from the same episode.</li>
+</ol>
+
+<p><b>The shuffle buffer — the "throw out and refill" part.</b> A ring buffer of fixed size (~100,000
+frames). It is not "load a batch, use it, delete it". It is a continuously flowing pool: one slot out,
+one slot in.</p>
+
+<pre class="calc">fill once (takes minutes):
+  buffer = [ 100,000 random frames from many episodes and many datasets ]
+
+steady state, forever:
+  1. pick a random index i
+  2. emit buffer[i]                 <- goes into the batch
+  3. read ONE new frame from the stream
+  4. buffer[i] = that new frame     <- slot refilled immediately
+
+batch size 64  ->  do that 64 times  ->  batch #1
+                   batch #1: forward, backward, optimizer step, FREED
+                   meanwhile a prefetch thread is already building batch #2</pre>
+
+<p>Why the buffer must be big: without it a batch would be 64 consecutive frames from one episode, which
+look nearly identical and give terrible gradients. With 100k, the 64 frames come from ~64 different
+episodes and several robots. Frames 57 and 58 of episode 42 end up thousands of steps apart.</p>
+
+<p><b>What one sample looks like at the model input:</b></p>
+<pre class="calc">images    -> 224x224 -> augment -> SigLIP + DINOv2 -> concat -> project -> 512 visual tokens
+language  -> "In: What action should the robot take to pick up the red cup?\nOut:" -> ~24 tokens
+state[7]  -> small MLP -> 1 state token
+placeholders                                                      -> 56 zero vectors
+
+full sequence = [ 512 visual | 24 text | 1 state | 56 zeros ] = 593 tokens
+batch of 64   = [64, 593, 4096]</pre>
+
+<div class="keypt"><b>The point.</b> The Markov assumption is not really a modelling choice someone
+argued for. It falls out of the pipeline: step 6 throws away episode structure, the shuffle buffer
+scatters neighbouring frames into far-apart batches, and <b>no state survives between batches</b>.
+To use history you must change the chunking and flattening steps — which is exactly what AVA-VLA does.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 One image → 8 actions, and what that costs</h2>
+
+<pre class="calc">t=0   camera click  x_0
+      ONE forward pass -> a0 a1 a2 a3 a4 a5 a6 a7
+      robot executes all 8, eyes closed
+
+t=8   camera click  x_8
+      ONE forward pass -> a8 a9 a10 a11 a12 a13 a14 a15
+      robot executes all 8, eyes closed</pre>
+
+<p>At 30 Hz control, 8 steps ≈ 0.27 s. So the robot looks at the world about <b>4 times per second</b>,
+not 30. That is where the speedup comes from — 1 forward pass instead of 8.</p>
+
+<p><b>Blind inside the chunk.</b> No new input during those 8 steps. Open loop. If a human bumps the cup
+at step 3, the robot keeps executing the old plan until step 8. Shorter chunk = more reactive but slower;
+longer = faster but more blind. 8 is the compromise.</p>
+
+<div class="qa">
+<div class="q">Is the next chunk connected to the previous one?</div>
+<p>No. When the model predicts a8…a15 at t=8 it does <b>not</b> see a0…a7, does <b>not</b> know it
+predicted a chunk 0.27 s ago, does <b>not</b> remember x_0. Completely fresh call — same as if the robot
+had just been switched on at that moment.</p>
+<pre class="calc">chunk 1:  x_0  --> [a0..a7]
+                        X          no arrow here
+chunk 2:  x_8  --> [a8..a15]</pre>
+<p><b>Then why does it work at all?</b> The link exists, but it lives <b>in the physical world, not in
+the model</b>. Executing a0…a7 moves the arm, so x_8 shows the arm in its new place and the state vector
+reports new joint angles. The robot's body <em>is</em> the memory. That works as long as the camera
+really shows everything.</p>
+<p><b>The visible symptom:</b> a small jerk at the chunk boundary. The last action of chunk 1 and the
+first of chunk 2 came from two independent forward passes; nothing in the loss says "chunk 2 must
+continue chunk 1". The known fix (ACT / ALOHA) is <b>overlapping chunks + temporal ensembling</b> —
+predict a new chunk every single step and average the predictions for the same timestep:</p>
+<pre class="calc">at t=0: a0 a1 a2 a3 a4 a5 a6 a7
+at t=1:    a1 a2 a3 a4 a5 a6 a7 a8
+at t=2:       a2 a3 a4 a5 a6 a7 a8 a9
+action sent at t=2 = weighted average of the three predictions for a2</pre>
+<p>Smooth and reactive, but a forward pass every step throws away the 8× speedup. OFT chose speed.</p>
+</div>
+
+<div class="qa">
+<div class="q">Why not use a KV cache?</div>
+<p>A KV cache pays off only when <b>both</b> hold: (1) many forward passes over a growing sequence,
+(2) a fixed prefix whose K/V never change.</p>
+<p><b>Original OpenVLA satisfies both</b> — it generates 7 action tokens one at a time, so it caches the
+536-token prefix and computes 1 new token per pass. Big win.</p>
+<p><b>OFT does one pass per control step.</b> There is no second pass to save work for. Parallel decoding
+did not "give up" the KV cache; it made it <b>pointless</b> by removing the thing being sped up.</p>
+<pre class="calc">OpenVLA (AR):     pass1, pass2, ... pass7   <- cache saves 6 recomputes
+OFT (parallel):   pass1                     <- nothing to save</pre>
+<p><b>And you cannot cache across control steps either:</b></p>
+<pre class="calc">t=0  [ 512 visual (photo A) | 24 lang | 1 state | 56 slots ]
+t=8  [ 512 visual (photo B) | 24 lang | 1 state | 56 slots ]
+       ^^^^ all new           same      new       new</pre>
+<p>The whole point is a <b>new photo</b> — 512 of 593 tokens are new. Only ~24 language tokens repeat
+(~4%). And the harder blocker: attention is <b>bidirectional</b>, so language tokens attend to image
+tokens and produce different K/V when the image changes. There is <b>literally no stable prefix</b>.
+Cacheable prefixes require causality.</p>
+<p><b>Where a KV cache <em>would</em> be the natural memory</b> — keep the old frame's K/V as history:</p>
+<pre class="calc">per timestep of history:
+  512 tokens x 32 layers x 2 (K and V) x 4096 dims x 2 bytes (fp16) = 268 MB
+
+4 Hz over a 60 s episode = 240 steps -> ~64 GB of cache, on top of 14 GB of weights.</pre>
+<p>Dead on arrival. Which is exactly why AVA-VLA compresses it:</p>
+<pre class="calc">full KV cache of history:   268 MB per step, grows forever
+AVA-VLA r_(t-1):            56 x 4096 x 2 bytes = 0.46 MB, constant</pre>
+<p>Same goal — carry the past forward. One is exact and unbounded, the other lossy and bounded. They
+chose lossy and bounded, and reused the 56 slots that were already sitting there full of zeros, so it
+costs <b>zero extra sequence length</b>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 The method — two changes</h2>
+
+<h3>Change 1 — the placeholders are no longer zeros</h3>
+
+<pre class="calc">OFT:      p_t = all zeros        (L_c x D x d = 8 x 7 x 4096)
+AVA-VLA:  p_t = r_(t-1)          same shape, now carries information</pre>
+
+<p>Where <code>r_(t-1)</code> comes from — the <b>last-layer hidden states at those same action
+positions</b>, from the previous timestep, pushed through a 2-layer SiLU MLP (Eq. 5):</p>
+
+<pre class="calc">r_(t-1) = B( h_M^(t-1) )   in R^(L_A x d),   L_A = L_c * D = 56</pre>
+
+<p>The paper's justification: those pre-action hidden states "contain fused visual and language
+information and are predictive of the agent's intent." At episode start <code>r_(-1) = 0̄</code>.</p>
+
+<h3>Change 2 — the Active Visual Attention gate</h3>
+
+<ol>
+  <li>Down-project vision, language and <code>r_(t-1)</code> to a smaller width d′ (2-layer SiLU MLP
+  per modality; d′ is not stated in the main text).</li>
+  <li><b>FiLM</b> the vision with the language:
+  <code>ẑ_I = F_γ(z̄_S) ⊙ z̄_I + F_β(z̄_S)</code>.</li>
+  <li><b>Cross-attention</b> — vision is the <b>query</b>, the memory is key/value (Eq. 7–9):
+  <code>Q = W_Q ẑ_I</code>, <code>K, V = W_K/W_V r̂_(t-1)</code>,
+  <code>O = SelfAtt(CrossAtt(Q, K, V))</code>. Each patch asks "given what I was doing last step, am I
+  relevant?"</li>
+  <li><b>Two-way scoring</b> (DynamicViT / LVPruning style):
+  <code>ρ = Softmax(W(FFN(O))) ∈ R^(L_I × 2)</code> — enhance vs weaken.</li>
+  <li><b>Collapse to one dial:</b> <code>ω = ρ·γ</code> with <code>γ = [1.9, 0.1]</code>, so
+  <b>ω ∈ [0.1, 1.9]</b>. 1.9 = look hard at this patch; 0.1 = mostly ignore it. A soft dial centred
+  near 1 — <b>not</b> pruning.</li>
+  <li><b>Inject into every layer's attention</b> (Eq. 11–12):
+  <code>A_ij = exp(C_ij)·U_ij / Σ_l exp(C_il)·U_il</code>, where U is 1 on the diagonal and for
+  non-vision columns, and ω_j for off-diagonal entries whose column j is a vision token.</li>
+</ol>
+
+<p>Full forward pass (Eq. 6):</p>
+<pre class="calc">A^t = Q( M_parallel( z_I^t , V(X^t, r_(t-1)) , z_S^t , r_(t-1) ) )</pre>
+
+<div class="callout"><b>So r_(t-1) enters twice:</b> once as the content of the 56 action slots
+("state-based initialization"), and once as the key/value that drives the visual gate.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Full tensor walk (LIBERO config: 2 cameras, chunk 8, 7-DoF, B = 1)</h2>
+
+<p><b>Stage 1 — raw images to visual tokens (unchanged from OFT):</b></p>
+<pre class="calc">raw           third-person [1, 3, 256, 256]   wrist [1, 3, 256, 256]
+resize+norm   -> [1, 3, 224, 224] each
+
+SigLIP ViT-SO400M/14 : 224/14 = 16 -> 16x16 = 256 patches
+                       [1, 3, 224, 224] -> [1, 256, 1152]
+DINOv2 ViT-L/14      : [1, 3, 224, 224] -> [1, 256, 1024]
+concat on feature dim                   -> [1, 256, 2176]
+projector (2176 -> 4096)                -> [1, 256, 4096]   per view
+2 views stacked                         -> [1, 512, 4096]   = z_I</pre>
+
+<p><b>Stage 2 — the other inputs:</b></p>
+<pre class="calc">language -> tokenizer -> 24 ids -> embed  -> [1,  24, 4096]  = z_S
+proprio state (8 numbers) -> MLP         -> [1,   1, 4096]
+recurrent state from last step  r_(t-1)  -> [1,  56, 4096]   (zeros at t=0)</pre>
+
+<p><b>Stage 3 — the AVA module:</b></p>
+<pre class="calc">down-project:
+  z_I      [1, 512, 4096] -> MLP -> [1, 512, d']
+  z_S      [1,  24, 4096] -> MLP -> [1,  24, d']
+  r_(t-1)  [1,  56, 4096] -> MLP -> [1,  56, d']
+
+FiLM:  pooled lang -> F_gamma [1, d'], F_beta [1, d']
+       z_I_hat = gamma * z_I_bar + beta        -> [1, 512, d']
+
+cross-attn (vision = QUERY, memory = KEY/VALUE):
+  Q [1, 512, d']   K [1, 56, d']   V [1, 56, d']
+  Q @ K^T          -> [1, 512, 56]     512 patches x 56 memory slots
+  softmax @ V      -> [1, 512, d']
+
+self-attn among patches -> [1, 512, d']  = O
+FFN                     -> [1, 512, d']
+linear d' -> 2          -> [1, 512, 2]
+softmax                 -> [1, 512, 2]   = rho
+omega = rho @ [1.9, 0.1] -> [1, 512]     each in [0.1, 1.9]
+
+U -> [1, 593, 593]
+  U[i,j] = 1        if j is NOT a visual token
+  U[i,j] = 1        if i == j            (diagonal untouched)
+  U[i,j] = omega_j  if j is a visual token and i != j       <- varies by COLUMN only</pre>
+
+<p><b>Stage 4 — the LLM with the modified attention:</b></p>
+<pre class="calc">input = concat([ z_I , z_S , proprio , r_(t-1) ]) = [1, 593, 4096]
+                  512    24      1        56
+
+every one of the 32 layers:
+  normal:   A = exp(C) / rowsum(exp(C))
+  AVA:      A = exp(C)*U / rowsum(exp(C)*U)        C, A -> [1, 32heads, 593, 593]
+
+output -> [1, 593, 4096]</pre>
+
+<p><b>Stage 5 — two heads read the last 56 positions:</b></p>
+<pre class="calc">h_M = out[:, -56:, :]   -> [1, 56, 4096]
+
+Head A (actions):  MLP  [1, 56, 4096] -> [1, 56, 1] -> reshape [1, 8, 7]
+Head B (memory):   2-layer SiLU MLP   [1, 56, 4096] -> [1, 56, 4096] = r_t</pre>
+
+<p><b>Stage 6 — the loop:</b></p>
+<pre class="calc">t=0:  r_(-1) = 0   ->  A_0 [1,8,7],  r_0     <- identical to plain OFT
+t=1:  r_0          ->  A_1 [1,8,7],  r_1
+t=2:  r_1          ->  A_2 [1,8,7],  r_2</pre>
+
+<p><b>Cost:</b> 0 extra sequence tokens, 0.46 MB carried, one 512×56 cross-attn + one 512×512 self-attn
+at width d′, plus an elementwise multiply in each of 32 attention layers.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Training — the dataloader had to change</h2>
+
+<pre class="calc">OFT:      shuffle buffer -> 64 random frames from 64 random episodes
+AVA-VLA:  shuffle buffer -> 64 random WINDOWS, each 4 consecutive frames
+          run them in order t=0 -> t=1 -> t=2 -> t=3, carrying r forward
+          batch tensor now has a time axis: [64, 4, ...]</pre>
+
+<ul>
+  <li><b>Truncated BPTT</b>, T = 4. Full BPTT called "computationally prohibitive" for a 7B backbone.</li>
+  <li><b>Gradient detached between the 2nd and 3rd timestep</b> → two 2-step gradient segments.</li>
+  <li><b>Loss:</b> per-step action-chunk MAE, plus an L2 gate regularizer
+  <code>L_ω = ‖μ(ω) − c‖</code> (Eq. 13), total <code>L = ΣΣ (L + λ L_ω)</code> (Eq. 14).
+  Without it the model would just set every ω to 1.9 and ignore the mechanism.</li>
+  <li><b>Hyperparameters:</b> λ = 1.0, c = 0.6 (LIBERO) / 0.2 (CALVIN, "smaller region of interest"),
+  γ = [1.9, 0.1], L_c = 8, batch 64, 40k steps, lr 5e-4, 10% warmup + cosine, grad clip 1.0.
+  LoRA rank 32 on LLM / vision encoder / action head / proprio projector; AVA modules fully trained.
+  Initialized from official OpenVLA-OFT checkpoints.</li>
+  <li><b>Inference:</b> fully recurrent, <code>r_(-1) = 0̄</code> at episode start; each pass emits the
+  action chunk and the new recurrent state.</li>
+</ul>
+
+<div class="keypt">You cannot shuffle inside a window, and one "batch" is now 4 sequential forward
+passes. That is the price of leaving the Markov world.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Results</h2>
+
+<p><b>LIBERO</b> (success rate %):</p>
+<table class="res">
+<tr><th>Setting</th><th>Model</th><th>Spatial</th><th>Object</th><th>Goal</th><th>Long</th><th>Avg</th></tr>
+<tr><td>One policy, all 4 suites</td><td>OpenVLA-OFT</td><td>97.7</td><td>98.0</td><td>96.1</td><td>95.3</td><td>96.8</td></tr>
+<tr><td></td><td><b>AVA-VLA</b></td><td>97.4</td><td>99.4</td><td>97.4</td><td>97.6</td><td><b>98.0</b></td></tr>
+<tr><td>One policy per suite</td><td>OpenVLA-OFT</td><td>97.6</td><td>98.4</td><td>97.9</td><td>94.5</td><td>97.1</td></tr>
+<tr><td></td><td>RIPT-VLA</td><td>99.0</td><td>98.6</td><td>98.6</td><td>93.8</td><td>97.5</td></tr>
+<tr><td></td><td><b>AVA-VLA</b></td><td>99.2</td><td>99.6</td><td>98.2</td><td>96.2</td><td><b>98.3</b></td></tr>
+</table>
+
+<p><b>CALVIN ABC→D</b> (SR per chain length, and average length):</p>
+<table class="res">
+<tr><th>Model</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>Avg len</th></tr>
+<tr><td>OpenVLA-OFT</td><td>96.3</td><td>89.1</td><td>82.4</td><td>75.8</td><td>66.5</td><td>4.10</td></tr>
+<tr><td>FLOWER</td><td>99.4</td><td>95.8</td><td>90.7</td><td>84.9</td><td>77.8</td><td>4.53</td></tr>
+<tr><td><b>AVA-VLA</b></td><td>99.6</td><td>97.6</td><td>94.1</td><td>89.9</td><td>84.1</td><td><b>4.65</b></td></tr>
+</table>
+
+<ul>
+  <li><b>Ablation</b> (all-4-suites): baseline 96.8 → state-based init alone 97.5 → AVA module alone
+  97.5 → both 98.0. The two pieces contribute about equally and stack a little.</li>
+  <li><b>Backbone ablation</b> (LIBERO-Long, single-task): OpenVLA-7B 94.5→96.2, LLaMA2-7B 90.0→92.6,
+  Qwen2.5-0.5B 89.4→90.8.</li>
+  <li><b>Token pruning by ω ranking</b> (all-4 avg): 0% → 98.0; 50/60/70% → 97.3 each; 80% → 96.0;
+  90% → 93.9. Degradation is mostly on LIBERO-Long.</li>
+  <li><b>LIBERO+ robustness</b> (avg over 7 perturbations): multi-task 67.9 → 70.1; single-task
+  69.6 → 74.7, with Light 88.7→97.5 and Camera 56.4→69.4.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Questions I had</h2>
+
+<div class="qa">
+<div class="q">It only uses the previous step — so is it really "history"?</div>
+<p>Half right. <b>Formally it chains like an RNN:</b></p>
+<pre class="calc">r_0  <- from a pass that saw x_0
+r_1  <- from a pass that saw x_1 AND r_0
+r_2  <- from a pass that saw x_2 AND r_1     so r_2 contains traces of x_0</pre>
+<p>Same trick as an LSTM hidden state — you read one vector, but it was cooked from all the vectors
+before it. In principle the whole episode is compressed in there.</p>
+<p><b>In practice the memory is short.</b> Training samples windows of T = 4, and the gradient is
+detached between step 2 and step 3, so gradients flow across only <b>2 steps</b>. The model is never
+explicitly rewarded for remembering something 20 steps back. Any long memory is a side effect, not
+something the loss trains. There is also no gate/forget mechanism — just an MLP squeezing hidden states
+each step, so old information washes out fast.</p>
+<p>So: the architecture allows long history, the training teaches about 2 steps of it.</p>
+</div>
+
+<div class="qa">
+<div class="q">So the action slots are not zero in the following steps?</div>
+<p>Correct.</p>
+<pre class="calc">t = 0   slots = 0        <- zeros, only here
+t = 1   slots = r_0
+t = 2   slots = r_1
+t = 3   slots = r_2</pre>
+<p>Three consequences:</p>
+<ol>
+  <li><b>At t=0, AVA-VLA is just plain OFT.</b> Zeros in the slots, and the gate ω is computed by
+  cross-attending to a zero memory, so it carries no signal either. The first decision of every episode
+  is history-free — unavoidable, there is no history yet.</li>
+  <li><b>The slots became a warm start.</b> In OFT the model built the chunk from nothing, using only
+  position to tell slot 3 from slot 40. Now slot 3 arrives already holding "what I was thinking about
+  action dim 3 last step". Consecutive chunks in smooth manipulation are similar, so that is a good
+  initial guess — the model refines instead of building from scratch.</li>
+  <li><b>Reset on episode boundary,</b> or memory from grabbing a cup leaks into a drawer task.</li>
+</ol>
+</div>
+
+<div class="qa">
+<div class="q">But the next step already gets a fresh image — isn't the update already there?</div>
+<p>The new image gives an update, but a <b>different kind</b>.</p>
+<pre class="calc">new image tells you:   WHERE things are now
+new image does NOT:    WHAT you were trying to do
+                       WHAT you already finished
+                       WHERE you were looking</pre>
+<p>The camera reports <b>geometry</b>, not <b>intent</b>.</p>
+<p><b>Concrete case</b> — LIBERO-Long, "put the bowl in the drawer, then close the drawer":</p>
+<pre class="calc">moment A:  arm near the drawer, gripper empty, drawer open  -> correct: reach for the bowl
+moment B:  arm near the drawer, gripper empty, drawer open  -> correct: push the drawer closed</pre>
+<p>The two images are basically identical. A Markov policy must pick one, so it outputs something in
+between or is wrong about half the time. With r_(t-1) the model carries "I already placed the bowl"
+forward: same image, different memory, different action.</p>
+<p><b>The second thing is gaze stability</b> — the "active" part. Without memory the model re-decides
+where to look from scratch every 0.27 s, and its focus jitters. The paper's own failure example is
+exactly this: plain OFT loses the stove switch. With r_(t-1) driving the gate, attention becomes sticky.</p>
+<p><b>Their numbers support the objection, partly.</b> On short fully-visible tasks the observation
+really is enough:</p>
+<pre class="calc">LIBERO-Spatial (short, everything visible):  97.7 -> 97.4     slightly WORSE
+LIBERO-Long    (long, multi-stage):          95.3 -> 97.6     +2.3
+CALVIN chain length 1:                       96.3 -> 99.6     +3.3
+CALVIN chain length 5:                       66.5 -> 84.1     +17.6</pre>
+<p>The benefit only appears once the task is long enough that the image alone becomes ambiguous.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Fair criticisms</h2>
+<div class="warn">
+<ul>
+  <li>The "recurrent state" is one MLP on last-step hidden states. Calling it a belief state is generous.</li>
+  <li>Gradients cross only 2 steps, so the learned memory is short. No forget/gate mechanism.</li>
+  <li><b>No latency or throughput numbers reported.</b> The AVA module runs cross-attention every step
+  and modifies attention in all 32 layers — OFT's whole selling point was speed, so this omission is
+  notable.</li>
+  <li>No seeds or variance on the benchmark tables. A +1.2 gain at 97% saturation could partly be noise.</li>
+</ul>
+</div>
+</section>
+
+</body>
+</html>
