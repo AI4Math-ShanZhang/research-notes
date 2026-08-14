@@ -186,6 +186,39 @@ const BLOG = {
     },
 
     {
+      id: "unified-multimodal",
+      name: "Unified Multimodal",
+      blurb: "One model that both reads and draws — shared visual spaces, decoupled decoders, and how understanding and generation help or fight each other.",
+      notes: [
+        {
+          title:   "UniDDT — Unifying Understanding and Generation with a Decoupled Diffusion Transformer",
+          file:    "posts/uniddt-decoupled-diffusion-transformer.html",
+          date:    "2026-08-14",
+          paper:   "Wang, Li, Chen, Gao, Teng &amp; Wang (Nanjing University · ByteDance Seed · HKU) · arXiv:2606.16255",
+          tags:    ["unified multimodal", "diffusion decoder", "flow matching", "noisy encoder", "REPA", "latent space"],
+          summary: "Three parts: a Noisy ViT that reads half-denoised latents, one LLM, and a separate diffusion decoder. \"Decoupled\" means text decoding stays in the LLM and image decoding moves out — but the encoding is shared, so understanding is treated as the step before generation. The reading log covers the three things I got stuck on: why the ViT must be noise-aware (it sits inside the denoising loop, so a normal SigLIP sees junk — and that same property is what makes one visual space enough and what unlocks the post-training trick); what actually trains it (one loss, cosine distillation from a frozen clean-image SigLIP2 teacher, REPA with the roles flipped, initialized from the teacher except the AdaLN-zero timestep modules — and after warmup that loss disappears and the ViT lives on decoder and text gradients instead); and whether the LLM generates images (no — text only, no next-token loss on any visual position, images enter as continuous features, and in generation the LLM is a conditioner doing one forward pass, not a generator). Plus the five findings: the model reading its own half-finished images as a training signal (GenEval 0.60 → 0.72), latent beating pixel despite pixel being slightly better at understanding, the decoder needing no text tokens at all, heavy time-shift breaking OCR, and duality data beating generation-only training.",
+        },
+      ],
+      papers: [
+        {
+          name:    "UniDDT: Unifying Multimodal Understanding and Generation with Decoupled Diffusion Transformer",
+          link:    "https://arxiv.org/abs/2606.16255",
+          summary: "Nanjing University + ByteDance Seed + HKU. Three components — a Noisy ViT encoder, an LLM backbone (Qwen3 or Qwen3-VL), and a diffusion decoder. The ViT takes a noisy latent plus the timestep (AdaLN-zero, DiT-style) so one encoder serves both tasks; the LLM only swaps token order between them (image-then-text for understanding, text-then-image for generation, where the causal mask lets the prompt flow into the visual tokens); the decoder is DiT-like but injects its condition through attention rather than AdaLN, and conditions on the refined visual features alone with no text tokens. Four stages: distill the Noisy ViT from a frozen SigLIP2 teacher by cosine loss (40K steps), warm up the decoder with ViT and LLM frozen (100K), joint training on duality data where one image-caption pair becomes both a \"generate\" and a \"describe\" sample, then post-training where the model reads its own half-denoised images and is scored on recovering the caption. ~70M public images recaptioned with Qwen2.5-VL-7B, 16× A100. GenEval 0.87, DPG-Bench 86.9, MME 1699.5, SEEDbench 76.5 at 4B LLM + 1B decoder. Ablations: pixel space is slightly better for understanding but much worse for generation with no scaling advantage, so latent wins; generation-only joint training barely helps and actively hurts in pixel space; a large SD3-style time-shift during ViT warmup damages understanding, OCR worst. Stated limit: the from-scratch variant trains on machine captions only, so it captions but cannot follow instructions, and no understanding scores are reported for it.",
+        },
+        {
+          name:    "UniLIP — Adapting CLIP for Unified Multimodal Understanding, Generation and Editing",
+          link:    "https://arxiv.org/abs/2507.23278",
+          summary: "ICLR 2026, PKU + Alibaba. Turns CLIP into a single visual encoder for understanding, generation and editing by adding high-fidelity reconstruction through two-stage self-distillation without losing comprehension; at 1B/3B it beats BAGEL (7B) and UniWorld-V1 (12B) with 0.90 GenEval, 0.63 WISE, 3.94 ImgEdit.",
+        },
+        {
+          name:    "UAE — Unified Multimodal Models as Auto-Encoders",
+          link:    "https://arxiv.org/abs/2509.09666",
+          summary: "PKU + Baidu. Treats understanding and generation as one auto-encoder with text as the intermediate latent — I2T is the encoder, T2I the decoder — post-trained with Unified-GRPO, an RL method rewarded by how well the generated image reconstructs the original.",
+        },
+      ],
+    },
+
+    {
       id: "vla",
       name: "VLA/VWA",
       blurb: "Vision-language-action policies — training, RL, decoding, and masking.",

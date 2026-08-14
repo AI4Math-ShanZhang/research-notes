@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UniDDT — Decoupled Diffusion Transformer for Unified Understanding and Generation — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table.shapes{ border-collapse:collapse; margin:1rem 0; font-size:.92rem; }
+  table.shapes th, table.shapes td{ border:1px solid #d8dee6; padding:.4rem .7rem; text-align:left; }
+  table.shapes th{ background:#f3f6fa; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>UniDDT — Unifying Understanding and Generation with a Decoupled Diffusion Transformer</h1>
+<p class="paper-meta">Paper: Shuai Wang, Liang Li, Yang Chen, Ruopeng Gao, Yao Teng &amp; Limin Wang
+(Nanjing University · ByteDance Seed · HKU) ·
+<a href="https://arxiv.org/abs/2606.16255">arXiv:2606.16255</a> ·
+<a href="https://github.com/MCG-NJU/UniDDT">code</a>.
+Reading log — the pipeline, the findings, and the three questions I actually got stuck on.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 The pipeline</h2>
+
+<p>Three parts only.</p>
+
+<pre class="calc">noisy latent x_t  +  timestep t
+        |
+        v
+  [ Noisy ViT encoder ]  --&gt; semantic features z_t
+        |
+        v
+  [ LLM backbone (Qwen3 / Qwen3-VL) ]
+        |
+   +----+----+
+   |         |
+ text out   refined features z_hat
+ (understand)     |
+                  v
+          [ Diffusion decoder ] --&gt; velocity v_t --&gt; image</pre>
+
+<p><b>1. Noisy ViT encoder.</b> A normal ViT, but it takes a <i>noisy</i> image latent plus the timestep.
+The timestep goes in through AdaLN-zero, same trick as DiT. This is the key piece: one encoder can read
+both a clean image (for understanding) and a half-noisy image (for generation).</p>
+
+<p><b>2. LLM backbone.</b> Same LLM for both jobs, only the token order changes:</p>
+<ul>
+  <li>Understanding: image features first, then text prompt, then it writes the answer word by word.</li>
+  <li>Generation: text prompt first, then the image features. Because attention is causal, the text can
+  flow into the image tokens. The output is a "refined" version of the image features.</li>
+</ul>
+
+<p><b>3. Diffusion decoder.</b> A DiT-like stack that takes the noisy latent and predicts the velocity
+(flow matching). The condition comes in through <b>attention</b>, not AdaLN — this is their change from
+DDT. It only sees the refined <i>visual</i> features, no text tokens at all.</p>
+
+<div class="callout">
+<b>What "decoupled" means here:</b> text decoding stays in the LLM, image decoding moves to a separate
+diffusion decoder. But the <i>encoding</i> is shared. Their framing is that understanding comes first and
+generation sits on top of it.
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Training — four stages</h2>
+
+<ol>
+  <li><b>Warmup A</b> — train the Noisy ViT alone. A frozen SigLIP2 (or Qwen3-ViT) is the teacher; the
+  Noisy ViT copies the teacher's features but from <i>noisy</i> input. 40K steps.</li>
+  <li><b>Warmup B</b> — freeze ViT and LLM, train only the diffusion decoder with flow matching. 100K steps.</li>
+  <li><b>Joint training</b> — unfreeze everything. From one image-caption pair they make <b>two</b> samples:
+  <code>generate: caption → image</code> and <code>describe: image → caption</code>. Loss = diffusion loss
+  on the generate sample + weighted text cross-entropy on the describe sample.</li>
+  <li><b>Post-training</b> — freeze ViT and LLM, train only the decoder, with a new signal (see below).</li>
+</ol>
+
+<p>Plus a short 8K-step finetune on GPT-4o-style data.</p>
+
+<p>Data: ~70M public images, all re-captioned with Qwen2.5-VL-7B. 16× A100.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 The unique findings</h2>
+
+<div class="keypt">
+<b>1. The model can understand its own half-finished images — and that becomes a training signal.</b><br>
+This is the most original part. After joint training, they take a noisy latent, run one decoder step to
+jump to a partly-denoised state, then feed that <i>intermediate</i> state back into the understanding
+branch and ask it to recover the original caption. If the half-drawn image still says "a red cube on a
+blue table", the generation is on track. They train the decoder to maximize that. Generation supervised
+by its own understanding. GenEval went 0.60 → 0.72 from this stage alone.
+</div>
+
+<p><b>2. Latent space wins as the shared visual space — but for a surprising reason.</b> They tested pixels
+vs. VAE latents for both tasks. Pixels were <i>slightly better</i> for understanding. But latents were
+<i>much better</i> for generation, and pixels showed no scaling advantage. So the small understanding loss
+is worth it. Most papers assume you need two separate spaces (semantic space for understanding, VAE for
+generation) — they show one space is enough.</p>
+
+<p><b>3. The diffusion decoder does not need text tokens.</b> Standard DiT feeds the LLM's text hidden
+states into the decoder. Here the decoder sees only the refined image features and still works, even with
+ViT and LLM frozen. Meaning: the LLM already packed the whole prompt into the visual tokens.</p>
+
+<p><b>4. Too much noise during ViT warmup breaks OCR.</b> They tried SD3's time-shift sampling. Pushing
+toward noisier timesteps badly hurt understanding, OCR worst of all. A small time-shift still generalizes
+to high noise. A ViT trained only on clean images fails on noisy input, so the noise-awareness is needed —
+just not too much of it.</p>
+
+<p><b>5. Data duality replaces task-specific datasets.</b> Ablation: unfreeze everything but turn off the
+understanding loss ("generation-only"). The latent model barely improved, and the pixel model got
+<i>worse</i>. Turning the same image-text pair into both directions is what makes joint training pay off.</p>
+
+<h3>Numbers</h3>
+<p>GenEval 0.87, DPG-Bench 86.9, MME 1699.5, SEEDbench 76.5 — with only a 4B LLM + 1B decoder, against
+7–8B baselines like BAGEL (0.88 GenEval, but with prompt rewriting) and Show-o2. Strongest on Position
+(0.85) and Color Attribution (0.80), which is where compositional models usually fail.</p>
+
+<div class="warn">
+<b>Limitation they admit:</b> the native (from-scratch) version trains only on machine captions, so it can
+caption but cannot follow instructions — they don't report understanding scores for it.
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Reading log</h2>
+
+<div class="qa">
+<div class="q">Why does the ViT need to handle noise?</div>
+
+<p>Think about what actually happens when the model draws a picture. It starts from <b>pure noise</b> and
+cleans it up step by step. At every step there is a half-finished, still-noisy image sitting there.</p>
+
+<p>Now look at where the ViT sits:</p>
+
+<pre class="calc">generation, step k:
+  noisy latent x_t  --&gt;  [Noisy ViT]  --&gt;  z_t
+                              |
+                    [LLM: prompt + z_t] --&gt; z_hat
+                              |
+                   [diffusion decoder] --&gt; velocity --&gt; x_{t-1}</pre>
+
+<p>The ViT is <b>inside the denoising loop</b>. It has to look at the messy half-drawn image. A normal
+SigLIP ViT was only ever trained on clean photos — feed it a 70%-noise latent and its features are junk.
+The paper checks this directly: a "clean ViT" baseline falls apart as noise goes up, while the Noisy ViT
+stays steady across all noise levels.</p>
+
+<p>Three reasons this matters, not just one:</p>
+
+<ul>
+  <li><b>It is what makes one encoder enough.</b> If the ViT could only read clean images, generation would
+  need its own separate encoder — and then you are back to two visual spaces (semantic space for
+  understanding, VAE space for generation), which is exactly the problem the paper complains about. One
+  noise-tolerant encoder = one shared space.</li>
+  <li><b>The timestep tells it how bad the noise is.</b> The ViT takes t as well as x_t, injected through
+  AdaLN-zero. At t near 0 (clean) it behaves like a normal SigLIP. At t near 1 (very noisy) it knows to
+  trust the input less. This is their difference from Show-o2, which does not feed the timestep in.</li>
+  <li><b>It unlocks the post-training trick.</b> Because the ViT reads noisy images, you can take a
+  half-denoised image and ask the understanding branch "what is in this picture?" That is the whole
+  self-supervision idea from stage 4. Without noise tolerance, that signal does not exist.</li>
+</ul>
+
+<p>Small side note: understanding at test time just sets t = 1.0 (their convention for clean). During joint
+training they sample t uniformly, so the model sees clean and noisy in both roles.</p>
+</div>
+
+<div class="qa">
+<div class="q">What loss trains the Noisy ViT?</div>
+
+<p><b>During warmup: only one loss — cosine distillation from a frozen teacher.</b></p>
+
+<ul>
+  <li>Teacher: a frozen SigLIP2 (or Qwen3-ViT) looking at the <b>clean</b> image.</li>
+  <li>Student: the Noisy ViT looking at the <b>noisy</b> latent plus the timestep.</li>
+  <li>Take features from layer i of the student, push them through a small learnable MLP, and maximize
+  cosine similarity with the teacher's features.</li>
+</ul>
+
+<pre class="calc">L_enc = 1 - cos( teacher_features(clean image),  MLP(student_layer_i(noisy latent, t)) )</pre>
+
+<p>That is it. No flow-matching loss, no reconstruction loss, no contrastive loss on the ViT at this stage.
+It is REPA's alignment loss, but with the roles flipped: REPA aligns a diffusion model to DINOv2; here
+they align a noisy encoder to a clean vision-language encoder.</p>
+
+<p>Two practical details:</p>
+<ul>
+  <li>The ViT is <b>initialized from the teacher's weights</b>, except the new AdaLN-zero timestep modules.
+  So it starts as a copy of SigLIP2 and only learns to survive noise.</li>
+  <li>Timestep sampling matters a lot. Using SD3's time-shift pushed toward heavy noise <b>hurt
+  understanding badly, OCR worst of all</b>. Small time-shift works and still generalizes to noisy steps.</li>
+</ul>
+
+<div class="callout">
+<b>After warmup, the loss changes.</b> In joint training everything is unfrozen, so the ViT no longer gets
+the distillation loss — it gets gradients from the diffusion loss (through the decoder) and the text
+cross-entropy loss (through the LLM). The distillation is a starting point, not the final objective.
+</div>
+</div>
+
+<div class="qa">
+<div class="q">Does the LLM generate images too, or only text?</div>
+
+<p><b>Text only.</b> The LLM <b>never predicts an image token</b>. There is no next-token loss on any visual
+position. Images enter the LLM as <b>continuous features</b> dropped into the image placeholder slot
+(Qwen-VL style), not as discrete codebook tokens.</p>
+
+<p>So the LLM has two different jobs:</p>
+
+<table class="shapes">
+<tr><th></th><th>Understanding</th><th>Generation</th></tr>
+<tr><td>Input order</td><td>image features, then text</td><td>text, then image features</td></tr>
+<tr><td>What the LLM does</td><td>decodes text <b>autoregressively</b>, token by token</td><td><b>one forward pass</b>, no decoding</td></tr>
+<tr><td>Output</td><td>new text tokens</td><td>refined image features z_hat</td></tr>
+<tr><td>Loss</td><td>cross-entropy on text</td><td>none directly — gradient flows back from the decoder's diffusion loss</td></tr>
+</table>
+
+<p>In generation the LLM is a <b>conditioner, not a generator</b>. It takes the prompt and the current
+visual features and mixes the text meaning into the visual features. That is all. The actual image is
+produced by the diffusion decoder.</p>
+
+<p>This is the opposite of Show-o / Janus / Transfusion, where the LLM does predict image tokens. UniDDT's
+claim is that you do not need that — and the evidence is their odd finding that the decoder works fine
+seeing <b>only</b> z_hat, no text tokens at all, even with the ViT and LLM frozen.</p>
+
+<div class="warn">
+<b>One cost this implies</b> (my reading, not stated in the paper): since x_t changes at every denoising
+step, the ViT <b>and</b> the LLM have to re-run at every step. With 25 sampling steps, that is 25 full LLM
+forward passes per image. Cheap per pass because there is no token-by-token decoding, but not free.
+</div>
+</div>
+
+</section>
+
+</body>
+</html>
