@@ -222,6 +222,30 @@ const BLOG = {
       id: "vla",
       name: "VLA/VWA",
       blurb: "Vision-language-action policies — training, RL, decoding, and masking.",
+      datasets: {
+        blurb: "The benchmark names that keep showing up in these papers, and what each one actually measures. Worth reading before any results table — a number only means something once you know which dial the benchmark moves.",
+        rows: [
+          { name:"Push-T",      kind:"sim · 2D",          what:"A round pusher shoves a T-shaped block into a target T pose.",                          hard:"Precise contact; many valid ways to push, so the action distribution is multimodal.", used:"DINO-world, Patch Policy" },
+          { name:"Wall",        kind:"sim · 2D",          what:"Two rooms separated by a wall with a door; navigate to a goal.",                        hard:"Must plan <em>around</em> the wall — the straight line is blocked.",                  used:"DINO-WM, DINO-world" },
+          { name:"PointMaze",   kind:"sim · 2D",          what:"A force-actuated 2-DoF ball inside a maze (from D4RL).",                                hard:"Long-horizon navigation; rollout drift shows up fast.",                              used:"DINO-world" },
+          { name:"Block Push",  kind:"sim · 3D arm",      what:"An arm pushes two blocks into two targets.",                                            hard:"Which block first? Another multimodal-choice test. Scored out of 2.0.",              used:"IBC, Diffusion Policy, Patch Policy" },
+          { name:"Cube",        kind:"sim · 3D arm",      what:"Usually &ldquo;pick up the cube&rdquo; (robosuite <em>Lift</em> / ManiSkill <em>PickCube</em>).",          hard:"The hello-world of grasping. Scored out of 2.0 in Patch Policy.",                    used:"Patch Policy, many BC baselines" },
+          { name:"LIBERO",      kind:"sim · 3D Franka",   what:"130 language-conditioned tabletop tasks in four suites: Spatial, Object, Goal, Long.",  hard:"Each suite isolates one kind of generalization, so the split tells you <em>which</em> one your model lacks.", used:"OpenVLA-OFT, AVA-VLA, WorldDiT, WCM" },
+          { name:"DROID",       kind:"<b>real</b>",       what:"76k real trajectories, 350 hours, 564 scenes, 13 labs, Franka Panda + gripper.",        hard:"Not a benchmark you score on — it is messy, diverse <em>training data</em>.",        used:"V-JEPA 2-AC (62 h), π-series, OpenVLA" },
+          { name:"BEHAVIOR-1K", kind:"sim · whole house", what:"1000 everyday household activities, mobile robot, 50 scenes, OmniGibson.",              hard:"Very long horizon, whole-body mobile manipulation, object states (wet / dirty / cooked).", used:"Long-horizon embodied work" },
+        ],
+        groups: [
+          { name:"Group 1 — toy 2D worlds (Push-T, Wall, PointMaze)",
+            text:"Tiny action space, tiny state, fully observable, fast to run. They answer exactly one question: <em>does my world model roll out accurately enough to plan?</em> If planning fails here, nothing downstream matters. This is why DINO-world picked them — they test the predictor, not the robot hardware." },
+          { name:"Group 2 — simulated tabletop manipulation (Block Push, Cube, LIBERO)",
+            text:"Now there is a 7-DoF arm, a gripper, 3D contact, and often a language instruction. LIBERO is the popular one because it splits difficulty on purpose — <b>Spatial</b> (same objects, new places), <b>Object</b> (same layout, new objects), <b>Goal</b> (same scene, new goal), <b>Long</b> (10 multi-step tasks). Block Push and Cube are older single tasks." },
+          { name:"Group 3 — real robot data (DROID)",
+            text:"A different kind of thing entirely: 350 hours of real Franka video from 13 labs, not a leaderboard. V-JEPA 2 uses 62 hours of it — unlabeled for stage 1, action-conditioned for stage 2 — then deploys zero-shot on arms in two labs that do <em>not</em> appear in DROID. The claim is real transfer, not a sim score." },
+          { name:"Group 4 — whole-house long horizon (BEHAVIOR-1K)",
+            text:"The extreme end. Not &ldquo;pick up the cube&rdquo; but &ldquo;clean the kitchen&rdquo; — mobile base plus arms, hundreds of steps, physical states like wet, dirty, cooked. Almost nothing solves it end-to-end today; it exists to show how far away we still are." },
+        ],
+        takeaway: "Push-T / Wall / PointMaze are tiny 2D worlds used to check whether a world model can plan at all; Block Push, Cube and LIBERO are simulated arm tasks that test 3D manipulation and generalization; DROID is real robot training data, not a score; and BEHAVIOR-1K is the very-long-horizon household extreme.",
+      },
       repos: [
         {
           name:    "robocasa/robocasa",

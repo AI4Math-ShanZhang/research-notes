@@ -56,6 +56,28 @@
     </div>`;
   }
 
+  // ---- render the benchmark/dataset cheat-sheet (shown above the notes) ----
+  function datasetsHTML(d){
+    if(!d) return '';
+    const rows = (d.rows||[]).map(r => `<tr>
+        <td><b>${r.name}</b></td><td class="kind">${r.kind||''}</td>
+        <td>${r.what||''}</td><td>${r.hard||''}</td>
+        <td class="used">${r.used||''}</td>
+      </tr>`).join('');
+    const groups = (d.groups||[]).map(g =>
+      `<div class="ds-group"><b>${g.name}</b><div>${g.text||''}</div></div>`).join('');
+    const take = d.takeaway ? `<p class="ds-take">${d.takeaway}</p>` : '';
+    return `<details class="datasets" open>
+      <summary>Benchmarks &amp; datasets — what each one measures</summary>
+      ${d.blurb ? `<p class="ds-blurb">${d.blurb}</p>` : ''}
+      <table>
+        <thead><tr><th>Name</th><th>Sim or real</th><th>What it is</th><th>Hard part</th><th>Seen in</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${groups}${take}
+    </details>`;
+  }
+
   // ---- render all categories ----
   function render(active){
     const wrap = document.getElementById('categories');
@@ -64,6 +86,7 @@
       .map(c => `<section class="category" data-cat="${c.id}">
           <h2>${c.name} <span class="count">${c.notes.length}</span></h2>
           <p class="blurb">${c.blurb||''}</p>
+          ${datasetsHTML(c.datasets)}
           ${reposHTML(c.repos)}
           ${c.notes.length ? c.notes.map(noteHTML).join('')
                            : '<p class="blurb"><em>Notes coming soon.</em></p>'}

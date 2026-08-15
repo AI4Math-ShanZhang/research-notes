@@ -4,6 +4,7 @@
   --line:#e3e7ec; --bg:#fff; --chip:#eef1f6;
   --summary-bg:#eef4fb; --summary-line:#4A8ED4;
   --notes-bg:#fff8ee;   --notes-line:#E8900D;
+  --ds-bg:#eef9f5;      --ds-line:#2EAF8E; --ds-ink:#1f7d64;
 }
 *{box-sizing:border-box}
 body{ font-family:Georgia,"Times New Roman",serif; line-height:1.7; color:var(--ink);
@@ -47,6 +48,31 @@ body{ font-family:Georgia,"Times New Roman",serif; line-height:1.7; color:var(--
 .repo .gh{ font-family:-apple-system,system-ui,sans-serif; font-size:.68rem; color:#fff;
   background:#57606a; border-radius:9px; padding:1px 7px; margin-left:.4rem; }
 .repo .summary{ margin:.1rem 0 0; color:#33404d; font-size:.92rem; }
+
+/* benchmark / dataset cheat-sheet (sits at the top of a category) */
+.datasets{ background:var(--ds-bg); border:1px solid var(--line); border-left:5px solid var(--ds-line);
+  border-radius:0 8px 8px 0; padding:.7rem 1rem .9rem; margin:0 0 1.4rem; }
+.datasets > summary{ font-family:-apple-system,system-ui,sans-serif; font-size:.8rem; letter-spacing:.04em;
+  text-transform:uppercase; color:var(--ds-ink); cursor:pointer; list-style:none; font-weight:bold; }
+.datasets > summary::-webkit-details-marker{ display:none; }
+.datasets > summary::before{ content:"▾ "; }
+.datasets:not([open]) > summary::before{ content:"▸ "; }
+.ds-blurb{ color:#33404d; font-size:.92rem; margin:.5rem 0 .2rem; }
+.datasets table{ font-size:.83rem; margin:.7rem 0 .9rem; }
+.datasets th{ background:var(--ds-line); font-size:.78rem; white-space:nowrap; }
+.datasets td{ padding:.4rem .55rem; }
+.datasets td.kind, .datasets td.used{ font-family:-apple-system,system-ui,sans-serif;
+  font-size:.78rem; color:var(--muted); }
+.ds-group{ font-size:.92rem; margin:.7rem 0 0; color:#33404d; }
+.ds-group > b{ color:var(--ds-ink); }
+.ds-take{ font-size:.92rem; color:var(--ds-ink); background:#fff; border:1px solid var(--ds-line);
+  border-radius:6px; padding:.55rem .8rem; margin:1rem 0 0; }
+@media (max-width:640px){
+  .datasets table, .datasets thead, .datasets tbody, .datasets tr, .datasets td{ display:block; width:100%; }
+  .datasets thead{ display:none; }
+  .datasets tr{ border:1px solid var(--line); border-radius:6px; background:#fff; margin:0 0 .5rem; padding:.3rem; }
+  .datasets td{ border:0; }
+}
 
 /* note list item */
 .note{ padding:.8rem 0 1rem; border-bottom:1px solid var(--line); }
