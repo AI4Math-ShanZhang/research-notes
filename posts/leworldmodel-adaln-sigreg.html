@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeWorldModel — AdaLN and SIGReg, in shapes — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>LeWorldModel — AdaLN and SIGReg, in shapes</h1>
+<p class="paper-meta">Paper: <em>LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels</em> —
+Lucas Maes*, Quentin Le Lidec*, Damien Scieur, Yann LeCun &amp; Randall Balestriero
+(Mila / Université de Montréal, NYU, Samsung SAIL, Brown), March 2026,
+<a href="https://arxiv.org/abs/2603.19312">arXiv:2603.19312</a>.
+This note is not a full analysis — it is the two mechanisms I had to work out tensor by tensor:
+<b>how the action gets into the predictor (AdaLN)</b> and <b>how the anti-collapse term is actually
+computed (SIGReg)</b>, plus one thing that turned out to be unrelated.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p><b>The claim.</b> LeWM is the first JEPA that trains stably <b>end-to-end from raw pixels</b> using
+only <b>two loss terms</b>: a next-embedding prediction loss and a regularizer forcing the latents to
+be Gaussian. No EMA teacher. No stop-gradient. No pretrained encoder. No auxiliary supervision.
+That drops the tunable loss hyperparameters from six to one versus the existing end-to-end alternative.
+15M parameters, one GPU, a few hours, and it plans up to 48× faster than foundation-model world models.</p>
+
+<div class="keypt">
+<b>Why this is surprising.</b> Both sides of the prediction loss are live — the target embedding gets
+gradient too. Normally that collapses within minutes: map every image to the same vector and the loss
+is zero. SIGReg is the <em>only</em> thing preventing it. Everything else in the paper follows from
+that one substitution.
+</div>
+
+<h3>The model in shapes</h3>
+<p>Defaults: batch B = 128, sub-trajectory T = 4 frames, frame-skip 5 (each "action" is a block of
+5 environment actions grouped together), 224×224 frames.</p>
+
+<pre class="calc">obs      (128, 4, 3, 224, 224)   raw pixels
+actions  (128, 4, A)             A = one block of 5 env actions
+
+ENCODER  ViT-Tiny, patch 14, 12 layers, 3 heads, width 192, ~5M params
+  224/14 = 16  ->  16x16 = 256 patches + 1 CLS = 257 tokens
+  take CLS only              -> (128, 4, 192)
+  projector: 1-layer MLP + BatchNorm  -> z  (128, 4, d),  d = 192
+
+PREDICTOR  6 layers, 16 heads, dropout 0.1, ~10M params, ViT-S style
+  causal mask, history window 3 (PushT, OGBench-Cube) or 1 (TwoRoom)
+  action enters via zero-initialized AdaLN at every layer
+  -> projector -> ẑ  (128, 4, d)
+
+LOSS  MSE( emb[:, 1:] , next_emb[:, :-1] )  +  0.1 * SIGReg(Z)</pre>
+
+<div class="mermaid">
+flowchart LR
+  O["frames o_1..o_4<br/>224x224"] --> E["ViT-Tiny encoder<br/>CLS -> MLP+BN"]
+  E --> Z["z (128,4,192)"]
+  Z --> P["Predictor<br/>6 layers, causal"]
+  A["actions a_1..a_4"] --> ADA["AdaLN<br/>zero-init"]
+  ADA --> P
+  P --> ZH["ẑ (128,4,192)"]
+  ZH --> L1["MSE prediction loss"]
+  Z --> L1
+  Z --> L2["SIGReg, weight 0.1"]
+</div>
+
+<h3>Why the extra projector after the CLS token</h3>
+<p>The paper says it is <em>necessary</em>, and the reason is geometric. The last ViT layer applies
+LayerNorm, which pins every embedding to zero mean and unit variance across channels — so every vector
+sits on a <b>fixed-radius shell</b>. A real Gaussian cloud has vectors of many different lengths. Under
+LayerNorm, SIGReg's target is literally unreachable and its gradient just fights the norm. The
+MLP + BatchNorm projector frees the geometry so SIGReg can shape the distribution.</p>
+
+<h3>Planning (separate stage, frozen weights)</h3>
+<p>Cross-Entropy Method: sample 300 candidate action sequences, roll each through the frozen predictor,
+score by <code>||ẑ_H − z_goal||²</code>, keep the top 30, refit the sampling distribution, repeat up to
+30 iterations on PushT (10 elsewhere). Horizon 5 steps = 25 environment timesteps at frame-skip 5,
+receding-horizon MPC.</p>
+
+<h3>Hyperparameters, and what the ablations found</h3>
+<table>
+  <tr><th>Knob</th><th>Default</th><th>Sensitivity</th></tr>
+  <tr><td>M — random projections in SIGReg</td><td>1024</td><td>Almost none (256 / 512 / 1024 tested)</td></tr>
+  <tr><td>K — integration knots</td><td>~17</td><td>Almost none (8 / 12 / 17 / 32 tested)</td></tr>
+  <tr><td>d — embedding dimension</td><td>192</td><td>Drops below ~184, saturates above (96 / 192 / 384 tested)</td></tr>
+  <tr><td><b>λ — SIGReg loss weight</b></td><td><b>0.1</b></td><td><b>The only real knob</b></td></tr>
+</table>
+<p>Because there is one knob, it can be tuned by bisection in O(log n). The paper contrasts this with
+PLDM's six loss coefficients needing an O(n⁶) grid search.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>Part 1 — AdaLN: how the action gets in</h3>
+
+<p>Plain LayerNorm scales and shifts with <b>fixed</b> learned vectors:</p>
+<pre class="calc">h = (x - mean) / std        per token, across the 384 channels
+h = h * gamma + beta        gamma, beta learned once, same for every input</pre>
+
+<p>AdaLN keeps the same equation but <b>predicts gamma and beta from the action</b>. Different action
+→ different normalization → different prediction. LeWM cites Peebles &amp; Xie (DiT), so this is the
+adaLN-Zero recipe:</p>
+
+<pre class="calc">a_t   (128, 4, A)          the action block at each frame
+  |   small MLP
+  v
+c     (128, 4, 384)        conditioning vector, ONE PER FRAME
+  |   Linear, weights AND bias initialized to ZERO
+  v
+      (128, 4, 6*384 = 2304)
+  |   chunk into 6 pieces of 384
+  v
+scale1, shift1, gate1, scale2, shift2, gate2     each (128, 4, 384)</pre>
+
+<p>Then inside each of the 6 predictor blocks:</p>
+<pre class="calc">h = LayerNorm(x)                      # elementwise_affine = FALSE
+h = h * (1 + scale1) + shift1         # <-- action enters
+x = x + gate1 * CausalAttention(h)    # <-- action gates the branch
+
+h = LayerNorm(x)
+h = h * (1 + scale2) + shift2
+x = x + gate2 * MLP(h)</pre>
+
+<h4>Where the middle dimension comes from</h4>
+<p>It is the <b>predictor's sequence length</b>: one token per frame. Two different numbers in the
+paper are easy to confuse:</p>
+<table>
+  <tr><th>Number</th><th>What it is</th></tr>
+  <tr><td>Sub-trajectory T = 4</td><td>Frames + action blocks in the batch. This is the sequence length, so shapes read <code>(128, 4, 384)</code>.</td></tr>
+  <tr><td>History length = 3</td><td>How far back the causal mask lets each token look. Not a shape.</td></tr>
+</table>
+
+<pre class="calc">predictor sequence (4 tokens, one per frame):
+
+  token:   z1      z2      z3      z4        each 384 wide
+  action:  a1      a2      a3      a4        every frame has its OWN action
+           |       |       |       |
+       modulate modulate modulate modulate   token i gets action i's scale/shift/gate
+           |       |       |       |
+  output:  ẑ2      ẑ3      ẑ4      (dropped)
+  target:  z2      z3      z4                3 pairs -> the MSE
+
+causal mask, history window 3:
+        z1  z2  z3  z4
+  z1     ✓   ·   ·   ·
+  z2     ✓   ✓   ·   ·
+  z3     ✓   ✓   ✓   ·
+  z4     ·   ✓   ✓   ✓      <- z1 falls out of the 3-frame window</pre>
+
+<div class="callout">
+<b>The modulation is per token, not broadcast.</b> This is where LeWM differs from DiT. In DiT the
+condition is one diffusion step + one class label for the <em>whole image</em>, so <code>c</code> is
+<code>(B, 384)</code> and gets broadcast across all 256 patch tokens. Here frame 2 gets action 2 and
+frame 3 gets action 3 — there is nothing to broadcast.
+</div>
+
+<h4>Why zero-init, and why <code>1 + scale</code></h4>
+<p>At step 0 the linear outputs all zeros, so:</p>
+<pre class="calc">scale = 0  ->  h * (1 + 0) = h          no modulation
+shift = 0  ->  + 0                      no shift
+gate  = 0  ->  x = x + 0 * Attn(h) = x  the block is the IDENTITY</pre>
+<p>The predictor starts as a pass-through. It first learns "how does this world move on average," then
+gradually learns "how does <em>my action</em> change it." That is what the paper means by action
+conditioning impacting training progressively.</p>
+<p>The <code>1 +</code> is the part that is easy to miss. Written as <code>h * scale</code>, zero-init
+would multiply the features by zero and <b>destroy the signal</b>. The <code>1 +</code> makes zero mean
+"do nothing" instead of "erase everything."</p>
+
+<h4>Small worked example (4 channels)</h4>
+<pre class="calc">x            = [ 2.0,  0.0, -1.0,  3.0 ]
+mean = 1.0, std = 1.581
+LayerNorm(x) = [ 0.632, -0.632, -1.265, 1.265 ]
+
+action "push right" -> MLP gives
+  scale = [0.5, -0.3, 0.0, 0.2]
+  shift = [0.1,  0.0, -0.2, 0.0]
+
+h = norm * (1 + scale) + shift
+  = [0.632*1.5 + 0.1,  -0.632*0.7,  -1.265*1.0 - 0.2,  1.265*1.2]
+  = [ 1.048, -0.442, -1.465,  1.518 ]</pre>
+<p>Action "push left" produces different scale/shift → different <code>h</code> → different attention
+→ different predicted next latent. <b>Same image, different future.</b> That is the entire conditioning
+mechanism.</p>
+
+<!-- ---------- Q&A ---------- -->
+<div class="qa">
+<div class="q">Q: Does that LayerNorm still have its own gamma and beta?</div>
+<p><b>No</b> — in DiT's implementation it is literally <code>nn.LayerNorm(dim, elementwise_affine=False)</code>.
+Because <b>the scale and shift ARE the gamma and beta.</b> They did not disappear; they got promoted from
+fixed parameters to network outputs. That is exactly what "Adaptive" in Adaptive LayerNorm means.</p>
+<pre class="calc">plain LayerNorm:  h = normalize(x) * gamma      + beta
+                                     ^^^^^        ^^^^
+                                     learned once, same for every input
+
+AdaLN:            h = normalize(x) * (1 + scale) + shift
+                                     ^^^^^^^^^^^   ^^^^^
+                                     predicted from the action, different every step</pre>
+<p>Keeping both would give <code>h = (normalize(x)*gamma + beta) * (1 + scale) + shift</code> — two
+stacked per-channel scalings, redundant, and it breaks the clean zero-init story.</p>
+</div>
+
+<div class="qa">
+<div class="q">Q: Why two scale/shift pairs instead of one?</div>
+<p>Because a pre-LN transformer block <b>already has two LayerNorms</b>. AdaLN did not add a second one;
+it made both existing ones adaptive.</p>
+<pre class="calc">plain pre-LN block:
+h = LayerNorm_1(x)          <- LN number 1
+x = x + Attention(h)
+h = LayerNorm_2(x)          <- LN number 2
+x = x + MLP(h)</pre>
+<p>So "two" is not a design choice — using <em>one</em> would mean stripping the affine off one of the
+two norms. And they should differ anyway, for three reasons:</p>
+<ol>
+  <li><b>The sub-layers do different jobs.</b> Attention decides <em>where to look</em> (which past frame
+  matters); the MLP decides <em>what this state becomes</em>. "Push hard right" wants attention to sharpen
+  onto the newest frame (fast motion makes old frames stale) <em>and</em> the MLP to bias the position
+  channels rightward. One shared knob would force those two to fight.</li>
+  <li><b>The second norm sees a different tensor.</b> <code>x = x + gate1 * Attn(h)</code> runs in between,
+  so the per-channel statistics have changed. A correction tuned pre-attention is wrong post-attention.</li>
+  <li><b>Sharing saves almost nothing.</b> The linear would emit <code>3*384</code> instead of
+  <code>6*384</code>, and you lose the ability to steer the two paths separately.</li>
+</ol>
+<p>That said, 6 chunks doubles the modulation linear from ~442k to ~884k parameters per block, which is
+not free at this model size. The paper only says "AdaLN applied at each layer, parameters initialized to
+zero" — it does not spell out whether the modulation MLP is per-layer or shared, so the exact parameter
+split would need the code.</p>
+</div>
+
+<div class="qa">
+<div class="q">Q: Why AdaLN rather than just concatenating the action as an extra token?</div>
+<ol>
+  <li><b>Attention can ignore an extra token</b> by driving its weight to ~0. Modulation multiplies every
+  channel of every token — it is unavoidable.</li>
+  <li><b>No sequence cost.</b> One action token per frame would double a 4-token sequence to 8.</li>
+  <li><b>The action is a property of the transition, not an object in the scene.</b> You do not want to
+  look at it; you want it to bend the computation.</li>
+  <li><b>Zero-init gives a safe start</b>, which you cannot do with a concatenated token — it is there
+  from step 1.</li>
+</ol>
+</div>
+
+<h3>Part 2 — SIGReg: the anti-collapse term, step by step</h3>
+
+<p><b>The goal:</b> make the latents look like an <b>isotropic Gaussian</b> — round, spread out, no dead
+direction. <b>The problem:</b> testing "is this 192-dimensional cloud Gaussian?" is hard, because
+classical normality tests are built for <em>one</em> dimension.</p>
+
+<div class="keypt">
+<b>Cramér–Wold theorem.</b> Two distributions in d dimensions are identical <em>if and only if</em> all
+their 1-D projections are identical. So one hard d-dim test becomes many easy 1-D tests — and you cannot
+cheat by being Gaussian along only a few directions, because "all directions" closes that door.
+</div>
+
+<h4>The shapes</h4>
+<p><code>Z</code> has shape <code>(N, B, d)</code> — the pseudocode gets it with
+<code>emb.transpose(0, 1)</code>, turning <code>(B, T, D)</code> into <code>(T, B, D)</code>.</p>
+
+<pre class="calc">Z = (3, 128, 192)
+
+STEP 1 — sample M = 1024 random directions
+  G ~ Normal(0, 1)          (192, 1024)
+  U = G / column norms      (192, 1024)   each column is a unit vector on the sphere
+
+STEP 2 — project
+  h = Z @ U
+  (3, 128, 192) @ (192, 1024)  ->  h = (3, 128, 1024)
+
+  Read this carefully: for EACH timestep n and EACH direction m you now hold
+  128 plain real numbers — the batch squashed onto one line. The 192 dims are gone.
+
+STEP 3 — Epps-Pulley on each 1-D sample, at K = 17 knots t_1..t_K
+  for each knot t:
+    ECF real = mean over b of cos(t * h[n, b, m])
+    ECF imag = mean over b of sin(t * h[n, b, m])
+    target   = exp(-t^2 / 2)        (a Gaussian's characteristic function; imag part 0)
+    error(t) = (ECF real - target)^2 + (ECF imag)^2
+
+  (3, 128, 1024) --evaluate at 17 knots, average over b--> (3, 1024, 17)
+
+STEP 4 — integrate over t
+  weighted sum over the 17 knots, weight w(t) = exp(-t^2 / (2*lambda^2))
+  (3, 1024, 17)  ->  (3, 1024)
+
+STEP 5 — average
+  mean over M=1024  ->  (3,)
+  mean over N=3     ->  a single scalar        "step-wise SIGReg"
+
+FINAL  loss = MSE_prediction + 0.1 * that scalar</pre>
+
+<h4>What t means, and how it differs from K</h4>
+<p><code>t</code> is a <b>value</b>; <code>K</code> is <b>how many values of t you use</b>.</p>
+<p>The Epps–Pulley test compares two <b>characteristic functions</b> — the Fourier transform of a
+distribution, <code>phi(t) = average of exp(i*t*h)</code>. So <code>t</code> is a <b>frequency</b>:
+small <code>t</code> probes the coarse shape (where the mass is, how wide), large <code>t</code> probes
+fine detail (spikes, gaps, hidden discreteness). The test wants agreement at <em>every</em> <code>t</code>,
+which is an integral from −∞ to ∞. You cannot evaluate infinitely many, so you pick K specific values —
+the <b>knots</b> — and do a weighted sum instead. Since the weight <code>w(t)</code> is itself a Gaussian
+bump, Gauss–Hermite quadrature places those 17 points optimally, which is why K barely matters.</p>
+
+<div class="warn">
+<b>Notation trap:</b> the <code>lambda</code> inside <code>w(t)</code> is <b>not</b> the
+<code>lambda = 0.1</code> loss weight. Same letter, different thing.
+</div>
+
+<h4>Worked example — one direction, 4 samples</h4>
+<pre class="calc">h = [0.5, -0.3, 1.2, -0.8]
+
+At knot t = 1.0:
+  cos(1.0 * h) = [0.8776, 0.9553, 0.3624, 0.6967]  -> mean = 0.7230   (real)
+  sin(1.0 * h) = [0.4794, -0.2955, 0.9320, -0.7174] -> mean = 0.0996  (imag)
+  target: exp(-1.0^2 / 2) = 0.6065,  imag 0
+
+  error = (0.7230 - 0.6065)^2 + (0.0996)^2
+        = 0.01357 + 0.00992 = 0.0235
+
+At knot t = 0:
+  cos(0 * h) = [1,1,1,1] -> mean = 1
+  sin(0 * h) = [0,0,0,0] -> mean = 0
+  target: exp(0) = 1
+  error = 0</pre>
+<p>The error at <code>t = 0</code> is <b>always exactly zero</b>, for any data at all. That knot carries
+no information — which is why the knots must spread away from zero, and why Gauss–Hermite (symmetric
+around zero, at useful distances) is the right scheme.</p>
+
+<h4>M vs K — the two counts that are easy to mix up</h4>
+<table>
+  <tr><th></th><th>M = 1024</th><th>K = 17</th></tr>
+  <tr><td>What it counts</td><td>random <b>directions</b> in 192-dim space</td><td><b>frequencies</b> at which you compare</td></tr>
+  <tr><td>Lives in</td><td>geometry — which way you look at the cloud</td><td>signal processing — how finely you compare</td></tr>
+  <tr><td>Job</td><td>reduce 192-dim to many 1-D samples</td><td>evaluate the normality test on one 1-D sample</td></tr>
+  <tr><td>Justified by</td><td>Cramér–Wold theorem</td><td>numerical quadrature</td></tr>
+  <tr><td>Axis in the shape chain</td><td>the 1024</td><td>the 17</td></tr>
+</table>
+
+<h4>Why this actually stops collapse</h4>
+<p>Suppose the encoder collapses: every <code>z</code> becomes the same vector <code>c</code>. Then
+<code>h</code> is a constant — 128 identical numbers. Its characteristic function is
+<code>exp(i*t*const)</code>, which has <b>magnitude 1 at every t</b> and never decays. The Gaussian
+target <code>exp(-t²/2)</code> decays fast. So the gap is huge at every knot and the penalty explodes.
+Collapse is the single worst thing you can do under this loss — which is why LeWM survives with no EMA
+and no stop-gradient.</p>
+
+<h4>Why M = 1024 barely matters, and why the cost is low</h4>
+<p>You are Monte-Carlo estimating an average over the whole sphere; 1024 samples already estimate that
+average well, and directions are resampled every training step, so over 20k steps the model effectively
+sees far more than 1024.</p>
+<p>Cost: the biggest tensor is <code>B × M × K = 128 × 1024 × 17 ≈ 2.2M</code> numbers per timestep, and
+everything is matmul, cos, sin, sum. Compare with covariance-based anti-collapse (VICReg-style), which
+builds a <code>d × d</code> matrix and often needs eigenvalues or an inverse — O(d²) memory, O(d³)
+compute, and unreliable when d is large relative to B. SIGReg never forms a covariance matrix. That is
+the "scalable" claim.</p>
+
+<h3>Part 3 — CEM has nothing to do with SIGReg</h3>
+
+<p>They never run at the same time.</p>
+<pre class="calc">TRAINING                          PLANNING (test time)
+loss = MSE + 0.1 * SIGReg         weights frozen, no loss, no gradient
+backprop -> update weights        CEM searches an action sequence
+CEM does not exist here           SIGReg does not exist here</pre>
+
+<table>
+  <tr><th></th><th>SIGReg</th><th>CEM</th></tr>
+  <tr><td>When</td><td>training</td><td>inference</td></tr>
+  <tr><td>What it changes</td><td>network <b>weights</b></td><td>an <b>action sequence</b></td></tr>
+  <tr><td>Uses gradients</td><td>yes</td><td>no — pure sampling</td></tr>
+  <tr><td>Purpose</td><td>stop representation collapse</td><td>find actions that reach the goal</td></tr>
+  <tr><td>Remove it and…</td><td>latents collapse, model is dead</td><td>swap in another planner (MPPI, gradient descent), model is fine</td></tr>
+</table>
+
+<p>Two traps make them <em>look</em> related:</p>
+<div class="warn">
+<ul>
+  <li><b>The name.</b> "Cross-Entropy Method" has nothing to do with cross-entropy loss in
+  classification. It got the name from its original derivation (minimizing KL between the sampling
+  distribution and the ideal one). In practice it is just <em>sample → keep the elite → refit → repeat</em>.</li>
+  <li><b>Both mention Gaussians</b>, but in opposite directions and in different spaces.
+  SIGReg pushes <em>data</em> (embeddings in R¹⁹²) toward a Gaussian. CEM fits a Gaussian <em>to</em>
+  the elite action sequences (in R<sup>5×A</sup>). SIGReg shapes the data; CEM fits a proposal to data
+  it drew itself.</li>
+</ul>
+</div>
+
+<div class="callout">
+<b>The one thread that does connect them, indirectly:</b> CEM's cost is plain L2 distance in latent
+space. That cost only means something if the latent space is well spread and round. A collapsed latent
+would score every candidate the same and CEM would search noise. So SIGReg makes CEM's objective
+usable — through the quality of the representation, not through any shared math.
+</div>
+
+</section>
+
+</body>
+</html>
