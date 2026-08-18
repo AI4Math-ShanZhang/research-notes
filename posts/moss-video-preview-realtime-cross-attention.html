@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOSS-Video-Preview — Real-Time Video Understanding via Cross-Attention — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body.note-page{ max-width:980px; }
+  :root{
+    --card:#ffffff; --line:#e2e7f0; --acc:#3D5A9B; --acc-soft:#eef2fb;
+    --old-soft:#fdf3e2; --new-soft:#e8f7f2; --warn-soft:#fdeef1;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  .pill{ display:inline-block; background:var(--acc-soft); color:var(--acc); border-radius:20px;
+         padding:3px 12px; font-size:.8rem; font-weight:600; margin:0 .3rem .35rem 0;
+         font-family:-apple-system,system-ui,sans-serif; }
+  h2 .num{ color:var(--acc); font-variant-numeric:tabular-nums; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+         padding:.8rem 1.2rem; margin:1.1rem 0; }
+  .keypoint{ background:var(--acc-soft); border-left:4px solid var(--acc);
+             border-radius:0 8px 8px 0; padding:.7rem 1.1rem; margin:1.1rem 0; }
+  .keypoint strong{ color:var(--acc); }
+  .warnbox{ background:var(--warn-soft); border-left:4px solid #F06B7F;
+            border-radius:0 8px 8px 0; padding:.7rem 1.1rem; margin:1.1rem 0; }
+  .newbox{ background:var(--new-soft); border-left:4px solid #2EAF8E;
+           border-radius:0 8px 8px 0; padding:.7rem 1.1rem; margin:1.1rem 0; }
+  td.win{ color:#1f8f6f; font-weight:700; }
+  td.lose{ color:#c9526a; font-weight:700; }
+  .mermaid{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+            padding:1.2rem; margin:1.3rem 0; text-align:center; }
+  .two{ display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin:1.2rem 0; }
+  @media(max-width:800px){ .two{ grid-template-columns:1fr; } }
+  .panel{ border-radius:10px; padding:.8rem 1.1rem; border:1px solid var(--line); }
+  .panel.old{ background:var(--old-soft); border-color:#f2d6a8; }
+  .panel.new{ background:var(--new-soft); border-color:#b6e3d5; }
+  .panel h4{ margin-top:.2rem; }
+  .panel.old h4{ color:#a8650a; }
+  .panel.new h4{ color:#1f8f6f; }
+  .tl{ font-family:var(--mono); font-size:.78rem; line-height:1.7; background:#f7f9fc;
+       border:1px solid var(--line); border-radius:8px; padding:.9rem 1rem;
+       overflow-x:auto; white-space:pre; }
+  pre{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.9rem 1.1rem;
+       overflow-x:auto; font-family:var(--mono); font-size:.82rem; line-height:1.55; }
+  pre code{ background:none; color:inherit; padding:0; }
+  .tag2{ display:inline-block; font-size:.65rem; font-weight:700; letter-spacing:.4px;
+         padding:2px 8px; border-radius:5px; text-transform:uppercase; margin-right:.5rem;
+         font-family:-apple-system,system-ui,sans-serif; }
+  .tag2.base{ background:#fdf3e2; color:#a8650a; border:1px solid #f2d6a8; }
+  .tag2.moss{ background:#e8f7f2; color:#1f8f6f; border:1px solid #b6e3d5; }
+  .toc{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:.9rem 1.4rem; }
+  .toc ol{ columns:2; column-gap:2rem; margin:.4rem 0 0; }
+  @media(max-width:700px){ .toc ol{ columns:1; } }
+  .fnote{ color:#6b7688; font-size:.9rem; font-style:italic; }
+  .stack{ font-family:var(--mono); font-size:.72rem; line-height:1.6; }
+  .row{ display:flex; align-items:stretch; margin:3px 0; flex-wrap:wrap; }
+  .blk{ padding:5px 9px; border-radius:5px; font-family:var(--mono);
+        font-size:.7rem; font-weight:600; white-space:nowrap; }
+  .blk.v{ background:#dce8fa; color:#20406e; border:1px solid #b7cff0; }
+  .blk.t{ background:#e9ebf1; color:#3a465e; border:1px solid #cdd3e0; }
+  .blk.n{ background:#ffe0a3; color:#8a5200; border:1px solid #f0c46e; }
+  .lbl{ font-size:.7rem; color:#6b7688; min-width:104px; padding-top:7px; font-weight:600;
+        font-family:-apple-system,system-ui,sans-serif; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>MOSS-Video-Preview &mdash; Real-Time Video Understanding via Cross-Attention</h1>
+<p class="paper-meta">Paper: Pengyu Wang, Chenkun Tan, Shaojun Zhou, Wei Huang, Qirui Zhou et al.,
+corresponding Xipeng Qiu (Fudan University &middot; Shanghai Innovation Institute) &middot;
+<a href="https://arxiv.org/abs/2606.07639">arXiv:2606.07639</a> &middot;
+<a href="https://github.com/OpenMOSS/MOSS-Video-Preview">code</a>.
+Reading log &mdash; the paper rewritten in plain language, with the KV-cache difference worked out step by step.</p>
+
+<div style="margin:.8rem 0 1.4rem">
+  <span class="pill">Base: Llama-3.2-11B-Vision</span>
+  <span class="pill">video &rarr; text only</span>
+  <span class="pill">no video generation</span>
+  <span class="pill">4 training stages</span>
+  <span class="pill">836K real-time samples</span>
+</div>
+
+<div class="newbox">
+<strong>Why this sits in the Unified Multimodal category.</strong> It is <em>not</em> a unified model &mdash;
+frames in, text out, nothing flows back to the video. It is filed here because its central trick is the
+cleanest statement of a constraint any unified model runs into: the cache-side role (encode once, park
+it, stay out of the sequence) and the sequence-side role (decode step by step) are mutually exclusive,
+and MOSS is fast precisely because vision is <em>permanently</em> assigned to the condition role.
+A unified model cannot make that assignment, so it cannot reuse this fix.
+</div>
+
+<div class="toc">
+  <strong>What is in here</strong>
+  <ol>
+    <li><a href="#p1">The one problem the paper attacks</a></li>
+    <li><a href="#p2">What the streaming baseline actually does</a></li>
+    <li><a href="#p3">Architecture: what changed</a></li>
+    <li><a href="#p4">The KV cache difference (the core)</a></li>
+    <li><a href="#p5">Two new tokens</a></li>
+    <li><a href="#p6">Building the training data</a></li>
+    <li><a href="#p7">The four training stages</a></li>
+    <li><a href="#p8">Inference, step by step</a></li>
+    <li><a href="#p9">Numbers</a></li>
+    <li><a href="#p10">What the paper does not show</a></li>
+  </ol>
+</div>
+
+<!-- ============================================================= -->
+<h2 id="p1"><span class="num">1.</span> The one problem the paper attacks</h2>
+
+<p>The whole paper hangs on a single sentence, which they repeat several times:</p>
+
+<div class="keypoint">
+  <strong>Perception must not be blocked by generation.</strong>
+</div>
+
+<p>Read that as: <em>while the model is writing an answer, it should still be watching.</em></p>
+
+<h3>Three ways to watch a video</h3>
+
+<table>
+  <thead>
+    <tr><th>Mode</th><th>Can it answer before the video ends?</th><th>Does it keep watching while answering?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Offline</strong></td><td>No — waits for the whole clip</td><td>—</td></tr>
+    <tr><td><strong>Streaming</strong> (what exists today)</td><td>Yes</td><td class="lose">No</td></tr>
+    <tr><td><strong>Real-time</strong> (this paper)</td><td>Yes</td><td class="win">Yes</td></tr>
+  </tbody>
+</table>
+
+<p>The paper is careful about one thing, and it is worth repeating because it is easy to get wrong:</p>
+
+<div class="card">
+  <p style="margin:0">The problem is <strong>not</strong> that a streaming model can never fix a wrong answer.
+  It can — on the next turn. The problem is that the fix is <strong>not timely</strong>.
+  It always arrives one reply too late.</p>
+  <p class="fnote" style="margin:10px 0 0">Their words: “The distinction is not whether an answer can be revised, but whether the revision is timely.”</p>
+</div>
+
+<h3>Why one reply late is a real failure</h3>
+
+<p>Watching someone cook. Suppose a reply takes 2 seconds to write.</p>
+
+<div class="tl">real world   0s -------- 1s -------- 2s -------- 3s -------- 4s
+frames       1..10       11..20      21..30      31..40
+
+model        [reads 1-10]
+                         [ writing about frames 1-10 ............ ]
+                                                 ^ answer comes out at 3s
+                                                   but describes second 1
+
+t=1.4s   the pan falls        <-- model does not see this
+t=2.0s   a fire starts        <-- model does not see this
+t=3.0s   model finishes the sentence about oil, then finally looks</div>
+
+<p>The answer is <em>not wrong</em>. It matches the frames it read. It is simply late, and for anything live —
+driving, a robot arm, a blind-assistance device — being correct about the past is the same as being wrong.</p>
+
+<!-- ============================================================= -->
+<h2 id="p2"><span class="num">2.</span> What the streaming baseline actually does</h2>
+
+<p>Almost every video LLM today is <strong>decoder-only</strong>. There is one token sequence.
+Frames become tokens in it. Text becomes tokens in it. Same sequence, same self-attention.</p>
+
+<div class="row">
+  <div class="lbl">one sequence:</div>
+  <div class="blk v">frame 1 tokens</div><div class="blk v">frame 2 tokens</div>
+  <div class="blk t">question</div>
+  <div class="blk t">The</div><div class="blk t">person</div><div class="blk t">is</div>
+  <div class="blk t">heating</div><div class="blk t">oil</div>
+</div>
+
+<p>So taking in a frame means <strong>writing into the exact sequence the model is currently decoding</strong>.
+One resource, two writers. Existing systems dodge the conflict by taking turns:</p>
+
+<div class="mermaid">
+flowchart LR
+  A["perceive<br/>(take frames in)"] --> B["generate<br/>(write the answer)"]
+  B --> A
+  B -. "frames arriving now<br/>are queued or dropped" .-> X["blind window"]
+  style A fill:#dce8fa,stroke:#b7cff0,color:#20406e
+  style B fill:#fdf3e2,stroke:#f2d6a8,color:#a8650a
+  style X fill:#fdeef1,stroke:#f5b8c3,color:#a8324a
+</div>
+
+<h3>The consequence, stated exactly</h3>
+
+<p>Let a reply take <strong>L</strong> seconds.</p>
+
+<ul>
+  <li><strong>A blind window of length L.</strong> Frames arriving in it are either dropped (gone forever)
+      or queued (so the lag grows every turn). You lose information or you lose time.</li>
+  <li><strong>The reply is committed.</strong> The model cannot stop mid-sentence, because stopping needs
+      evidence it is not receiving.</li>
+  <li>Therefore <strong>the shortest possible correction time is L</strong>. A longer, more detailed answer
+      makes the model <em>more</em> blind, not less.</li>
+</ul>
+
+<div class="keypoint">
+  Everything in the rest of this paper exists to bring that correction time down from
+  <strong>one reply</strong> to <strong>one token</strong>.
+</div>
+
+<!-- ============================================================= -->
+<h2 id="p3"><span class="num">3.</span> Architecture: what changed</h2>
+
+<p>They start from <strong>Llama-3.2-11B-Vision</strong>. That model already has cross-attention —
+it is in the Flamingo family. So the backbone shape is not their invention. What they changed is
+listed in their own section 3:</p>
+
+<ol>
+  <li>Add <strong>temporal position encoding</strong> to cross-attention (this is the real modelling change).</li>
+  <li>Add <strong>2D pooling</strong> before injection, to shrink the visual K/V.</li>
+  <li>Wire up an <strong>incremental frame injection path</strong> and a streaming interface, so one set of
+      weights serves both offline and real-time.</li>
+</ol>
+
+<h3>The shape of the model</h3>
+
+<div class="mermaid">
+flowchart LR
+  subgraph VIS["visual pathway — runs on its own"]
+    F["frame"] --> V["ViT<br/>patch 14, 560px<br/>32 local + 8 global"]
+    V --> P["2D mean pool<br/>tokens → 1/stride²"]
+    P --> J["projector<br/>7680 → 4096"]
+  end
+  J -->|"K / V"| C
+  subgraph LM["language backbone — 40 layers, hidden 4096"]
+    S1["self-attn layers ×32"] --> C{"gated cross-attn ×8<br/>at layers 3,8,13,18,23,28,33,38"}
+    C --> S2["... continue ..."]
+  end
+  S2 --> OUT["next token"]
+  style VIS fill:#eef4fd,stroke:#b7cff0
+  style LM fill:#f6f7fb,stroke:#cdd3e0
+  style C fill:#e8f7f2,stroke:#b6e3d5,color:#1f8f6f
+  style OUT fill:#fff,stroke:#cdd3e0
+</div>
+
+<table>
+  <thead><tr><th>Part</th><th>Params</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>Text self-attention (32 layers)</td><td>≈ 7.0 B</td><td>the original Llama, untouched in shape</td></tr>
+    <tr><td>Gated cross-attention (8 layers)</td><td>≈ 1.7 B</td><td>this is the “add vision” cost</td></tr>
+    <tr><td>Embeddings + output head</td><td>≈ 1.1 B</td><td></td></tr>
+    <tr><td>Vision encoder (ViT)</td><td>≈ 0.84 B</td><td></td></tr>
+    <tr><td>Projector</td><td>≈ 0.03 B</td><td>one linear layer</td></tr>
+    <tr><th colspan="3">Total ≈ 10.7 B (called “11B”)</th></tr>
+  </tbody>
+</table>
+
+<h3>How vision gets injected</h3>
+
+<p>At each of the 8 cross-attention layers:</p>
+
+<pre><code>h  ←  h  +  tanh(g_attn) · CrossAttn(h, V)
+h  ←  h  +  tanh(g_ffn)  · FFN(h)</code></pre>
+
+<p><code>g_attn</code> and <code>g_ffn</code> are single learned numbers. Because of <code>tanh</code>, they start
+near zero, so at the beginning <strong>vision does nothing at all</strong> and the block is an identity map.
+Training slowly opens the gate. This is why adding vision does not smash the language ability of the base model.</p>
+
+<h3>The temporal fix — their main modelling change</h3>
+
+<div class="warnbox">
+  <strong>The bug they found in stock Llama-3.2-Vision:</strong> its cross-attention applies
+  <em>no</em> positional encoding at all — not on the queries, not on the keys.
+  So the frames are <strong>mutually orderless</strong>. The model literally cannot tell which frame
+  came first. For video that is fatal.
+</div>
+
+<p>Their fix: put RoPE on both sides of cross-attention.</p>
+
+<ul>
+  <li>A <strong>text query</strong> uses its normal text position.</li>
+  <li>A <strong>visual key</strong> uses the position of its <code>&lt;|video|&gt;</code> placeholder
+      inside the interleaved sequence.</li>
+</ul>
+
+<div class="newbox">
+  <p style="margin:0 0 8px"><strong>Important detail, easy to miss:</strong> text and frames share
+  <em>one single position axis</em>. They number the whole interleaved sequence in one pass.</p>
+  <p style="margin:0">But <strong>all visual tokens of one frame share the same index</strong>.
+  One frame = one position. So spatial position inside a frame disappears from cross-attention
+  (the ViT already handles that), and what is left is a pure temporal signal: “which frame is this”.</p>
+</div>
+
+<p>This is why the model needs a <strong>fixed resolution</strong>: every frame must produce the same
+number of tokens, so that “one frame, one position” stays regular across the whole sequence.</p>
+
+<p>There is also a <code>cross_attention_mask</code> that says which text span may look at which frames.
+That is what lets one model handle mixed images, video clips, and multi-turn chat in any order.</p>
+
+<!-- ============================================================= -->
+<h2 id="p4"><span class="num">4.</span> The KV cache difference — the core of the paper</h2>
+
+<p>This is the part worth slowing down on, because on the surface the two designs look identical.
+In both cases a new frame means: run the encoder, get K/V, append to a cache, next step reads it.
+<strong>The paper openly admits decoder-only <em>can</em> be made real-time this way.</strong>
+So the difference is not capability. It is <em>which cache</em>, and that has consequences.</p>
+
+<h3>Where the frame lands</h3>
+
+<div class="two">
+  <div class="panel old">
+    <h4><span class="tag2 base">baseline</span>decoder-only</h4>
+    <p style="font-size:14px">Frame K/V goes into the <strong>self-attention cache</strong>.
+    That cache <em>is</em> the sequence.</p>
+    <div class="stack">
+      <div class="row"><div class="blk v">f1</div><div class="blk v">f1</div><div class="blk v">f1</div><div class="blk t">The</div><div class="blk t">oil</div><div class="blk n">f2</div><div class="blk n">f2</div><div class="blk n">f2</div><div class="blk t">?</div></div>
+    </div>
+    <p style="font-size:14px;margin-top:12px">One cache. Text and vision mixed together.
+    Every later decoding step attends over all of it, in <strong>all 40 layers</strong>.</p>
+  </div>
+
+  <div class="panel new">
+    <h4><span class="tag2 moss">MOSS</span>cross-attention</h4>
+    <p style="font-size:14px">Frame K/V goes into a <strong>separate cache</strong>, read only at 8 layers.</p>
+    <div class="stack">
+      <div class="row"><div class="lbl">self-attn:</div><div class="blk t">The</div><div class="blk t">oil</div><div class="blk t">?</div></div>
+      <div class="row"><div class="lbl">vision cache:</div><div class="blk v">f1</div><div class="blk n">f2</div></div>
+    </div>
+    <p style="font-size:14px;margin-top:12px">Two caches. The text sequence stays short and pure.
+    Vision never enters self-attention at all.</p>
+  </div>
+</div>
+
+<h3>What happens when a frame arrives mid-sentence</h3>
+
+<p>Say the model has already written <code>The person is heating oil</code> and frame 11 arrives right now.</p>
+
+<div class="mermaid">
+sequenceDiagram
+  participant W as world
+  participant E as ViT + projector
+  participant K as vision K/V cache
+  participant D as decoder step
+  W->>E: frame 11 arrives
+  E->>K: append K/V (8 layers)<br/>text sequence NOT touched
+  Note over K: cache grows 1..10 → 1..11<br/>vision_cache_position tracks it
+  D->>K: next step: query with current hidden state
+  K-->>D: attention now covers frames 1..11
+  Note over D: the very next token<br/>is already conditioned on frame 11
+</div>
+
+<p>Three things make this free:</p>
+
+<ol>
+  <li><strong>The vision cache is read-only from the text side.</strong> The text never writes into it.
+      Each decoding step issues a <em>fresh</em> query against whatever is currently there.
+      Growing a read-only table between two reads costs nothing — the next read just covers more rows.</li>
+  <li><strong>Vision K/V does not depend on the text.</strong> It comes from the ViT alone. So a cached frame
+      never goes stale when the text context changes. (Compare: the <em>text</em> KV cache <em>does</em> go
+      stale when the prompt changes — that is why other systems need “KV recache”.)</li>
+  <li><strong>Old frames are reused, never recomputed.</strong> Algorithm 1 says this explicitly at two places.</li>
+</ol>
+
+<h3>Difference 1 — cost per decoding step</h3>
+
+<table>
+  <thead><tr><th></th><th>decoder-only</th><th>cross-attention</th></tr></thead>
+  <tbody>
+    <tr><td>Where visual K/V lives</td><td>the self-attention sequence</td><td>a separate cache</td></tr>
+    <tr><td>Layers that touch it</td><td class="lose">40 of 40</td><td class="win">8 of 40</td></tr>
+    <tr><td>Self-attention sequence length</td><td class="lose">text + all visual tokens</td><td class="win">text only</td></tr>
+    <tr><td>Prefill must build</td><td class="lose">self-attn K/V over tens of thousands of tokens</td><td class="win">ViT pass (parallel) + short text</td></tr>
+    <tr><td>Cost per decoded token</td><td class="lose">grows with every frame</td><td class="win">roughly flat</td></tr>
+  </tbody>
+</table>
+
+<p>With 256 frames this is not a small effect. It is the whole reason their 11B model beats a 7B decoder-only
+model on speed: TTFT 1.95 s vs 9.94 s, and 38.4 vs 14.3 tokens per second.</p>
+
+<h3>Difference 2 — a frame costs one position, not hundreds</h3>
+
+<p>Both designs put text and frames on one position axis. The difference is <strong>how much of the axis a
+frame eats</strong>.</p>
+
+<div class="two">
+  <div class="panel old">
+    <h4><span class="tag2 base">baseline</span>a frame = N positions</h4>
+    <div class="tl">pos 100..105  "The person is heating oil"
+pos 106..205  frame 11 tokens   ← inserted
+pos 206       next word of the SAME sentence</div>
+    <p style="font-size:14px;margin-top:10px"><code>oil</code> is at 105 and the next word of the same
+    sentence is at 206. RoPE now sees them <strong>101 apart</strong>. In training, consecutive words are
+    1 apart. Every frame you insert stretches your own sentence.</p>
+  </div>
+  <div class="panel new">
+    <h4><span class="tag2 moss">MOSS</span>a frame = 1 position</h4>
+    <div class="tl">pos 100..105  "The person is heating oil"
+pos 106       frame 11   ← one placeholder
+pos 107       next word of the SAME sentence</div>
+    <p style="font-size:14px;margin-top:10px">All ~400 visual tokens of frame 11 share index 106.
+    The sentence is stretched by <strong>1</strong>, not 101. And the visual tokens themselves are
+    in a different cache, so they never sit between the text tokens in self-attention.</p>
+  </div>
+</div>
+
+<h3>Difference 3 — the channels can be compressed separately</h3>
+
+<p>Because vision K/V is its own channel, you can shrink it without touching the text. Their 2D pooling is the
+first instance: dropping the CLS token and mean-pooling the patch grid cuts tokens per frame to about
+1/stride². In decoder-only both token types are in one sequence, so this kind of split is awkward.
+The paper lists finer channel-wise compression as future work, not as a result.</p>
+
+<div class="keypoint">
+  <strong>The honest bottom line.</strong> The difference is quantitative, not qualitative.
+  Decoder-only <em>can</em> insert frames mid-reply and the next token <em>will</em> see them.
+  It just costs about 5× the first-token latency, 2.7× slower decoding, and it stretches the model's own
+  sentences by ~100 positions per frame. Cross-attention makes non-blocking the <strong>default</strong>
+  instead of something you engineer around. That is the paper's actual claim — nothing stronger.
+</div>
+
+<h3>And the cache alone does NOT give you revision</h3>
+
+<div class="warnbox">
+  <p style="margin:0 0 8px">This point is easy to lose. The cache only fixes <strong>seeing</strong>.
+  A model that sees frame 11 will still happily finish its sentence about frame 10, because language models
+  are strongly biased to complete sentences.</p>
+  <p style="margin:0">Split the delay in two:</p>
+</div>
+
+<pre><code>time-to-correction = (time until the model CAN SEE the new frame)     ← the cache
+                   + (time until the model DECIDES to change course)  ← tokens + data</code></pre>
+
+<table>
+  <thead><tr><th></th><th>baseline streaming</th><th>MOSS</th></tr></thead>
+  <tbody>
+    <tr><td>Term 1 — see</td><td class="lose">one reply (frames queued, not ingested)</td><td class="win">one decoding step</td></tr>
+    <tr><td>Term 2 — decide</td><td class="lose">one reply (re-decides only at the boundary)</td><td class="win">one decoding step</td></tr>
+  </tbody>
+</table>
+
+<p>Fixing only one term gains nothing. Fix only the cache and the model sees frame 11 and keeps talking about
+frame 10. Fix only the policy and the model is willing to stop but has no new evidence to stop for.
+Sections 5 and 6 are how they fix term 2.</p>
+
+<!-- ============================================================= -->
+<h2 id="p5"><span class="num">5.</span> Two new tokens</h2>
+
+<p>The vocabulary gains two things that ordinary video LLMs do not have.</p>
+
+<h3><code>&lt;|silence|&gt;</code> — “I am watching but I have nothing to say”</h3>
+
+<p>Without it, a model that perceives continuously will describe the same static scene over and over.
+The paper says this directly.</p>
+
+<p>How it is controlled is unusually simple — <strong>it is an inference-time threshold, not a training loss</strong>:</p>
+
+<pre><code>at every decoding step:
+    p = softmax(logits)
+    if p[&lt;|silence|&gt;] &gt;= 0.6:      # τ, the value in the released code
+        allowed to stay silent
+    else:
+        zero out the silence mass, renormalise
+        → the model is FORCED to speak</code></pre>
+
+<p>They state explicitly that <em>no extra training-time weighting on <code>&lt;|silence|&gt;</code> is needed</em> —
+with good enough data, this one threshold is enough. Setting τ at 0.6 biases the model toward
+answering rather than sitting quiet.</p>
+
+<h3>The turning-point token — “stop, something changed”</h3>
+
+<p>Decoded as an ellipsis “…”. The model emits it to <strong>cut its own sentence short</strong> and pivot
+to new evidence. This is the move a streaming model structurally cannot make.</p>
+
+<div class="keypoint">
+  Because these two tokens are ordinary vocabulary items, the choice
+  <em>continue / pivot / go quiet</em> is re-made at <strong>every single decoding step</strong> —
+  roughly 38 times per second. Not once per reply.
+</div>
+
+<!-- ============================================================= -->
+<h2 id="p6"><span class="num">6.</span> Building the training data</h2>
+
+<p>Architecture gives the <em>ability</em>. Data gives the <em>habit</em>. Ordinary video QA cannot teach this
+habit at all, for two reasons the paper names:</p>
+
+<ul>
+  <li>Existing data is “whole clip → one answer”. There is <strong>no trajectory where the answer gets rewritten</strong>.</li>
+  <li>Existing data has <strong>no <code>&lt;|silence|&gt;</code> supervision</strong> anywhere.</li>
+</ul>
+
+<div class="keypoint">
+  The shape they need: <strong>the instruction is fixed, but the best answer evolves as the stream advances.</strong>
+</div>
+
+<p>Their example, which is the clearest thing in the paper:</p>
+
+<div class="card">
+  <p style="margin:0"><em>“What is the score now?”</em></p>
+  <p style="margin:8px 0 0">The question never changes. But when a goal is scored the correct reply must be
+  rewritten. Between goals, the model should stay quiet. Static QA can neither train nor evaluate this.</p>
+</div>
+
+<h3>Starting material: hierarchical captions, not raw video</h3>
+
+<p>They first caption every video at <strong>three granularities</strong>, all timestamped:</p>
+
+<ul>
+  <li><strong>video</strong> level — summarises the whole clip</li>
+  <li><strong>event</strong> level — describes event segments</li>
+  <li><strong>action</strong> level — details individual actions</li>
+</ul>
+
+<p>For synthesis they flatten to <strong>action</strong> level, giving an ordered list of
+(time interval, description) pairs. All the reasoning below happens on <em>text</em>, not pixels —
+which is why an LLM can drive it.</p>
+
+<div class="mermaid">
+flowchart TD
+  H["hierarchical captions<br/>video / event / action, timestamped"] --> FL["flatten to action level<br/>ordered (tᵢ, cᵢ) sequence"]
+
+  subgraph A["PHASE A — semantic construction: what to say, and when"]
+    direction TB
+    A1["1 · change-point detection<br/>read as if watching live;<br/>flag segments that change understanding"]
+    A2["2 · state-dependent instruction<br/>a question that is RIGHT before<br/>the change and WRONG after"]
+    A3["3 · decision–generation<br/>walk the timeline: revise, or Silence"]
+    A1 --> A2 --> A3
+  end
+
+  subgraph B["PHASE B — temporal layout: commit onto a 1 fps clock"]
+    direction TB
+    B1["4 · sample arrival and reply times<br/>leaving room for perception delay"]
+    B2["5 · fill 20–60 tokens per second;<br/>on overflow, truncate + insert '…'"]
+    B3["6 · assemble second by second"]
+    B1 --> B2 --> B3
+  end
+
+  FL --> A
+  A --> B
+  B --> OUT["one real-time training sample"]
+
+  style A fill:#eef4fd,stroke:#b7cff0
+  style B fill:#e8f7f2,stroke:#b6e3d5
+  style H fill:#fff,stroke:#cdd3e0
+  style OUT fill:#fdf3e2,stroke:#f2d6a8,color:#a8650a
+</div>
+
+<h3>Phase A — deciding what to say and when</h3>
+
+<h4>Step 1 · Change-point detection</h4>
+<p>An LLM reads the caption sequence <em>as if watching it live</em>. For each description it compares against
+<strong>all earlier ones</strong> and decides whether the new information is enough to change the current
+understanding. Three categories:</p>
+<ul>
+  <li><strong>turning point</strong> — the state reverses</li>
+  <li><strong>disambiguation / completion</strong> — something unclear becomes clear</li>
+  <li><strong>external context change</strong> — the surroundings change</li>
+</ul>
+<p class="fnote">The first description has no prior context, so it is never counted as a change.</p>
+
+<h4>Step 2 · State-dependent instruction generation</h4>
+<p>At each change point, treat everything before as known and the new part as Δ. Then write a user question
+constrained so that:</p>
+<ul>
+  <li>it has a <strong>clearly correct answer before Δ</strong>,</li>
+  <li>and that answer becomes <strong>wrong or incomplete right after Δ</strong>,</li>
+  <li>and it targets things that genuinely change over time — actions, relative positions, interactions —
+      <strong>not</strong> static facts like colour, material, or identity.</li>
+</ul>
+<p>For variety the surface form is sampled along three axes (syntactic structure, expressive style,
+emotional tone) from preset distributions, then all generated questions are pooled and deduplicated by
+cosine similarity in an embedding space.</p>
+
+<h4>Step 3 · Decision–generation response</h4>
+<p>Given a question Q, first write an anchor answer a₁ from the information up to the change point.
+Then walk forward segment by segment and make a binary decision each time:</p>
+
+<pre><code>for each following segment:
+    does this segment change the best answer to Q?
+        yes  → write a new answer a_{k+1} from everything so far
+        no   → emit Silence</code></pre>
+
+<div class="newbox">
+  <strong>Two design details that matter more than they look:</strong>
+  <ul style="margin:8px 0 0">
+    <li>Silent segments are <strong>not written into the response history</strong>. Otherwise the model's own
+        past silence would push it toward more silence, and it would drift into never speaking.</li>
+    <li>An already-answered task is <strong>explicitly marked</strong>, which raises the bar for speaking again.
+        This is what stops it from repeating itself.</li>
+  </ul>
+</div>
+
+<p>Output of Phase A: a pair (Q; a₁, a₂, …) where each aₖ is either real text or Silence.</p>
+
+<h3>Phase B — putting it on a clock</h3>
+
+<p>Phase A's output is still segment-level. At inference the model reads frames at 1 fps and emits tokens one
+by one, so supervision has to say <em>what to emit right after each frame</em>. Phase B commits everything
+onto a per-second timeline.</p>
+
+<table>
+  <thead><tr><th>What</th><th>Rule</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Question arrival</strong> t<sub>q</sub></td>
+      <td>uniform in the <strong>first 80%</strong> of a₁'s triggering segment</td>
+      <td>guarantees Q is asked <em>before</em> the change, so the first answer is definitely overturned later</td>
+    </tr>
+    <tr>
+      <td><strong>Reply start</strong> p<sub>k</sub></td>
+      <td>uniform in the <strong>last third</strong> of its triggering segment, with p₁ ≥ t<sub>q</sub></td>
+      <td>the model does not reply at the segment boundary — it watches and confirms first. This bakes realistic perception delay into the data.</td>
+    </tr>
+    <tr>
+      <td><strong>Reply end</strong> q<sub>k</sub></td>
+      <td>set by the next utterance so replies meet head-to-tail; if followed by silence, the reply may run into the <strong>first half</strong> of that silent segment; the last reply runs to video end</td>
+      <td>no gaps or overlaps. Conflicting neighbours are forcibly staggered by at least 1 second.</td>
+    </tr>
+    <tr>
+      <td><strong>Text fill</strong></td>
+      <td><strong>20–60 tokens per second</strong>, sampled uniformly, rounded at subword boundaries</td>
+      <td>the <em>random</em> pace is deliberate — it makes the model robust to variable real decoding speed instead of memorising one speed</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>The two boundary cases (this is where the interrupt behaviour is born)</h4>
+
+<div class="two">
+  <div class="panel new">
+    <h4>Text finishes early</h4>
+    <p style="font-size:14px;margin:0">Remaining seconds are filled with <code>&lt;|silence|&gt;</code>,
+    plus one extra <code>&lt;|silence|&gt;</code> appended to mark the end of the utterance.</p>
+  </div>
+  <div class="panel old">
+    <h4>Text overruns</h4>
+    <p style="font-size:14px;margin:0">The reply is <strong>truncated</strong>, the overflow is recorded
+    separately, and a <strong>turning-point token</strong> is inserted at the start of the next segment.</p>
+    <p style="font-size:14px;margin:8px 0 0"><strong>This is the training signal for
+    “my reply is not finished but the world already moved on.”</strong> Without these examples the model
+    would never learn that stopping mid-sentence is a legal move.</p>
+  </div>
+</div>
+
+<h4>Assembly, second by second</h4>
+<p>Walk from t<sub>q</sub> to the end of the video. At every second: place a <code>&lt;|video|&gt;</code>
+placeholder, then either the active reply's text fragment for that second, or <code>&lt;|silence|&gt;</code>
+if this second is not covered by any reply.</p>
+
+<pre><code>&lt;|video|&gt; text/&lt;|silence|&gt; &lt;|video|&gt; text/&lt;|silence|&gt; &lt;|video|&gt; ...</code></pre>
+
+<h3>The finished sample</h3>
+
+<p>Their own worked example — read it left to right as time passing:</p>
+
+<div class="tl">system:  "keep perceiving; adjust when relevant changes occur;
+          output &lt;|silence|&gt; when there is nothing to say"
+
+assistant (nobody has asked yet, but it is already watching):
+          &lt;|silence|&gt;&lt;|video|&gt;&lt;|silence|&gt;
+
+user:     "What is the score now?"
+
+assistant (streaming reply, one second per &lt;|video|&gt;):
+          &lt;|video|&gt; "It's 1-0."
+          &lt;|video|&gt; &lt;|silence|&gt;
+          &lt;|video|&gt; "Now 1-1."      &lt;- revised, same question
+          &lt;|video|&gt; &lt;|silence|&gt;</div>
+
+<p>Three things are encoded in that one sample: <strong>always-on perception</strong> (the silence prelude
+before any question), <strong>revision</strong> (1-0 → 1-1 without being asked again), and
+<strong>timely silence</strong> (quiet between goals).</p>
+
+<h3>Multi-turn assembly</h3>
+<ul>
+  <li>Several QAs on the same video are concatenated into a multi-turn dialogue.</li>
+  <li>Every dialogue starts with a <strong>pure-silence prelude</strong> from video start to t<sub>q</sub>.</li>
+  <li><strong>Two-turn</strong> samples carry one QA.</li>
+  <li><strong>Three-turn</strong> samples concatenate two adjacent QAs and, at the moment the second
+      instruction arrives, <strong>truncate the first reply at a random ratio</strong> — directly teaching
+      “previous answer unfinished, new instruction arrived”.</li>
+  <li>Each sample carries a <code>video</code> field strictly aligned to the frame count, with a timestamp for
+      every <code>&lt;|video|&gt;</code>. Over-long samples are trimmed from the tail; still-too-long ones are skipped.</li>
+</ul>
+
+<!-- ============================================================= -->
+<h2 id="p7"><span class="num">7.</span> The four training stages</h2>
+
+<p>All four use plain next-token prediction, cosine LR with 0.1 warm-up, DeepSpeed ZeRO-2, one epoch each.
+Each continues from the previous checkpoint.</p>
+
+<table>
+  <thead>
+    <tr><th>Stage</th><th>Goal</th><th>Data</th><th>Scale</th><th>Trainable</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1</strong></td><td>Inject vision, align the two modalities</td>
+      <td>image–text pairs</td><td>15 M</td>
+      <td>ViT, projector, cross-attention<br/><strong>LLM backbone frozen</strong></td>
+    </tr>
+    <tr>
+      <td><strong>1.5</strong></td><td>Acquire video temporality</td>
+      <td>470 K images + 1369 K videos</td><td>1.8 M</td><td>full model</td>
+    </tr>
+    <tr>
+      <td><strong>Offline SFT</strong></td><td>General instruction following</td>
+      <td>text / image / video instructions</td><td>8 M</td><td>full model</td>
+    </tr>
+    <tr>
+      <td><strong>Real-Time SFT</strong></td><td>Look-and-revise + silence decision</td>
+      <td>real-time synthetic + offline QA mix</td><td>836 K</td><td>full model</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>Why freeze the LLM in stage 1</h4>
+<p>Only the <em>bridge</em> needs learning — encoder, projector, cross-attention. At that point the
+<code>tanh</code> gates are near zero and the bridge is unaligned, so unfreezing the text backbone
+simultaneously would let badly-aligned visual gradients perturb or degrade the language ability.
+Everything unfreezes from stage 1.5 onward so the whole model can co-adapt.</p>
+
+<h4>Why real-time SFT goes last</h4>
+<p>836 K is small and narrow next to 8 M. Training on it from scratch would damage general understanding.
+So it continues from the offline checkpoint with the learning rate <strong>lowered from 1e-5 to 5e-6</strong>
+and <strong>gradient accumulation 4</strong> for stabler updates. The paper frames it as
+<em>specialisation</em>, not a fresh run. Mixing offline QA back in prevents the model from collapsing into
+“always observing, mostly silent” as its only mode.</p>
+
+<h4>Two modes, one weight set</h4>
+<p>The switch between real-time and offline behaviour is entirely in the <strong>system prompt</strong>.
+The real-time prompt asks for continuous perception, answers grounded only in what is seen
+(“Do not make guesses without evidence from visual input”), dynamic adjustment when something relevant
+changes, and <code>&lt;|silence|&gt;</code> when unable to answer or already finished.</p>
+
+<!-- ============================================================= -->
+<h2 id="p8"><span class="num">8.</span> Inference, step by step</h2>
+
+<p>One model exposes two entry points, differing <em>only</em> in whether frames arrive all at once or over
+time. Same weights, same cache machinery.</p>
+
+<ul>
+  <li><code>offline_generate</code> — whole video and question given upfront</li>
+  <li><code>real_time_generate</code> — frames arrive over time, tokens stream out, new questions can be
+      interjected mid-generation</li>
+</ul>
+
+<h3>The two-state loop</h3>
+
+<p>The loop is <strong>event-driven</strong>. An event is <em>a new frame arrived</em> or <em>a new question
+arrived</em> — either one alone is enough, and both can arrive together.</p>
+
+<div class="mermaid">
+stateDiagram-v2
+  [*] --> Waiting
+  Waiting --> Waiting: event arrives, inject, predict<br/>p(silence) at least 0.6<br/>keep observing, no decoding
+  Waiting --> Replying: event arrives, inject, predict<br/>p(silence) below 0.6<br/>something to say
+  Replying --> Replying: emit next token<br/>continue the reply,<br/>or pivot with the turning-point token<br/>events keep being injected
+  Replying --> Waiting: emitted token is<br/>the silence token
+</div>
+
+<h3>Algorithm 1, in plain words</h3>
+
+<pre><code>τ = 0.6
+state = Waiting
+
+loop forever:
+
+  if state == Waiting:
+      # block until something happens
+      if a new frame arrived:
+          encode it, append its K/V to the per-layer cache
+          (previous frames' K/V is REUSED, not recomputed)
+      if a new question arrived:
+          append it to the text sequence
+      # both may arrive together — inject both
+
+      forward once to get the next-token distribution p
+      if p[&lt;|silence|&gt;] &gt;= τ:
+          stay in Waiting          # nothing to say, keep watching
+      else:
+          state = Replying
+
+  else:   # Replying
+      if a new frame arrived:
+          encode it, append its K/V to the cache
+      if a new question arrived:
+          insert it into the text sequence
+
+      emit the next token. it may:
+          - continue the current reply
+          - switch via the turning-point token "…"
+          - end the reply
+
+      if the emitted token is &lt;|silence|&gt;:
+          state = Waiting</code></pre>
+
+<div class="keypoint">
+  Note where the frame injection sits: <strong>inside both branches</strong>. That is the entire
+  “perception is not blocked by generation” claim, in code. Nothing is interrupted to ingest a frame —
+  it is just an append before the next token.
+</div>
+
+<h3>The three options mid-reply</h3>
+
+<div class="tl">step N     ... "The person is heating"
+                             ↓  frame 11 lands in the cache
+step N+1   cross-attention now covers frames 1..11
+           the model picks one of:
+
+           (a) "oil"          → continue, nothing important changed
+           (b) "…"            → turning point: cut the sentence, pivot
+           (c) &lt;|silence|&gt;    → stop entirely, go back to Waiting</div>
+
+<p>So the granularity of correction is <strong>one token</strong>, roughly 26 ms at 38 tokens/sec —
+not one reply.</p>
+
+<!-- ============================================================= -->
+<h2 id="p9"><span class="num">9.</span> Numbers</h2>
+
+<h3>Speed</h3>
+<p>Single H200, 256 frames from the same video, bf16 + FlashAttention-2, greedy decoding, one warm-up run.</p>
+
+<table>
+  <thead><tr><th>Model</th><th>Params</th><th>TTFT ↓</th><th>tokens/sec ↑</th><th>total latency ↓</th><th>P95 TTFT ↓</th></tr></thead>
+  <tbody>
+    <tr><td><strong>MOSS-Video-Preview</strong></td><td>11 B</td>
+        <td class="win">1.95 s</td><td class="win">38.41</td><td class="win">28.51 s</td><td class="win">1.96 s</td></tr>
+    <tr><td>Qwen2.5-VL-7B (decoder-only)</td><td>7 B</td>
+        <td>9.94 s</td><td>14.26</td><td>52.76 s</td><td>9.96 s</td></tr>
+  </tbody>
+</table>
+
+<p>≈ <strong>5× faster to first token</strong>, ≈ <strong>2.7× faster decoding</strong>, ≈ <strong>46% lower
+end-to-end latency</strong> — while being the <em>larger</em> model.</p>
+
+<p class="fnote">Their own caveat: one video, one configuration, not a standardised suite, run on the stock
+HuggingFace path with no custom serving engine. They say the gain is attributable to architecture rather than
+an engineered stack.</p>
+
+<h3>Quality — where it wins and loses</h3>
+
+<p>24 benchmarks. The main reference is Qwen2.5-VL-7B, which is <em>smaller</em>.</p>
+
+<table>
+  <thead><tr><th>Benchmark</th><th>MOSS (RT-SFT)</th><th>Qwen2.5-VL-7B</th><th></th></tr></thead>
+  <tbody>
+    <tr><td>VSI-Bench</td><td class="win">36.20</td><td>28.30</td><td>spatial relations</td></tr>
+    <tr><td>Video-Holmes</td><td class="win">39.30</td><td>33.00</td><td>causal reasoning over time</td></tr>
+    <tr><td>VisuLogic</td><td class="win">28.60</td><td>25.90</td><td>visual logic</td></tr>
+    <tr><td>VideoMME</td><td>62.48</td><td>65.10</td><td></td></tr>
+    <tr><td>MLVU</td><td class="lose">61.81</td><td>70.20</td><td></td></tr>
+    <tr><td>EgoSchema</td><td class="lose">54.80</td><td>63.80</td><td></td></tr>
+    <tr><td>TempCompass (MC)</td><td class="lose">59.68</td><td>72.53</td><td></td></tr>
+    <tr><td>OCRBench</td><td class="lose">677</td><td>864</td><td>biggest gap</td></tr>
+  </tbody>
+</table>
+
+<p>The wins share a theme: inferring from spatial relations, action logic, and causality over time.
+The losses are heaviest on OCR and fine-grained perception. The paper attributes the general gap
+<strong>to data and scale, not to the cross-attention architecture</strong> — which is a claim, not a
+demonstrated result.</p>
+
+<h3>Does real-time specialisation cost anything?</h3>
+
+<p>This was one of their three research questions, and the answer is essentially no. Real-time SFT tracks the
+offline SFT checkpoint closely, and on several video benchmarks the real-time version is actually
+<em>higher</em>: VideoMME 62.48 vs 59.81, EgoSchema 54.80 vs 47.40, VSI-Bench 36.20 vs 33.48.</p>
+
+<p class="fnote">Two outliers diverge without a controlled explanation: SEEDBench is ~19 points higher on
+real-time, V* is ~13 points higher on offline.</p>
+
+<!-- ============================================================= -->
+<h2 id="p10"><span class="num">10.</span> What the paper does not show</h2>
+
+<div class="warnbox">
+  <strong>There is no quantitative real-time evaluation anywhere in the paper.</strong>
+  Real-time capability is demonstrated only through three qualitative demos. The authors state this as
+  limitation (1) themselves.
+</div>
+
+<p>Their reasoning for why is the most interesting paragraph in the paper. To measure real-time you must
+measure accuracy <strong>and</strong> timeliness together, because accuracy alone can be gamed by
+<strong>stalling</strong>:</p>
+
+<div class="card">
+  <p style="margin:0">A model that waits until well after an event has ended — when the information is
+  unambiguous — scores <em>high</em> on accuracy while completely defeating the purpose of being real-time.</p>
+</div>
+
+<p>They propose splitting timeliness into two orthogonal parts:</p>
+<ul>
+  <li><strong>system-level</strong> — TTFT, max FPS (they do measure this)</li>
+  <li><strong>decision-level</strong> — the wait between an event ending and the model <em>choosing</em> to
+      reply (they do not measure this, and no benchmark exists)</li>
+</ul>
+
+<h3>Other stated limitations</h3>
+<ul>
+  <li>A real gap to SOTA on general benchmarks.</li>
+  <li>Data engineering is preliminary — 836 K synthetic samples, pipeline unrefined and not open-sourced.</li>
+  <li>Ablations are limited. <strong>τ = 0.6, the pooling stride, the placement of the 8 cross-attention
+      layers, and the real-time/offline mixing ratio were never swept rigorously.</strong> For a paper whose
+      core claim is about layer placement and cache design, this is the weakest point.</li>
+  <li>Limited scale: 11B, limited context length, no 3D parallelism.</li>
+  <li><strong>No RL.</strong> The whole pipeline is next-token SFT, which — in their words — “can only imitate
+      the pace baked into the synthetic data”. The model does not learn <em>when</em> to speak from reward;
+      it copies the timing distributions of Phase B.</li>
+</ul>
+
+<h3>What they plan next</h3>
+<ul>
+  <li>Build a decision-level latency benchmark.</li>
+  <li>Optimise the reply/silence policy with RL, reward <strong>R = accuracy − λ · delay</strong>,
+      where λ tunes the accuracy/timeliness trade-off.</li>
+  <li>Exploit channel separation for vision-K/V-only compression and quantisation.</li>
+</ul>
+
+<hr>
+
+<h2>The whole paper in five lines</h2>
+
+<div class="keypoint">
+  <ol style="margin:0">
+    <li><strong>Problem:</strong> streaming video LLMs stop watching while they talk, so the earliest possible
+        correction is one reply late.</li>
+    <li><strong>Architecture:</strong> keep vision out of the autoregressive sequence — in a separate cache read
+        by 8 of 40 cross-attention layers — so an arriving frame is a cheap append that the next token already sees.</li>
+    <li><strong>Fix the missing time signal:</strong> add RoPE to cross-attention, one frame = one position.</li>
+    <li><strong>Policy:</strong> add <code>&lt;|silence|&gt;</code> (gated at p ≥ 0.6) and a turning-point token,
+        so continue/pivot/stop is decided at every token.</li>
+    <li><strong>Data:</strong> 836 K synthetic samples where the question is fixed and the answer is rewritten as
+        the stream advances — including replies deliberately truncated mid-sentence.</li>
+  </ol>
+</div>
+
+<p class="fnote">Sources:
+<a href="https://arxiv.org/abs/2606.07639">arXiv:2606.07639</a> ·
+<a href="https://arxiv.org/html/2606.07639">HTML full text</a> ·
+<a href="https://github.com/OpenMOSS/MOSS-Video-Preview">GitHub</a>.
+Local PDF: <code>moss_video_preview.pdf</code> (repo root), extracted text: <code>moss_video_preview.txt</code>.</p>
+
+<script>
+mermaid.initialize({
+  startOnLoad:true,
+  theme:'base',
+  themeVariables:{
+    primaryColor:'#eef2fb', primaryTextColor:'#1c2230', primaryBorderColor:'#b7cff0',
+    lineColor:'#8697b5', fontSize:'14px',
+    fontFamily:'-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif'
+  },
+  flowchart:{curve:'basis', padding:14},
+  sequence:{actorMargin:60, width:180}
+});
+</script>
+</body>
+</html>
