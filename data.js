@@ -191,6 +191,14 @@ const BLOG = {
       blurb: "One model that both reads and draws — shared visual spaces, decoupled decoders, and how understanding and generation help or fight each other.",
       notes: [
         {
+          title:   "Unified Multimodal Understanding and Generation — Architecture Summarization",
+          file:    "posts/unified-multimodal-summarization.html",
+          date:    "2026-08-26",
+          paper:   "Zhang, Yang, Yin, Zhang, Zhang et al. · arXiv:2505.02567",
+          tags:    ["unified multimodal", "taxonomy", "survey", "pixel encoding", "semantic encoding", "learnable queries", "hybrid encoding", "diffusion decoder", "conditioning"],
+          summary: "A walk through Figure 5 of the Alibaba survey, read as a taxonomy of alternative designs rather than a chronological ladder. Starts from the two conflicts that generate the whole tree — text is discrete and sequential while images are continuous and 2-D, and a semantic encoder is trained to <em>discard</em> exactly the pixel detail a generator needs back. Then goes branch by branch (diffusion backbone; AR with pixel / semantic / learnable-query / pseudo-hybrid / joint-hybrid encoding; fused AR+diffusion with pixel or hybrid encoding), each with why it occurs, its benefits, and its problems, and closes on what each added module actually repairs: semantic encoder repairs language alignment, pixel encoder repairs lost visual detail, learnable queries repair token length, the diffusion decoder repairs the non-invertibility of semantic features, and AR+diffusion fusion repairs the mismatch between sequential language generation and spatial image generation. Second half works through the conditioning itself — ε̂ = ε_θ(z_t, t, C), the reversed cross-attention direction (noisy latents are Q, condition tokens are K/V), and the three sources C can come from: an image during reconstruction, text during generation, or an image plus an instruction during editing.",
+        },
+        {
           title:   "MOSS-Video-Preview — Real-Time Video Understanding via Cross-Attention",
           file:    "posts/moss-video-preview-realtime-cross-attention.html",
           date:    "2026-08-18",

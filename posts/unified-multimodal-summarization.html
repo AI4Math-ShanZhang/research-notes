@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Unified Multimodal Understanding and Generation — Architecture Summarization — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  :root { --benefit:#2EAF8E; --problem:#E8900D; }
+
+  h2 { font-size:1.3rem; margin:2.4rem 0 .6rem; padding-top:1rem; border-top:1px solid var(--line); }
+  h3 { font-size:1.05rem; margin:1.5rem 0 .4rem; color:var(--accent); }
+  h4 { font-size:1rem; margin:1.3rem 0 .4rem; color:var(--ink); }
+  h3.benefits { color:var(--benefit); }
+  h3.problems { color:var(--problem); }
+
+  pre { background:#f5f3ef; border:1px solid var(--line); border-left:4px solid var(--accent);
+        border-radius:6px; padding:1rem 1.1rem; overflow-x:auto; margin:1.2rem 0;
+        font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.84rem; line-height:1.65; }
+
+  blockquote { margin:1.3rem 0; padding:.7rem 1.2rem; background:#eef1f6;
+               border-left:4px solid var(--accent); border-radius:0 6px 6px 0; }
+  blockquote p { margin:0; }
+
+  .eq { background:#fff; border:1px solid var(--line); border-radius:6px; padding:1rem 1.1rem;
+        margin:1.2rem 0; text-align:center; font-family:ui-monospace,Menlo,Consolas,monospace;
+        font-size:1rem; letter-spacing:.4px; }
+
+  .closing { margin-top:2.4rem; padding:1rem 1.3rem; background:#fff;
+             border:1px solid var(--line); border-radius:8px; }
+
+  .part-break { margin:3.5rem 0 0; border:none; border-top:3px solid var(--accent); }
+  h2.part { border-top:none; padding-top:1.4rem; font-size:1.45rem; color:var(--accent); }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Unified Multimodal Understanding and Generation — Architecture Summarization</h1>
+<p class="paper-meta">Paper: <em>Unified Multimodal Understanding and Generation Models: Advances, Challenges, and Opportunities</em> &middot;
+<a href="https://arxiv.org/pdf/2505.02567">arXiv:2505.02567</a>.
+Notes on Figure 5 &mdash; the architecture taxonomy, and how the conditioning works.</p>
+
+<p>Figure 5 is best read as a taxonomy of alternative designs&mdash;not a strict chronological sequence of upgrades. Each architecture makes a different trade-off between:</p>
+
+<ul>
+  <li>understanding what an image means;</li>
+  <li>preserving exactly what the image looks like;</li>
+  <li>generating language efficiently;</li>
+  <li>generating globally coherent, high-resolution images.</li>
+</ul>
+
+<h2>The central conflict</h2>
+
+<p>Text and images have very different structures:</p>
+
+<table>
+  <thead>
+    <tr><th>Text</th><th>Image</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Discrete tokens</td><td>Continuous, dense spatial signal</td></tr>
+    <tr><td>Naturally sequential</td><td>Strong 2-D global dependencies</td></tr>
+    <tr><td>Meaning is most important</td><td>Both meaning and pixel detail matter</td></tr>
+    <tr><td>Well suited to next-token AR prediction</td><td>Well suited to parallel denoising</td></tr>
+  </tbody>
+</table>
+
+<p>A second conflict is between image understanding and image reconstruction:</p>
+
+<ul>
+  <li>A semantic encoder such as CLIP/SigLIP learns that two visually different images can mean the same thing. This invariance helps reasoning.</li>
+  <li>A pixel encoder such as VAE/VQGAN must preserve color, position, texture, and shape so that the image can be reconstructed.</li>
+</ul>
+
+<p>In other words:</p>
+
+<blockquote>
+  <p>Understanding wants to discard irrelevant pixel details, while generation needs many of those details back.</p>
+</blockquote>
+
+<p>Most of Figure 5 is showing different solutions to this conflict.</p>
+
+<h2>What each block does</h2>
+
+<p>The components in the figure have distinct responsibilities:</p>
+
+<ul>
+  <li><strong>Text tokenizer:</strong> converts text into discrete language tokens.</li>
+  <li><strong>Pixel encoder:</strong> compresses an image into reconstructable visual codes.</li>
+  <li><strong>Semantic encoder:</strong> converts an image into language-aligned concepts.</li>
+  <li><strong>Learnable queries:</strong> select a small, task-relevant subset of visual information.</li>
+  <li><strong>MLLM/AR backbone:</strong> reasons and predicts sequentially.</li>
+  <li><strong>Diffusion component:</strong> generates or refines many image latents together.</li>
+  <li><strong>Pixel decoder:</strong> reconstructs pixels from sufficiently detailed visual codes.</li>
+  <li><strong>Diffusion decoder:</strong> generates an image conditioned on higher-level representations.</li>
+</ul>
+
+<h2>(a) Diffusion as the complete backbone</h2>
+
+<p>Here both text and image representations are corrupted and then jointly denoised.</p>
+
+<h3>Why it occurs:</h3>
+
+<p>Diffusion can use bidirectional context: every uncertain token or image region can be refined using information from the entire sample. This is natural for images because the left and right sides of an image must remain globally consistent.</p>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>Parallel refinement rather than strict left-to-right generation.</li>
+  <li>Strong global image composition.</li>
+  <li>Text and image can mutually condition each other during denoising.</li>
+  <li>The model can revise earlier uncertain predictions.</li>
+</ul>
+
+<h3 class="problems">Limitations:</h3>
+
+<ul>
+  <li>Text generation is less natural than with AR language models.</li>
+  <li>Multiple denoising steps can be expensive.</li>
+  <li>Discrete text diffusion lacks some mature AR features, including straightforward KV caching and end-of-sequence handling.</li>
+</ul>
+
+<p>The paper reports these benefits as synchronized multimodal generation and stronger cross-modal alignment, but also notes current efficiency and training difficulties. <a href="https://arxiv.org/pdf/2505.02567">Paper, Section 3.1</a></p>
+
+<h2>(b-1) AR model with pixel encoding</h2>
+
+<pre>image → VAE/VQGAN → visual tokens → AR model → visual tokens → pixel decoder
+text  → tokenizer ────────────────→ AR model → text tokens</pre>
+
+<p>The image becomes a sequence of codes, almost as if it were another language.</p>
+
+<h3>Why it occurs:</h3>
+
+<p>This is the simplest way to reuse an LLM architecture. Text and image tokens can be concatenated into one sequence and trained using the same next-token objective.</p>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>One backbone and one causal modeling framework.</li>
+  <li>Natural interleaved output: text → image → text.</li>
+  <li>Pixel tokens preserve reconstructable details.</li>
+  <li>A lightweight decoder is sufficient because the codes already contain pixel information.</li>
+  <li>Existing LLM training infrastructure can be reused.</li>
+</ul>
+
+<h3 class="problems">Problems:</h3>
+
+<ul>
+  <li>A high-resolution image can require thousands of tokens.</li>
+  <li>Sequentially generating those tokens is slow.</li>
+  <li>Reconstruction-trained tokens know texture and color, but may not represent concepts well.</li>
+  <li>Text–image alignment is therefore harder.</li>
+</ul>
+
+<p>This explains the move from pixel encoding toward semantic encoding. <a href="https://arxiv.org/pdf/2505.02567">Pixel-encoding discussion</a></p>
+
+<h2>(b-2) AR model with semantic encoding</h2>
+
+<pre>image → CLIP/SigLIP → semantic tokens → MLLM
+                                      ↓
+                              diffusion decoder → image</pre>
+
+<h3>Why the pixel encoder is replaced:</h3>
+
+<p>Pixel tokens are poor &ldquo;language.&rdquo; A semantic encoder is trained to map visual content closer to textual meaning&mdash;for example, making the visual representation of a dog close to the language concept &ldquo;dog.&rdquo;</p>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>Better visual question answering and reasoning.</li>
+  <li>Stronger text–image alignment.</li>
+  <li>Usually fewer, more informative tokens.</li>
+  <li>Easier for the LLM to use visual information compositionally.</li>
+  <li>Good semantic control of generated images.</li>
+</ul>
+
+<h3>Why a diffusion decoder is often added:</h3>
+
+<p>Semantic features are not invertible. A CLIP feature might retain &ldquo;a brown dog on grass&rdquo; but discard exact fur patterns and pixel positions. A simple pixel decoder cannot recover missing details. Diffusion supplies a learned image prior that fills in plausible texture, lighting, and geometry.</p>
+
+<h3 class="problems">Problems:</h3>
+
+<ul>
+  <li>Exact source-image details may be lost.</li>
+  <li>Poorer spatial correspondence and fine-grained editing.</li>
+  <li>The diffusion decoder may generate a plausible but slightly different image.</li>
+  <li>Separately trained semantic encoders and diffusion decoders can have representation mismatch.</li>
+</ul>
+
+<p>So this change improves meaning but weakens exact reconstruction. <a href="https://arxiv.org/pdf/2505.02567">Semantic-encoding discussion</a></p>
+
+<h2>(b-3) Learnable-query encoding</h2>
+
+<pre>dense image features + N learned queries
+                 ↓ cross-attention
+       N compact, content-aware tokens
+                 ↓
+               MLLM → diffusion decoder</pre>
+
+<h3>Why it occurs:</h3>
+
+<p>A fixed patch grid treats every region as equally important. Learnable queries instead act like information-seeking probes: one query may extract objects, another relations, another global layout.</p>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>Compresses a large image into a small number of tokens.</li>
+  <li>Tokens are content-dependent rather than fixed spatial patches.</li>
+  <li>Reduces the AR sequence length.</li>
+  <li>Can be trained jointly for semantic alignment and reconstruction.</li>
+  <li>Provides an interface between a frozen vision encoder and an LLM.</li>
+</ul>
+
+<h3 class="problems">Problems:</h3>
+
+<ul>
+  <li>A small fixed query set becomes an information bottleneck.</li>
+  <li>Complex scenes may contain more information than the queries can capture.</li>
+  <li>Increasing the number of queries increases attention and memory cost.</li>
+  <li>Frozen encoders may not adapt sufficiently to new tasks.</li>
+</ul>
+
+<p>It is therefore a learned compromise between dense pixel tokens and highly abstract global semantic features. <a href="https://arxiv.org/pdf/2505.02567">Learnable-query discussion</a></p>
+
+<h2>(b-4) Pseudo-hybrid encoding</h2>
+
+<pre>understanding task: image → semantic encoder → MLLM
+generation task:    image → pixel encoder    → MLLM → image decoder</pre>
+
+<h3>Why two encoders appear:</h3>
+
+<p>No single encoder is currently optimal for both understanding and reconstruction. Models such as Janus therefore &ldquo;decouple&rdquo; the pathways:</p>
+
+<ul>
+  <li>semantic features for understanding;</li>
+  <li>pixel codes for generation.</li>
+</ul>
+
+<p>Only the appropriate branch is normally active for a task.</p>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>Each task gets a specialized representation.</li>
+  <li>Less destructive interference between understanding and generation objectives.</li>
+  <li>Can reuse strong pretrained encoders and decoders.</li>
+  <li>Modular and comparatively easy to train.</li>
+  <li>Only one encoder may need to run at inference time.</li>
+</ul>
+
+<h3 class="problems">Problems:</h3>
+
+<ul>
+  <li>It is only partially unified.</li>
+  <li>Generation may not directly benefit from the semantic encoder.</li>
+  <li>Understanding may not have access to fine visual details.</li>
+  <li>Knowledge learned in one pathway may not fully transfer to the other.</li>
+</ul>
+
+<p>This architecture exists mainly because specialization is currently easier and more stable than forcing one visual representation to do everything.</p>
+
+<h2>(b-5) Joint-hybrid encoding</h2>
+
+<pre>             ┌→ semantic encoder → semantic tokens ┐
+image ───────┤                                    ├→ MLLM
+             └→ pixel encoder    → pixel tokens ───┘</pre>
+
+<p>This is the stronger form of hybrid encoding: both types of information are available simultaneously.</p>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>Semantic tokens supply objects, relationships, and language alignment.</li>
+  <li>Pixel tokens supply position, texture, color, and identity.</li>
+  <li>Better suited to image editing, where the instruction must be understood while unchanged regions must be preserved.</li>
+  <li>Potentially improves both prompt adherence and visual fidelity.</li>
+  <li>Can support either pixel or diffusion decoders.</li>
+</ul>
+
+<h3 class="problems">Problems:</h3>
+
+<ul>
+  <li>Longer sequences and greater memory consumption.</li>
+  <li>Redundant information between two token streams.</li>
+  <li>The representations may disagree.</li>
+  <li>Fusion along the sequence or channel dimension requires careful alignment.</li>
+  <li>Training signals from understanding and generation can conflict.</li>
+</ul>
+
+<p>Thus, joint hybrid encoding is more expressive but considerably more difficult and expensive. <a href="https://arxiv.org/pdf/2505.02567">Hybrid-encoding discussion</a></p>
+
+<h2>(c-1) Fused AR + diffusion with pixel encoding</h2>
+
+<pre>text:  causal AR next-token prediction
+image: bidirectional diffusion/flow denoising
+                 ↑
+       shared or connected backbone</pre>
+
+<p>This is one of the most important architectural changes.</p>
+
+<h3>Why it occurs:</h3>
+
+<p>Generating an image patch-by-patch with AR modeling is analogous to painting an image permanently from the top-left corner to the bottom-right. Early mistakes cannot easily be revised, and distant areas cannot coordinate during generation.</p>
+
+<p>Diffusion instead updates the entire visual latent grid repeatedly. Meanwhile, text remains autoregressive because sequential generation works extremely well for language.</p>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>Preserves the reasoning and language abilities of a pretrained LLM.</li>
+  <li>Produces images non-sequentially with stronger global coherence.</li>
+  <li>Continuous VAE latents preserve more nuance than a small discrete codebook.</li>
+  <li>Text can provide symbolic planning and control while diffusion handles rendering.</li>
+  <li>One transformer may share higher-level knowledge across both objectives.</li>
+</ul>
+
+<p>Typically the model uses:</p>
+
+<ul>
+  <li>causal attention and cross-entropy loss for text;</li>
+  <li>bidirectional attention and denoising/flow loss for images.</li>
+</ul>
+
+<h3 class="problems">Problems:</h3>
+
+<ul>
+  <li>Multiple image-denoising steps increase latency.</li>
+  <li>Pixel latents still do not align naturally with language semantics.</li>
+  <li>Balancing AR and diffusion losses is difficult.</li>
+  <li>Shared parameters can experience conflicting gradients.</li>
+</ul>
+
+<p>The paper describes this as an effective trade-off between symbolic control and visual fidelity. <a href="https://arxiv.org/pdf/2505.02567">Fused AR–diffusion discussion</a></p>
+
+<h2>(c-2) Fused AR + diffusion with hybrid encoding</h2>
+
+<p>This combines both major solutions:</p>
+
+<pre>semantic representation → understanding/reasoning
+pixel representation    → detailed image state
+AR process              → language and planning
+diffusion/flow process  → globally coherent rendering</pre>
+
+<h3 class="benefits">Benefits:</h3>
+
+<ul>
+  <li>Strong language reasoning from AR.</li>
+  <li>Strong image generation from diffusion.</li>
+  <li>Language-aligned visual understanding from semantic features.</li>
+  <li>High-fidelity reconstruction and editing from pixel features.</li>
+  <li>Potentially the best architecture for &ldquo;look at this image, reason about it, and generate an accurately edited version.&rdquo;</li>
+</ul>
+
+<h3 class="problems">Costs:</h3>
+
+<ul>
+  <li>Two encoders plus two kinds of generative objectives.</li>
+  <li>Highest training and inference complexity.</li>
+  <li>Hard alignment between semantic and pixel representations.</li>
+  <li>More data and careful optimization are required.</li>
+  <li>Improvements to generation can sometimes reduce understanding performance, or vice versa.</li>
+</ul>
+
+<h2>The overall design progression</h2>
+
+<p>The architectural motivation can be summarized as:</p>
+
+<pre>AR + pixel tokens
+    │ solves: one unified sequence
+    │ problem: weak semantics and slow image generation
+    ▼
+AR + semantic tokens
+    │ solves: understanding and language alignment
+    │ problem: loses exact visual detail
+    ▼
+learnable queries / dual encoders
+    │ solves: compression or task specialization
+    │ problem: bottlenecks or incomplete sharing
+    ▼
+joint hybrid encoding
+    │ solves: meaning + detail
+    │ problem: cost and representation alignment
+    ▼
+AR + diffusion hybrid
+      assigns each modality its most suitable generator:
+      AR for language, diffusion for images</pre>
+
+<p>The key takeaway is that these changes do not simply add more modules for their own sake. Every added branch repairs a specific information loss:</p>
+
+<ul>
+  <li>semantic encoder repairs poor language alignment;</li>
+  <li>pixel encoder repairs loss of visual detail;</li>
+  <li>learnable queries repair excessive token length;</li>
+  <li>diffusion decoder repairs the inability to reconstruct pixels from semantic features;</li>
+  <li>AR + diffusion fusion repairs the mismatch between sequential language generation and spatial image generation.</li>
+</ul>
+
+<div class="closing">
+  <p>There is currently no universally best architecture. For multimodal reasoning, semantic AR designs can be preferable; for exact editing and high-quality generation, hybrid AR–diffusion designs are generally more suitable, despite their additional cost.</p>
+</div>
+
+<hr class="part-break">
+
+<h2 class="part">How the conditioning works</h2>
+
+<p>The diffusion decoder generates an image, while the learnable-query outputs tell it <em>what</em> image to generate.</p>
+
+<p>The key is that the conditioning source depends on the task.</p>
+
+<h2>Inside the diffusion decoder</h2>
+
+<p>At diffusion step <em>t</em>:</p>
+
+<div class="eq">ε̂ = ε<sub>θ</sub>( z<sub>t</sub>, &nbsp;t, &nbsp;C )</div>
+
+<p>where:</p>
+
+<ul>
+  <li><strong>z<sub>t</sub></strong>: the current noisy image latent;</li>
+  <li><strong>t</strong>: diffusion timestep;</li>
+  <li><strong>C</strong>: conditioning tokens;</li>
+  <li><strong>ε̂</strong>: predicted noise to remove.</li>
+</ul>
+
+<p>Here, <strong>C</strong> can be the compact tokens produced from the learnable queries.</p>
+
+<p>The cross-attention direction is now reversed compared with the encoder:</p>
+
+<p>Diffusion decoder:</p>
+
+<pre>noisy image-latent tokens → Queries (Q)
+conditioning tokens       → Keys and Values (K, V)</pre>
+
+<p>So each noisy image patch asks:</p>
+
+<blockquote>
+  <p>&ldquo;What visual content should I construct here, given these semantic conditions?&rdquo;</p>
+</blockquote>
+
+<h2>Case 1: Reconstructing an input image</h2>
+
+<p>During tokenizer/decoder training:</p>
+
+<pre>Original image
+    ├→ semantic vision encoder
+    │       ↓
+    │  dense visual features
+    │       ↓ learned queries attend to features
+    │  compact semantic tokens C
+    │
+    └→ VAE encoder → clean latent z₀ → add noise → zₜ
+
+Diffusion decoder(zₜ, timestep t, condition C)
+                       ↓
+              reconstructed image</pre>
+
+<p>The conditioning represents the original image&rsquo;s content:</p>
+
+<ul>
+  <li>which objects are present;</li>
+  <li>their approximate appearance;</li>
+  <li>spatial relationships;</li>
+  <li>scene composition.</li>
+</ul>
+
+<p>The noisy latent supplies the image state being denoised. The compact query tokens guide what that state should become.</p>
+
+<p>During training, the target is normally the same original image. This teaches the decoder:</p>
+
+<blockquote>
+  <p>&ldquo;Given these semantic tokens, generate an image that matches their content.&rdquo;</p>
+</blockquote>
+
+<h2>Case 2: Text-to-image generation</h2>
+
+<p>At inference there is no input image to encode. Instead, the MLLM predicts image-conditioning tokens from the text:</p>
+
+<pre>"A red car beside a lake"
+            ↓
+           MLLM
+            ↓
+predicted visual-conditioning tokens Ĉ
+            ↓
+random-noise image latent z_T
+            ↓
+diffusion decoder conditioned on Ĉ
+            ↓
+generated image</pre>
+
+<p>So the flow is:</p>
+
+<div class="eq">text &nbsp;→&nbsp; MLLM &nbsp;→&nbsp; Ĉ &nbsp;→&nbsp; diffusion decoder &nbsp;→&nbsp; image</div>
+
+<p>The MLLM does not need to predict every pixel. It predicts a compact &ldquo;semantic plan&rdquo; for the image, while diffusion performs the detailed rendering.</p>
+
+<p>The conditioning might communicate something like:</p>
+
+<pre>object:       red car
+location:     foreground
+background:   lake
+lighting:     sunset
+relationship: car beside lake</pre>
+
+<p>These are not necessarily explicit human-readable fields&mdash;they are learned vectors containing that information.</p>
+
+<h2>Case 3: Image editing</h2>
+
+<p>For editing, the condition can combine several sources:</p>
+
+<pre>Source image → query tokens ────────┐
+                                    ├→ MLLM → conditioning C
+Editing instruction: "make it blue" ┘
+
+Source image latent/noisy latent ─────→ diffusion decoder
+Condition C ──────────────────────────→ diffusion decoder
+                                         ↓
+                                    edited image</pre>
+
+<p>Here:</p>
+
+<ul>
+  <li>source-image query tokens describe what is in the original image;</li>
+  <li>text describes the requested change;</li>
+  <li>the source VAE latent may preserve exact spatial and pixel information;</li>
+  <li>diffusion produces the edited result.</li>
+</ul>
+
+<p>The exact inputs vary by model. Some models condition only on semantic tokens; stronger editing systems often also provide source-image latents, masks, or other spatial controls.</p>
+
+<h2>Two different cross-attention operations</h2>
+
+<p>This is the part that can be confusing:</p>
+
+<h4>1. Visual compression</h4>
+
+<pre>Learned queries Q
+      cross-attend to
+dense source-image features K,V
+             ↓
+compact visual tokens C</pre>
+
+<p>The learned queries extract information <em>from</em> an image.</p>
+
+<h4>2. Diffusion generation</h4>
+
+<pre>Noisy image-latent patches Q
+      cross-attend to
+compact conditioning tokens C as K,V
+             ↓
+conditioned image-latent patches</pre>
+
+<p>The diffusion model uses that extracted&mdash;or MLLM-predicted&mdash;information to construct an image.</p>
+
+<p>So the compact tokens sit between the two attentions:</p>
+
+<pre>source-image features
+        ↓
+[learnable queries extract information]
+        ↓
+compact visual tokens C
+        ↓
+[diffusion image latents attend to C]
+        ↓
+generated/reconstructed image</pre>
+
+<p>The condition is therefore not always an input image. It is a learned representation of the <em>desired</em> image:</p>
+
+<ul>
+  <li>derived from an image during reconstruction;</li>
+  <li>predicted from text during text-to-image generation;</li>
+  <li>derived jointly from an image and instruction during editing.</li>
+</ul>
+
+</body>
+</html>
