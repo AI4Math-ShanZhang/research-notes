@@ -85,6 +85,9 @@
     .rail-note { position: absolute; left: 22px; right: 22px; bottom: 24px; color: var(--muted-2); font: 10px/1.5 var(--mono); }
     .rail-back { display: inline-block; margin-bottom: 18px; color: var(--muted); text-decoration: none; font: 11px var(--mono); letter-spacing: .06em; }
     .rail-back:hover { color: var(--cyan); }
+    .rail-sibling { display: block; margin-top: 16px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); text-decoration: none; font: 10px/1.5 var(--mono); }
+    .rail-sibling:hover { color: var(--ink); border-color: var(--line-hot); }
+    .rail-sibling b { display: block; color: var(--cyan); font-weight: 600; }
 
     main { min-width: 0; }
     .content { width: min(var(--max), calc(100% - 64px)); margin: 0 auto; padding: 72px 0 120px; }
@@ -293,6 +296,7 @@
         <a href="#decoders" data-index="08">Outputs</a>
         <a href="#source-map" data-index="09">Code map</a>
       </nav>
+      <a class="rail-sibling" href="cosmos3-model-qa.html"><b>Six questions resolved</b>Follow-up Q&amp;A: modality_embed, sound, LIBERO rotations, mRoPE, the 15,000 margin.</a>
       <p class="rail-note">UPSTREAM TRACE · LOCAL CHECKOUT<br>Important excerpts only. Each source marker names the file and line it came from in the local checkout.</p>
     </aside>
 
