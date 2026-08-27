@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Six code-linked answers about Cosmos3 modality embeddings, sound, LIBERO actions, 3D mRoPE, and temporal offsets.">
-  <title>Cosmos3 · Six Questions Resolved</title>
+  <meta name="description" content="Seven code-linked answers about Cosmos3 modality embeddings, sound, LIBERO actions, 3D mRoPE, temporal offsets, and the two visual encoding paths.">
+  <title>Cosmos3 · Questions Resolved</title>
   <style>
     :root {
       color-scheme: dark;
@@ -238,6 +238,22 @@
 
     .footer { padding-top: 35px; border-top: 1px solid var(--line); color: var(--faint); font: 9px var(--mono); }
 
+    .equation.diagram { white-space: pre; line-height: 1.55; }
+    .stack { display: grid; gap: 6px; margin-top: 13px; }
+    .stack .step { padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; background: rgba(5,11,13,.58); }
+    .stack .step b { display: block; font-size: 12.5px; }
+    .stack .step small { display: block; margin-top: 3px; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+    .stack .step code { color: var(--cyan); font-size: 10px; }
+    .stack .down { color: var(--cyan); text-align: center; font: 10px var(--mono); }
+    .stack.warm .step code { color: var(--amber); }
+    .stack.warm .down { color: var(--amber); }
+    .merge { margin-top: 15px; padding: 20px 22px; border: 1px solid #31534f; border-radius: 13px; background: linear-gradient(120deg, rgba(120,232,210,.08), rgba(16,25,29,.9) 60%); text-align: center; }
+    .merge b { display: block; font-size: 15px; }
+    .merge small { display: block; margin-top: 6px; color: var(--muted); font-size: 11.5px; }
+    .path-title { display: flex; align-items: baseline; gap: 9px; }
+    .path-title b { font-size: 14px; }
+    .path-title span { color: var(--faint); font: 9px var(--mono); }
+
     @media (max-width: 980px) {
       html { scroll-padding-top: 112px; }
       .layout { display: block; }
@@ -287,22 +303,24 @@
         <a class="chapter-link" href="#action-roundtrip" data-no="06">back to LIBERO</a>
         <a class="chapter-link" href="#mrope" data-no="07">3D mRoPE</a>
         <a class="chapter-link" href="#temporal-offset" data-no="08">temporal_offset</a>
+        <a class="chapter-link" href="#dual-visual-paths" data-no="09">two visual paths</a>
       </nav>
-      <a class="rail-sibling" href="cosmos3-model-architecture.html"><b>Architecture field guide</b>The full pipeline these six questions come from.</a>
-      <p class="rail-foot">Six answers only.<br>Source markers name files in the local<br><code>third_party/cosmos-framework</code> checkout.</p>
+      <a class="rail-sibling" href="cosmos3-model-architecture.html"><b>Architecture field guide</b>The full pipeline these questions come from.</a>
+      <p class="rail-foot">Seven answers only.<br>Source markers name files in the local<br><code>third_party/cosmos-framework</code> checkout.</p>
     </aside>
 
     <main>
       <div class="content">
         <header class="hero">
-          <span class="kicker">Questions 02 · 03 · 04 · 06 · 07 · 08 · <a href="https://arxiv.org/abs/2606.02800" style="color:var(--cyan)">arXiv:2606.02800</a></span>
-          <h1>Six questions,<br><span>resolved in code.</span></h1>
-          <p class="hero-copy">A focused record of the Cosmos3 topics we kept returning to: modality identity, sound samples, LIBERO rotations, Qwen’s rotary coordinates, and the 15,000-position boundary.</p>
+          <span class="kicker">Questions 02 · 03 · 04 · 06 · 07 · 08 · 09 · <a href="https://arxiv.org/abs/2606.02800" style="color:var(--cyan)">arXiv:2606.02800</a></span>
+          <h1>Seven questions,<br><span>resolved in code.</span></h1>
+          <p class="hero-copy">A focused record of the Cosmos3 topics we kept returning to: modality identity, sound samples, LIBERO rotations, Qwen’s rotary coordinates, the 15,000-position boundary, and the two separate visual encoders inside one policy.</p>
           <div class="hero-ledger" aria-label="Page scope">
             <span><b>input</b> waveform</span>
             <span><b>representation</b> 7D / 10D / 13D</span>
             <span><b>attention</b> Q/K rotary</span>
             <span><b>alignment</b> temporal offset</span>
+            <span><b>encoders</b> SigLIP2 + Wan VAE</span>
           </div>
         </header>
 
@@ -718,7 +736,173 @@ vision_start_temporal_offset = seq_builder.mrope_temporal_offset</code></pre>
           </div>
         </section>
 
-        <footer class="footer">Focused scope: questions 02, 03, 04, 06, 07, and 08 only · standalone HTML · no external dependencies</footer>
+        <section class="topic" id="dual-visual-paths">
+          <div class="topic-head">
+            <div><span class="topic-no">09 / TWO VISUAL ENCODERS</span><h2>Why does one video go through SigLIP2 and another through Wan VAE?</h2></div>
+            <p class="question">The support demonstration and the live camera frame are both images. Why are they encoded by different models, and where do they meet?</p>
+          </div>
+
+          <div class="answer">
+            <strong>Direct answer.</strong> The two videos have two different jobs. The DROID support video is there to be <em>understood</em>, so it goes through <strong>SigLIP2</strong> and becomes semantic tokens in the AR context. The live RoboLab observation is there to be <em>continued</em>, so it goes through the <strong>Wan VAE</strong> and becomes a latent the model can denoise into future frames and actions. They are never concatenated into one video; they meet only inside the unified Cosmos transformer.
+          </div>
+
+          <div class="equation diagram" aria-label="Complete visual architecture">   DROID SUPPORT VIDEO                LIVE ROBOLAB QUERY
+   many frames sampled at 4 FPS       one current observation
+            │                                  │
+            ▼                                  ▼
+   three-view composition             three-view composition
+   ┌──────────┬───────────┐           ┌──────────┬───────────┐
+   │        <span class="cyan">wrist</span>         │           │        <span class="amber">wrist</span>         │
+   ├──────────┼───────────┤           ├──────────┼───────────┤
+   │<span class="cyan">exterior_1</span>│<span class="cyan">exterior_2</span> │           │<span class="amber">shoulder_L</span>│<span class="amber">shoulder_R</span> │
+   └──────────┴───────────┘           └──────────┴───────────┘
+            │                                  │
+            ▼                                  ▼
+   <span class="cyan">support video [3,T,H,W]</span>            <span class="amber">current image [3,H,W]</span>
+            │                                  │
+            ▼                                  ▼
+        <span class="cyan">SigLIP2</span>                        <span class="amber">Wan VAE encoder</span>
+   understanding encoder              generative video tokenizer
+            │                                  │
+            ▼                                  ▼
+   semantic visual tokens             clean current latent z0
+   + support caption tokens           + noisy future latents z1–z8
+            │                                  │
+            └────────────────┬─────────────────┘
+                             ▼
+                 <span class="violet">Cosmos unified transformer</span>
+                             │
+                 ┌───────────┴───────────┐
+                 ▼                       ▼
+          generated actions      future video latents
+              [32,8]                     │
+                                         ▼
+                                   Wan VAE decoder
+                                         │
+                                         ▼
+                                32 future RGB frames</div>
+
+          <div class="split">
+            <div class="panel panel-pad">
+              <div class="path-title"><b>1 · Support-video SigLIP2 path</b><span>UNDERSTANDING</span></div>
+              <div class="stack">
+                <div class="step"><code>15 FPS → 4 FPS</code><b>Temporal sampling</b><small>The raw DROID episode is about 15 FPS. Preprocessing samples it down to 4 FPS and keeps the first and last frame. For the running example: 229 frames become 62.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>[3, 62, 540, 640]</code><b>Three-view composition</b><small>Each sampled timestamp becomes one composite frame: wrist on top, exterior_1 and exterior_2 below.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>do_sample_frames: False</code><b>All 62 frames enter SigLIP2</b><small>The processor is told not to sample again, so nothing is dropped a second time.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>video_grid_thw</code><b>Semantic visual embeddings</b><small>SigLIP2 resizes, builds spatial/temporal patches, and runs its vision transformer. It has no temporal attention of its own — order survives through the grid metadata, FPS, and 3D mRoPE in the later transformer.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>encoded[indexes] = …</code><b>Inserted into the AR stream</b><small>The embeddings replace the video-placeholder tokens in the support prompt, next to the caption tokens.</small></div>
+              </div>
+            </div>
+
+            <div class="panel panel-pad">
+              <div class="path-title"><b>2 · Live-query Wan VAE path</b><span>GENERATION</span></div>
+              <div class="stack warm">
+                <div class="step"><code>[3, 540, 640]</code><b>One composite frame</b><small>The same three-view layout, but only the current timestamp: wrist, shoulder-left, shoulder-right.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>zeros(3, 33, H, W)</code><b>33-frame WAM container</b><small>Frame 0 holds the real observation; frames 1–32 are future-generation placeholders. The zero pixels are containers, not the diffusion noise.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>48ch · 16× space · 4× time</code><b>Wan VAE encode</b><small>At inference the causal-prefix optimization encodes only frame 0, giving the clean latent z0.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>33 frames → 9 latents</code><b>Nine temporal positions</b><small>z0 covers frame 0, z1 covers frames 1–4, … z8 covers frames 29–32.</small></div>
+                <div class="down">↓</div>
+                <div class="step"><code>z1–z8 ~ N(0, I)</code><b>Future positions get noise</b><small>z0 stays clean as conditioning. The 48 is the latent channel count, not a frame count.</small></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel panel-pad" style="margin-top:15px">
+            <span class="label">3 · WAM joint generation inside the transformer</span>
+            <div class="split" style="margin-top:13px">
+              <div>
+                <dl class="facts">
+                  <div class="fact"><dt>AR / text</dt><dd>Support-video SigLIP2 tokens + support caption and task tokens.</dd></div>
+                  <div class="fact"><dt>vision-gen</dt><dd>Clean current latent z0 + noisy future latents z1–z8.</dd></div>
+                  <div class="fact"><dt>action</dt><dd>Current joint and gripper state + noisy future action positions.</dd></div>
+                  <div class="fact"><dt>patching</dt><dd>2×2 latent cells × 48 channels = 192D per vision patch, projected by <code>vae2llm</code> into the shared hidden size.</dd></div>
+                </dl>
+              </div>
+              <div>
+                <div class="equation" style="white-space:normal">every rectified-flow step predicts<br><span class="cyan">future-video latent velocity</span> <span class="violet">+</span> <span class="amber">future-action velocity</span><br>together, in the same forward pass</div>
+                <p class="note" style="margin:13px 0 0">The action head emits <code>[32, 8]</code> — 32 steps of 7 robot joints plus 1 gripper. The vision head emits <code>[48, 9, H_lat, W_lat]</code>; sending it through the Wan decoder gives 33 RGB frames, and dropping frame 0 leaves the 32 predicted future frames. The policy server usually needs only the actions, so decoding the video is optional.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="difference">
+            <article class="panel">
+              <span class="label">Not this</span>
+              <h3 style="margin-top:10px">One long Wan sequence</h3>
+              <ul><li>support video + current frame + 32 future frames.</li><li>All pushed through the Wan VAE together.</li><li>Would waste generative capacity on frames nobody needs to reconstruct.</li></ul>
+            </article>
+            <div class="versus">≠</div>
+            <article class="panel">
+              <span class="label">This</span>
+              <h3 style="margin-top:10px">Two encoders, one transformer</h3>
+              <ul><li>Support video → SigLIP2 → AR context tokens.</li><li>Current frame → Wan VAE → WAM vision tokens.</li><li>They meet as separate streams inside the Cosmos transformer, with text and robot state.</li></ul>
+            </article>
+          </div>
+
+          <div class="panel panel-pad" style="margin-top:15px; overflow-x:auto">
+            <span class="label">Encoder comparison</span>
+            <table style="margin-top:12px">
+              <thead><tr><th>Property</th><th>SigLIP2 support path</th><th>Wan VAE WAM path</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Input</strong></td><td>Complete support video</td><td>Current query frame</td></tr>
+                <tr><td><strong>Frames used</strong></td><td>All frames sampled to 4 FPS</td><td>Current frame only</td></tr>
+                <tr><td><strong>Main purpose</strong></td><td>Semantic understanding / in-context learning</td><td>Generative reconstruction and prediction</td></tr>
+                <tr><td><strong>Output</strong></td><td>Semantic visual tokens</td><td>48-channel latent grid</td></tr>
+                <tr><td><strong>Temporal compression</strong></td><td>No Wan-style 4× compression</td><td>4× temporal compression</td></tr>
+                <tr><td><strong>Can reconstruct pixels?</strong></td><td>No</td><td>Yes, through the Wan decoder</td></tr>
+                <tr><td><strong>Position information</strong></td><td><code>video_grid_thw</code> + multimodal RoPE</td><td>3D latent grid positions / mRoPE</td></tr>
+                <tr><td><strong>Role in the policy</strong></td><td>Demonstration context</td><td>Current state and future rollout</td></tr>
+                <tr><td><strong>Recomputed each chunk?</strong></td><td>Cached by <code>(support_id, caption)</code>, then reinserted</td><td>Freshly encoded every step</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="code-grid">
+            <article class="code-card">
+              <div class="code-bar"><span>policy server · support frames → processor</span></div>
+              <pre><code>frames = [
+    Image.fromarray(frame.permute(1, 2, 0).numpy())
+    <span class="kw">for</span> frame <span class="kw">in</span> support_video.permute(1, 0, 2, 3)
+]
+<span class="cm"># the 4-FPS sampling already happened; do not sample again</span>
+processor_kwargs = {<span class="st">"do_sample_frames"</span>: <span class="kw">False</span>}</code></pre>
+            </article>
+            <article class="code-card">
+              <div class="code-bar"><span>policy server · SigLIP2 embeddings → AR stream</span></div>
+              <pre><code>embeddings, _, _, position_ids, _ = prepare_multimodal_reasoner_inputs(
+    language_model,
+    input_ids=input_ids,
+    pixel_values_videos=processor_inputs[<span class="st">"pixel_values_videos"</span>],
+    video_grid_thw=processor_inputs[<span class="st">"video_grid_thw"</span>],
+)
+<span class="cm"># splice the cached support context into the packed sequence</span>
+encoded[indexes] = context.embeddings</code></pre>
+            </article>
+            <article class="code-card">
+              <div class="code-bar"><span>policy server · 33-frame WAM container</span></div>
+              <pre><code>video = torch.zeros((3, 33, H, W), dtype=torch.uint8)
+video[:, 0] = current_composite
+<span class="cm"># frame 0    = real current observation</span>
+<span class="cm"># frames 1–32 = future-generation placeholders</span></code></pre>
+            </article>
+            <article class="code-card">
+              <div class="code-bar"><span>cosmos3_vfm_network.py · vision patches → hidden size</span></div>
+              <pre><code><span class="cm"># 2×2 latent cells × 48 channels = 192D per vision patch</span>
+packed_tokens = self.vae2llm(packed_patches)</code></pre>
+            </article>
+          </div>
+
+          <p class="warning"><strong>One sentence to keep:</strong> SigLIP2 reads the demonstration so the model knows <em>what task this is</em>; Wan VAE reads the live frame so the model can <em>roll the world forward</em> and emit the next 32 actions.</p>
+        </section>
+
+        <footer class="footer">Focused scope: questions 02, 03, 04, 06, 07, 08, and 09 only · standalone HTML · no external dependencies</footer>
       </div>
     </main>
   </div>
