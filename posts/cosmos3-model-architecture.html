@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Code-linked visual guide to the Cosmos3 multimodal model architecture.">
+  <title>Cosmos3 · Architecture Field Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #e8edf0;
+      --muted: #8c9aa1;
+      --muted-2: #5f6e75;
+      --paper: #091012;
+      --panel: #0d171a;
+      --panel-2: #111e22;
+      --line: #233238;
+      --line-hot: #3d565f;
+      --cyan: #78e4d1;
+      --cyan-dim: #214f4c;
+      --amber: #f6bc6d;
+      --amber-dim: #553f24;
+      --violet: #b9a5ff;
+      --violet-dim: #40366f;
+      --red: #ff8e83;
+      --blue: #7ab6ff;
+      --max: 1180px;
+      --radius: 16px;
+      --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 80% 8%, rgba(120, 228, 209, .08), transparent 28rem),
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px),
+        var(--paper);
+      background-size: auto, 28px 28px, 28px 28px, auto;
+      font-family: var(--sans);
+      line-height: 1.62;
+    }
+
+    a { color: inherit; }
+    button { font: inherit; }
+    ::selection { background: var(--cyan); color: #061110; }
+
+    .shell { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: 100vh; }
+    .rail {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 28px 22px;
+      border-right: 1px solid var(--line);
+      background: rgba(7, 13, 15, .88);
+      backdrop-filter: blur(16px);
+      z-index: 10;
+    }
+
+    .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 34px; }
+    .brand-mark {
+      width: 32px; height: 32px; border: 1px solid var(--cyan-dim); border-radius: 50%;
+      display: grid; place-items: center; color: var(--cyan); font: 700 13px var(--mono);
+      box-shadow: inset 0 0 0 5px rgba(120,228,209,.04), 0 0 24px rgba(120,228,209,.1);
+    }
+    .brand strong { display: block; font-size: 14px; letter-spacing: .04em; }
+    .brand small { display: block; color: var(--muted); font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+
+    nav { display: grid; gap: 5px; }
+    nav a {
+      position: relative; padding: 8px 10px 8px 28px; border-radius: 8px;
+      color: var(--muted); text-decoration: none; font-size: 13px; transition: .18s ease;
+    }
+    nav a::before {
+      content: attr(data-index); position: absolute; left: 8px; top: 9px;
+      color: var(--muted-2); font: 10px var(--mono);
+    }
+    nav a:hover, nav a.active { color: var(--ink); background: rgba(120,228,209,.07); }
+    nav a.active::before { color: var(--cyan); }
+    .rail-note { position: absolute; left: 22px; right: 22px; bottom: 24px; color: var(--muted-2); font: 10px/1.5 var(--mono); }
+    .rail-back { display: inline-block; margin-bottom: 18px; color: var(--muted); text-decoration: none; font: 11px var(--mono); letter-spacing: .06em; }
+    .rail-back:hover { color: var(--cyan); }
+
+    main { min-width: 0; }
+    .content { width: min(var(--max), calc(100% - 64px)); margin: 0 auto; padding: 72px 0 120px; }
+
+    .eyebrow { color: var(--cyan); font: 11px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 920px; margin: 14px 0 22px; font-size: clamp(44px, 7.2vw, 92px); line-height: .94; letter-spacing: -.065em; font-weight: 650; }
+    h1 span { color: var(--muted-2); }
+    h2 { margin-bottom: 14px; font-size: clamp(28px, 4vw, 44px); line-height: 1.05; letter-spacing: -.04em; font-weight: 620; }
+    h3 { margin-bottom: 8px; font-size: 17px; letter-spacing: -.015em; }
+    .lede { max-width: 820px; color: #b5c0c5; font-size: clamp(17px, 2vw, 21px); line-height: 1.55; }
+    .quiet { color: var(--muted); }
+    .micro { color: var(--muted); font: 11px/1.55 var(--mono); }
+
+    .hero { padding-bottom: 76px; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 30px; }
+    .chip { border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px; background: rgba(13,23,26,.75); color: var(--muted); font: 11px var(--mono); }
+    .chip b { color: var(--ink); font-weight: 600; }
+
+    .section { padding: 76px 0; border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 420px); gap: 46px; align-items: end; margin-bottom: 34px; }
+    .section-head p { margin: 0; color: var(--muted); }
+    .section-no { display: block; margin-bottom: 12px; color: var(--cyan); font: 11px var(--mono); letter-spacing: .12em; }
+
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, rgba(18,31,35,.9), rgba(10,18,20,.92)); box-shadow: 0 22px 60px rgba(0,0,0,.18); }
+    .panel-pad { padding: 24px; }
+    .callout { padding: 18px 20px; border-left: 3px solid var(--amber); border-radius: 0 10px 10px 0; background: rgba(246,188,109,.07); color: #d8d0c4; }
+    .callout strong { color: var(--amber); }
+    .callout.cyan { border-color: var(--cyan); background: rgba(120,228,209,.055); }
+    .callout.cyan strong { color: var(--cyan); }
+
+    .system-map { padding: 18px; overflow-x: auto; }
+    .pipeline { min-width: 930px; display: grid; grid-template-columns: 1fr 34px 1.15fr 34px 1.25fr 34px 1fr; gap: 8px; align-items: stretch; }
+    .pipe-stage { position: relative; min-height: 144px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: rgba(6,12,14,.6); }
+    .pipe-stage .tag { color: var(--cyan); font: 10px var(--mono); letter-spacing: .12em; }
+    .pipe-stage h3 { margin: 10px 0 6px; }
+    .pipe-stage p { margin: 0; color: var(--muted); font-size: 12px; }
+    .pipe-arrow { display: grid; place-items: center; color: var(--cyan); font-size: 22px; }
+    .stream-line { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
+    .stream-line span { padding: 3px 6px; border-radius: 5px; background: var(--cyan-dim); color: #b8fff2; font: 9px var(--mono); }
+
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .encoder-card { padding: 22px; min-height: 250px; }
+    .encoder-card .icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; margin-bottom: 24px; background: var(--cyan-dim); color: var(--cyan); font: 12px var(--mono); }
+    .encoder-card:nth-child(2) .icon { background: var(--violet-dim); color: var(--violet); }
+    .encoder-card:nth-child(3) .icon { background: var(--amber-dim); color: var(--amber); }
+    .encoder-card:nth-child(4) .icon { background: #263a62; color: var(--blue); }
+    .shape { display: inline-block; padding: 5px 8px; margin: 5px 4px 0 0; border: 1px solid var(--line); border-radius: 6px; color: #c3cdd1; background: rgba(0,0,0,.18); font: 10px var(--mono); }
+    .mini-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 16px 0 0; color: var(--muted); font: 10px var(--mono); }
+    .mini-flow b { color: var(--ink); font-weight: 500; }
+    .mini-flow i { color: var(--cyan); font-style: normal; }
+
+    .source-card { margin-top: 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #071012; }
+    .source-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 13px; border-bottom: 1px solid var(--line); background: #0c1518; }
+    .source-bar span { color: var(--muted); font: 10px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .source-link { flex: 0 0 auto; color: var(--cyan); text-decoration: none; font: 10px var(--mono); }
+    .source-link:hover { text-decoration: underline; }
+    pre { margin: 0; padding: 16px; overflow-x: auto; color: #c9d5d9; font: 11px/1.65 var(--mono); tab-size: 2; }
+    .kw { color: var(--violet); } .fn { color: var(--cyan); } .cm { color: #60727a; } .st { color: var(--amber); }
+
+    .action-lab { display: grid; grid-template-columns: 290px minmax(0, 1fr); overflow: hidden; }
+    .action-controls { padding: 25px; border-right: 1px solid var(--line); }
+    .segmented { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin: 17px 0 22px; }
+    .segmented button, .toggle-row button, .mrope-tabs button {
+      appearance: none; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px;
+      color: var(--muted); background: #0a1315; cursor: pointer; transition: .18s ease;
+      font: 11px var(--mono);
+    }
+    .segmented button:hover, .segmented button.active, .toggle-row button.active, .mrope-tabs button.active { color: #06110f; background: var(--cyan); border-color: var(--cyan); }
+    .action-readout { color: var(--muted); font-size: 13px; }
+    .action-readout strong { color: var(--ink); }
+    .action-visual { padding: 28px; min-width: 0; }
+    .channel-grid { display: grid; grid-template-columns: repeat(16, minmax(8px, 1fr)); gap: 5px; margin: 18px 0; }
+    .channel { aspect-ratio: 1; min-height: 10px; border-radius: 3px; background: #1b292e; transition: .25s ease; }
+    .channel.real { background: var(--amber); box-shadow: 0 0 10px rgba(246,188,109,.18); }
+    .channel.invalid { background: repeating-linear-gradient(135deg, #26363b 0 3px, #1a272b 3px 6px); }
+    .legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font: 10px var(--mono); }
+    .legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 2px; background: var(--amber); }
+    .legend span:last-child::before { background: #26363b; }
+    .projection { display: grid; grid-template-columns: auto 38px minmax(110px, 1fr) 38px auto; gap: 8px; align-items: center; margin-top: 28px; }
+    .projection-box { padding: 14px; border: 1px solid var(--line); border-radius: 9px; text-align: center; background: rgba(0,0,0,.15); font: 11px var(--mono); }
+    .projection-box.hot { border-color: var(--cyan-dim); color: var(--cyan); }
+    .arrow { text-align: center; color: var(--cyan); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 13px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 12px; }
+    th { color: var(--muted); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    td code { color: var(--cyan); font: 10px var(--mono); }
+    tr:last-child td { border-bottom: 0; }
+
+    .toggle-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+    .token-track { min-height: 112px; display: flex; align-items: stretch; gap: 5px; padding: 18px; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #081012; }
+    .token-block { min-width: 76px; padding: 14px 10px; border-radius: 8px; display: grid; place-items: center; text-align: center; color: #061110; font: 700 10px/1.3 var(--mono); }
+    .token-block small { display: block; opacity: .7; font-size: 8px; }
+    .text-token { background: var(--violet); }
+    .vision-token { background: var(--cyan); }
+    .lidar-token { background: #8dd1ff; }
+    .action-token { background: var(--amber); }
+    .sound-token { background: #ff9ec8; }
+    .end-token { background: #d7dedf; }
+    .pack-note { min-height: 48px; margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+
+    .mask-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr); gap: 18px; }
+    .mask-card { padding: 24px; }
+    .mask-matrix { display: grid; grid-template-columns: 74px repeat(2, minmax(92px, 1fr)); gap: 5px; margin-top: 18px; }
+    .mask-cell { min-height: 76px; padding: 10px; border-radius: 7px; display: grid; place-items: center; text-align: center; font: 10px/1.35 var(--mono); }
+    .mask-label { min-height: 42px; color: var(--muted); }
+    .mask-yes { background: rgba(120,228,209,.18); border: 1px solid var(--cyan-dim); color: var(--cyan); }
+    .mask-causal { background: rgba(185,165,255,.17); border: 1px solid var(--violet-dim); color: var(--violet); }
+    .mask-no { background: rgba(255,142,131,.06); border: 1px dashed #57302e; color: #9b605b; }
+    .mask-rule { display: grid; grid-template-columns: 34px 1fr; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .mask-rule:last-child { border-bottom: 0; }
+    .mask-rule b { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--cyan-dim); color: var(--cyan); font: 10px var(--mono); }
+    .mask-rule p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .mrope-lab { display: grid; grid-template-columns: 260px minmax(0, 1fr); overflow: hidden; }
+    .mrope-tabs { padding: 24px; border-right: 1px solid var(--line); }
+    .mrope-tabs button { display: block; width: 100%; text-align: left; margin-top: 7px; }
+    .mrope-stage { padding: 26px; min-width: 0; }
+    .coord-strip { display: grid; grid-template-columns: repeat(6, minmax(70px, 1fr)); gap: 7px; overflow-x: auto; padding-bottom: 4px; }
+    .coord { min-width: 70px; padding: 13px 8px; border: 1px solid var(--line); border-radius: 8px; text-align: center; background: #081012; }
+    .coord b { display: block; color: var(--cyan); font: 11px var(--mono); }
+    .coord small { color: var(--muted-2); font: 9px var(--mono); }
+    .axis-bars { display: grid; gap: 8px; margin-top: 22px; }
+    .axis { display: grid; grid-template-columns: 76px 1fr; gap: 10px; align-items: center; font: 10px var(--mono); color: var(--muted); }
+    .axis-track { height: 7px; border-radius: 999px; background: #18262a; overflow: hidden; }
+    .axis-fill { height: 100%; border-radius: inherit; background: var(--cyan); transform-origin: left; }
+    .axis:nth-child(2) .axis-fill { background: var(--violet); }
+    .axis:nth-child(3) .axis-fill { background: var(--amber); }
+    .formula { margin-top: 20px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; color: #cbd5d8; background: rgba(0,0,0,.18); font: 11px/1.6 var(--mono); overflow-x: auto; }
+
+    .mot-layer { padding: 24px; }
+    .mot-grid { display: grid; grid-template-columns: 1fr 54px 1fr; gap: 10px; align-items: stretch; }
+    .tower { padding: 20px; border-radius: 12px; border: 1px solid var(--line); background: #081012; }
+    .tower.und { box-shadow: inset 3px 0 var(--violet); }
+    .tower.gen { box-shadow: inset 3px 0 var(--cyan); }
+    .tower h3 span { display: block; margin-bottom: 4px; color: var(--muted); font: 9px var(--mono); letter-spacing: .12em; }
+    .tower-stack { display: grid; gap: 6px; margin-top: 16px; }
+    .tower-stack span { padding: 9px 10px; border-radius: 6px; background: #111d20; color: var(--muted); font: 10px var(--mono); }
+    .joint-node { display: grid; place-items: center; color: var(--cyan); font: 9px var(--mono); writing-mode: vertical-rl; text-orientation: mixed; }
+    .heads { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+    .head { padding: 16px; border: 1px solid var(--line); border-radius: 9px; text-align: center; color: var(--muted); font-size: 11px; }
+    .head b { display: block; color: var(--ink); font: 11px var(--mono); }
+
+    .decode-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .decode-card { padding: 20px; }
+    .decode-card ol { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+    .decode-card li + li { margin-top: 7px; }
+
+    .source-table td:first-child { color: var(--ink); white-space: nowrap; }
+    .source-table .source-link { white-space: normal; overflow-wrap: anywhere; }
+    .footer { padding-top: 34px; color: var(--muted-2); font: 10px var(--mono); }
+
+    @media (max-width: 980px) {
+      .shell { display: block; }
+      .rail { position: sticky; height: auto; padding: 12px 20px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .brand { margin: 0; }
+      .brand small, .rail-note { display: none; }
+      nav { display: flex; gap: 3px; margin-top: 10px; overflow-x: auto; padding-bottom: 2px; }
+      nav a { flex: 0 0 auto; padding: 7px 10px; }
+      nav a::before { display: none; }
+      .content { width: min(var(--max), calc(100% - 36px)); padding-top: 52px; }
+      .section-head { grid-template-columns: 1fr; gap: 12px; }
+      .action-lab, .mrope-lab { grid-template-columns: 1fr; }
+      .action-controls, .mrope-tabs { border-right: 0; border-bottom: 1px solid var(--line); }
+      .mrope-tabs button { width: auto; display: inline-block; }
+    }
+
+    @media (max-width: 720px) {
+      h1 { font-size: 48px; }
+      .content { width: min(var(--max), calc(100% - 28px)); }
+      .section { padding: 58px 0; }
+      .cards, .mask-layout, .decode-flow { grid-template-columns: 1fr; }
+      .action-visual { padding: 20px; }
+      .channel-grid { grid-template-columns: repeat(8, 1fr); }
+      .projection { grid-template-columns: 1fr; }
+      .projection .arrow { transform: rotate(90deg); }
+      .mot-grid { grid-template-columns: 1fr; }
+      .joint-node { writing-mode: horizontal-tb; min-height: 34px; }
+      .heads { grid-template-columns: 1fr; }
+      th, td { padding: 10px 8px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <a class="rail-back" href="../index.html">&larr; Back to blog</a>
+      <div class="brand">
+        <div class="brand-mark">C3</div>
+        <div><strong>Cosmos3</strong><small>Architecture field guide</small></div>
+      </div>
+      <nav aria-label="Architecture sections">
+        <a href="#overview" data-index="01">System map</a>
+        <a href="#encoders" data-index="02">Encoders</a>
+        <a href="#actions" data-index="03">Action unification</a>
+        <a href="#packing" data-index="04">Sequence packing</a>
+        <a href="#attention" data-index="05">Attention mask</a>
+        <a href="#mrope" data-index="06">3D mRoPE</a>
+        <a href="#mot" data-index="07">MoT backbone</a>
+        <a href="#decoders" data-index="08">Outputs</a>
+        <a href="#source-map" data-index="09">Code map</a>
+      </nav>
+      <p class="rail-note">UPSTREAM TRACE · LOCAL CHECKOUT<br>Important excerpts only. Each source marker names the file and line it came from in the local checkout.</p>
+    </aside>
+
+    <main>
+      <div class="content">
+        <header class="hero">
+          <div class="eyebrow">NVIDIA Cosmos3 · code-linked explainer · <a href="https://arxiv.org/abs/2606.02800" style="color:var(--cyan)">arXiv:2606.02800</a></div>
+          <h1>One sequence.<br><span>Many physical signals.</span></h1>
+          <p class="lede">A visual walk from raw text, pixels, waveforms, and robot controls to the shared Cosmos3 Transformer—and back out again. The emphasis is on the mechanics the code actually uses: continuous action tokens, packing order, two-way attention, and 3D multimodal RoPE.</p>
+          <div class="hero-meta">
+            <span class="chip"><b>Backbone</b> Qwen3-VL / Nemotron VL</span>
+            <span class="chip"><b>Generator</b> rectified flow</span>
+            <span class="chip"><b>Action width</b> 64 max</span>
+            <span class="chip"><b>Vision latent</b> 48 ch</span>
+            <span class="chip"><b>Position</b> T · H · W</span>
+          </div>
+        </header>
+
+        <section class="section" id="overview">
+          <div class="section-head">
+            <div><span class="section-no">01 / SYSTEM MAP</span><h2>The generator is a latent-flow model wrapped around a VLM.</h2></div>
+            <p>Do not picture a classic encoder–decoder Transformer. Modality codecs create continuous latent states; a dual-pathway language-model backbone repeatedly predicts their flow velocity.</p>
+          </div>
+          <div class="panel system-map">
+            <div class="pipeline" aria-label="Cosmos3 end-to-end pipeline">
+              <div class="pipe-stage"><span class="tag">INPUT</span><h3>Native signals</h3><p>Prompt, RGB frames, waveform, robot trajectory, optional conditioning masks.</p><div class="stream-line"><span>text</span><span>vision</span><span>audio</span><span>action</span></div></div>
+              <div class="pipe-arrow">→</div>
+              <div class="pipe-stage"><span class="tag">ADAPT</span><h3>Modality encoders</h3><p>Tokenizer / VAE / AVAE / normalization + zero padding. Each stream is projected to hidden width.</p><div class="stream-line"><span>IDs</span><span>C×T×H×W</span><span>C×T</span><span>T×64</span></div></div>
+              <div class="pipe-arrow">→</div>
+              <div class="pipe-stage"><span class="tag">DENOISE</span><h3>Mixture of Transformers</h3><p>Understanding and generation projections share joint attention while retaining separate norms and MLPs.</p><div class="stream-line"><span>mRoPE</span><span>two-way mask</span><span>velocity</span></div></div>
+              <div class="pipe-arrow">→</div>
+              <div class="pipe-stage"><span class="tag">DECODE</span><h3>Native outputs</h3><p>VAE-decoded pixels, AVAE-decoded waveform, or unpadded and denormalized robot action.</p><div class="stream-line"><span>MP4/JPG</span><span>audio</span><span>JSON</span></div></div>
+            </div>
+          </div>
+          <div class="callout cyan" style="margin-top:16px"><strong>Key distinction.</strong> Qwen3-VL has a visual tower for reasoner-style visual understanding. The diffusion generator’s image/video state follows a different route: pixels → video VAE → latent patches → <code>vae2llm</code>. Those continuous tokens travel on the generation pathway, including clean conditioning frames.</div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>model/generator/omni_mot_model.py · tokenizer setup</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L148" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="148">source : 148</span></div>
+            <pre><code class="source-code"><span class="cm"># generation codecs are separate from the VLM tokenizer</span>
+self.vlm_processor = lazy_instantiate(self.vlm_config.tokenizer)
+self.tokenizer_vision_gen = lazy_instantiate(self.config.tokenizer)
+<span class="kw">if</span> self.config.sound_gen:
+    self.tokenizer_sound_gen = lazy_instantiate(self.config.sound_tokenizer)</code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="encoders">
+          <div class="section-head">
+            <div><span class="section-no">02 / MODALITY ENCODERS</span><h2>Four inputs, four adaptation rules.</h2></div>
+            <p>“Token” does not always mean an integer vocabulary ID. Vision, sound, and action tokens are continuous vectors placed into Transformer sequence slots.</p>
+          </div>
+
+          <div class="cards">
+            <article class="panel encoder-card">
+              <div class="icon">TXT</div><h3>Text · discrete</h3>
+              <p class="quiet">The prompt is formatted with the VLM chat template, tokenized, and embedded by the language model. BOS/EOS and a start-of-generation marker define the understanding split.</p>
+              <span class="shape">IDs [Ntext]</span><span class="shape">embedding [Ntext, H]</span>
+              <div class="mini-flow"><b>prompt</b><i>→</i><b>token IDs</b><i>→</i><b>embed_tokens</b></div>
+            </article>
+            <article class="panel encoder-card">
+              <div class="icon">RGB</div><h3>Image / video · continuous grid</h3>
+              <p class="quiet">RGB tensors are normalized to [−1,1], compressed by the video VAE, spatially patchified, and projected. Images use T=1; videos retain a compressed temporal grid.</p>
+              <span class="shape">pixels [C,T,H,W]</span><span class="shape">latent [48,T′,H′,W′]</span><span class="shape">patch 2×2 → 192</span>
+              <div class="mini-flow"><b>RGB</b><i>→</i><b>VAE</b><i>→</i><b>2×2 patches</b><i>→</i><b>vae2llm</b></div>
+            </article>
+            <article class="panel encoder-card">
+              <div class="icon">ACT</div><h3>Robot action · continuous timestep</h3>
+              <p class="quiet">A timestep is one token. Its native vector is normalized, padded to 64 channels, and projected using weights selected by the robot embodiment’s domain ID.</p>
+              <span class="shape">native [T,D]</span><span class="shape">model [T,64]</span><span class="shape">1 token / step</span>
+              <div class="mini-flow"><b>physical vector</b><i>→</i><b>normalize + pad</b><i>→</i><b>DomainAwareLinear</b></div>
+            </article>
+            <article class="panel encoder-card">
+              <div class="icon">AUD</div><h3>Audio · continuous timeline</h3>
+              <p class="quiet">Waveform audio is channel-adjusted and compressed by AVAE to a latent timeline. Each latent instant becomes one sequence token, projected with <code>sound2llm</code>.</p>
+              <span class="shape">wave [C,N]</span><span class="shape">latent [Csound,T′]</span><span class="shape">1 token / latent step</span>
+              <div class="mini-flow"><b>waveform</b><i>→</i><b>AVAE</b><i>→</i><b>sound2llm</b></div>
+            </article>
+          </div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>cosmos3_vfm_network.py · shared vision patch projection</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py#L386" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py" data-line="386">source : 386</span></div>
+            <pre><code class="source-code">h_patches = h_padded // p
+w_patches = w_padded // p
+latent = latent.reshape(C, T, h_patches, p, w_patches, p)
+latent = torch.einsum(<span class="st">"cthpwq-&gt;thwpqc"</span>, latent)
+latent = latent.reshape(-1, p * p * latent_channel)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>cosmos3_vfm_network.py · modality projection to hidden width</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py#L752" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py" data-line="752">source : 752</span></div>
+            <pre><code class="source-code">packed_patches, shapes = self.patchify_and_pack_latents(...)
+packed_tokens = vae2llm(packed_patches.to(target_dtype))
+<span class="kw">if</span> modality_embed is not <span class="kw">None</span>:
+    packed_tokens = packed_tokens + modality_embed.view(1, -1)
+packed_sequence[modality.sequence_indexes] = packed_tokens</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>omni_mot_model.py · audio codec</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L5874" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="5874">source : 5874</span></div>
+            <pre><code class="source-code"><span class="kw">if</span> waveform.shape[0] == 1 <span class="kw">and</span> expected_channels == 2:
+    waveform = waveform.repeat(2, 1)
+latent = self.tokenizer_sound_gen.encode(waveform.unsqueeze(0))
+<span class="kw">return</span> latent.squeeze(0)  <span class="cm"># [sound_channels, T_sound]</span></code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="actions">
+          <div class="section-head">
+            <div><span class="section-no">03 / ACTION UNIFICATION</span><h2>Different embodiments share width, not semantics.</h2></div>
+            <p>Cosmos3 preserves each dataset’s action meaning. It standardizes tensor width and model interface, while <code>domain_id</code> selects embodiment-specific input/output projections.</p>
+          </div>
+
+          <div class="panel action-lab">
+            <div class="action-controls">
+              <div class="eyebrow">Choose native layout</div>
+              <div class="segmented" aria-label="Action dimension examples">
+                <button type="button" data-action-dim="7">7D</button>
+                <button type="button" data-action-dim="10" class="active">10D</button>
+                <button type="button" data-action-dim="13">13D</button>
+                <button type="button" data-action-dim="57">57D</button>
+              </div>
+              <p class="action-readout" id="action-description"><strong>10D cartesian:</strong> xyz + rot6d + gripper.</p>
+              <p class="micro">The first D channels are real. Channels D…63 are model-only zeros. After sampling, the saved action is sliced back to D and denormalized.</p>
+            </div>
+            <div class="action-visual">
+              <div class="eyebrow">Model-space action · one timestep</div>
+              <div class="channel-grid" id="channel-grid" aria-label="64 model action channels"></div>
+              <div class="legend"><span>native, supervised channel</span><span>padded, masked channel</span></div>
+              <div class="projection">
+                <div class="projection-box" id="native-shape">xₜ ∈ R¹⁰</div><div class="arrow">→</div>
+                <div class="projection-box">normalize + pad<br><span class="quiet">Rᴰ → R⁶⁴</span></div><div class="arrow">→</div>
+                <div class="projection-box hot">W[domain_id]<br><span class="quiet">64 → H</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel" style="margin-top:14px; overflow-x:auto">
+            <table>
+              <thead><tr><th>Example</th><th>Native representation</th><th>What enters Cosmos3</th></tr></thead>
+              <tbody>
+                <tr><td>LIBERO 7D</td><td><code>[dpos(3), axis-angle(3), gripper(1)]</code></td><td>Normalize 7 real columns, then append 57 zeros.</td></tr>
+                <tr><td>LIBERO 10D</td><td><code>[dpos(3), rot6d(6), gripper(1)]</code></td><td>Normalize 10 real columns, then append 54 zeros.</td></tr>
+                <tr><td>LIBERO 13D</td><td><code>[dpos(3), rotation matrix(9), gripper(1)]</code></td><td>Normalize 13 real columns, then append 51 zeros.</td></tr>
+                <tr><td>DROID 8D</td><td><code>[joint positions(7), gripper(1)]</code></td><td>Same 64D container; different <code>domain_id</code> projection.</td></tr>
+                <tr><td>Hand pose 57D</td><td><code>camera + wrists + fingertip positions</code></td><td>57 real columns, seven padded columns.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout" style="margin-top:16px"><strong>There is no action vocabulary or quantizer.</strong> “Tokenization” here means assigning each <code>[D]</code> continuous timestep to one sequence position. Rotation may be re-encoded—for example axis-angle 3D → rot6d 6D—but the result remains floating point.</div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>libero_pose_utils.py · 7D / 10D / 13D mapping</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/action/libero_pose_utils.py#L23" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/action/libero_pose_utils.py" data-line="23">source : 23</span></div>
+            <pre><code class="source-code">LIBERO_ROTATION_FORMATS = {
+    <span class="st">"3d"</span>: <span class="st">"axisangle"</span>, <span class="st">"6d"</span>: <span class="st">"rot6d"</span>, <span class="st">"9d"</span>: <span class="st">"rot9d"</span>
+}
+LIBERO_ACTION_DIMS = {<span class="st">"3d"</span>: 7, <span class="st">"6d"</span>: 10, <span class="st">"9d"</span>: 13}</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>action_processing.py · normalize, pad, remember native width</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_processing.py#L369" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_processing.py" data-line="369">source : 369</span></div>
+            <pre><code class="source-code">raw_action_dim = int(action.shape[-1])
+action_raw = action.clone()
+<span class="kw">if</span> action_normalizer is not <span class="kw">None</span>:
+    action = action_normalizer.normalize_action(action)
+processed_data_dict[<span class="st">"action"</span>] = pad_action_to_max_dim(action, self.max_action_dim)
+processed_data_dict[<span class="st">"raw_action_dim"</span>] = torch.tensor(raw_action_dim)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>action_processing.py · zero-padding and inverse transform</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_processing.py#L312" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_processing.py" data-line="312">source : 312</span></div>
+            <pre><code class="source-code">padding_size = max_action_dim - action.shape[-1]
+zero_padding = torch.zeros(*action.shape[:-1], padding_size)
+padded = torch.cat([action, zero_padding], dim=-1)
+
+action = action[..., :record.raw_action_dim]
+action = record.action_normalizer.denormalize_action(action)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>domain_aware_linear.py · per-embodiment weights</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/domain_aware_linear.py#L21" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/domain_aware_linear.py" data-line="21">source : 21</span></div>
+            <pre><code class="source-code">self.fc = nn.Embedding(num_domains, output_size * input_size)
+self.bias = nn.Embedding(num_domains, output_size)
+
+weight = self.fc(domain_id).view(batch_size, input_size, output_size)
+bias = self.bias(domain_id).view(batch_size, output_size)
+<span class="kw">return</span> torch.bmm(x.unsqueeze(1), weight).squeeze(1) + bias</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>cosmos3_vfm_network.py · action adapter and one-token-per-step encode</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py#L221" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py" data-line="221">source : 221</span></div>
+            <pre><code class="source-code">self.action2llm = DomainAwareLinear(action_dim, hidden_size, num_domains)
+self.llm2action = DomainAwareLinear(hidden_size, action_dim, num_domains)
+
+packed_tokens_action = self.action2llm(tokens, per_token_domain_id)
+packed_tokens_action += self.action_modality_embed.view(1, -1)
+packed_sequence[action.sequence_indexes] = packed_tokens_action</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>omni_mot_model.py · padded-channel velocity mask</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L2829" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="2829">source : 2829</span></div>
+            <pre><code class="source-code">v = pred * noisy_mask
+<span class="kw">if</span> raw_action_dim[i] is not <span class="kw">None</span>:
+    v[:, raw_action_dim[i]:] = 0
+<span class="kw">if</span> action_valid_mask[i] is not <span class="kw">None</span>:
+    v[:, :valid_mask.numel()].mul_(valid_mask)</code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="packing">
+          <div class="section-head">
+            <div><span class="section-no">04 / SEQUENCE PACKING</span><h2>Concatenation has two meanings.</h2></div>
+            <p>The Transformer sequence includes text and modality slots. Separately, the ODE sampler flattens only generated continuous states. Their orders agree after text is excluded.</p>
+          </div>
+          <div class="toggle-row" aria-label="Packing layout selector">
+            <button type="button" class="active" data-pack-mode="standard">Standard packing</button>
+            <button type="button" data-pack-mode="causal">Temporal-causal supertokens</button>
+          </div>
+          <div class="token-track" id="token-track" aria-live="polite"></div>
+          <p class="pack-note" id="pack-note"></p>
+
+          <div class="panel panel-pad" style="margin-top:18px; overflow-x:auto">
+            <table>
+              <thead><tr><th>Layer</th><th>Exact order</th><th>Why it exists</th></tr></thead>
+              <tbody>
+                <tr><td>Transformer pack</td><td><code>[text][vision][LiDAR][action][sound][EOG]</code></td><td>Every item gets a hidden-state slot and 3-axis position IDs.</td></tr>
+                <tr><td>Sampler state</td><td><code>[vision | LiDAR | action | sound]</code></td><td>One flat vector is advanced by the flow solver and split back by recorded shapes.</td></tr>
+                <tr><td>Temporal-causal option</td><td><code>[text][A₀,V₀][A₁,V₁]…[sound][EOG]</code></td><td>Actions prefix each visual supertoken; default Nano config leaves this option off.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>packers.py · standard modality order</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/packers.py#L265" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/packers.py" data-line="265">source : 265</span></div>
+            <pre><code class="source-code"><span class="cm"># Per sample:</span>
+pack_text_tokens(...)
+pack_vision_tokens(...)
+pack_lidar_tokens(...)
+pack_action_tokens(...)
+pack_sound_tokens(...)
+append_end_of_generation_token(...)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>temporal_causal.py · alternate supertoken order</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/temporal_causal.py#L29" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/temporal_causal.py" data-line="29">source : 29</span></div>
+            <pre><code class="source-code"><span class="cm"># One temporal supertoken:</span>
+pack_action_tokens=True:
+    [action_t (tcf), vision_t (H*W)]
+pack_action_tokens=False:
+    [vision_t (H*W)]</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>omni_mot_model.py · flat sampler-state order</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L2408" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="2408">source : 2408</span></div>
+            <pre><code class="source-code"><span class="cm"># Concatenate per sample:</span>
+<span class="cm"># [vision | lidar | action | sound]</span>
+parts.append(noise_vision.reshape(-1))
+parts.append(noise_lidar.reshape(-1))
+parts.append(noise_action.reshape(-1))
+parts.append(noise_sound.reshape(-1))</code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="attention">
+          <div class="section-head">
+            <div><span class="section-no">05 / ATTENTION DESIGN</span><h2>Two pathways, one asymmetric mask.</h2></div>
+            <p>The default <code>two_way</code> rule gives generation tokens full context without allowing future/generated content to leak backward into causal language reasoning.</p>
+          </div>
+          <div class="mask-layout">
+            <div class="panel mask-card">
+              <div class="eyebrow">Rows query · columns key/value</div>
+              <div class="mask-matrix" role="img" aria-label="Two-way attention matrix">
+                <div class="mask-cell mask-label"></div><div class="mask-cell mask-label">UND keys<br>text/context</div><div class="mask-cell mask-label">GEN keys<br>continuous states</div>
+                <div class="mask-cell mask-label">UND<br>queries</div><div class="mask-cell mask-causal">CAUSAL<br>lower triangle</div><div class="mask-cell mask-no">BLOCKED<br>no gen leakage</div>
+                <div class="mask-cell mask-label">GEN<br>queries</div><div class="mask-cell mask-yes">FULL<br>read prompt</div><div class="mask-cell mask-yes">FULL<br>global denoising</div>
+              </div>
+            </div>
+            <div class="panel mask-card">
+              <div class="mask-rule"><b>U</b><p>Understanding tokens use the normal Q/K/V/O projections and causal self-attention.</p></div>
+              <div class="mask-rule"><b>G</b><p>Generation tokens use separate <code>*_moe_gen</code> projections and attend to every UND and GEN key in their own sample.</p></div>
+              <div class="mask-rule"><b>×</b><p>Variable-length offsets isolate packed samples. Optional multiview FlexAttention can further restrict the GEN→GEN quadrant.</p></div>
+            </div>
+          </div>
+          <div class="callout cyan" style="margin-top:16px"><strong>Conditioning is not a third attention type.</strong> Clean and noisy vision/action/audio tokens occupy the generation split. A separate condition mask decides which latent positions remain fixed and which receive timestep embeddings, loss, noise, and velocity.</div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>attention.py · UND causal pass</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/attention.py#L214" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/attention.py" data-line="214">source : 214</span></div>
+            <pre><code class="source-code">causal_q = get_causal_seq(packed_query_states)
+causal_k = get_causal_seq(packed_key_states)
+causal_v = get_causal_seq(packed_value_states)
+causal_res = attention(
+    causal_q, causal_k, causal_v, is_causal=<span class="kw">True</span>
+)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>attention.py · GEN queries attend to all keys</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/attention.py#L297" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/attention.py" data-line="297">source : 297</span></div>
+            <pre><code class="source-code">full_res = attention(
+    full_q,
+    get_all_seq(packed_key_normalized),
+    get_all_seq(packed_value_states),
+    **full_varlen_kwargs,
+)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>sequence.py · causal text split and full generation split</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/sequence.py#L236" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/sequence.py" data-line="236">source : 236</span></div>
+            <pre><code class="source-code">self.attn_modes.append(<span class="st">"causal"</span>)
+self.split_lens.append(text_split_len)
+
+<span class="cm"># at sample completion</span>
+self.attn_modes.append(<span class="st">"full"</span>)
+self.split_lens.append(generation_split_len)</code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="mrope">
+          <div class="section-head">
+            <div><span class="section-no">06 / 3D MULTIMODAL RoPE</span><h2>Position is a coordinate, then a rotation.</h2></div>
+            <p>Each token gets three IDs—time, height, width. Qwen’s rotary module interleaves axis-specific frequency bands and rotates Q/K; it does not add a learned position vector to the token.</p>
+          </div>
+
+          <div class="panel mrope-lab">
+            <div class="mrope-tabs" aria-label="mRoPE modality selector">
+              <div class="eyebrow">Inspect coordinates</div>
+              <button type="button" class="active" data-mrope-mode="vision">Video grid</button>
+              <button type="button" data-mrope-mode="text">Text</button>
+              <button type="button" data-mrope-mode="action">Action</button>
+              <button type="button" data-mrope-mode="sound">Audio</button>
+            </div>
+            <div class="mrope-stage">
+              <h3 id="mrope-title">Video: T-major 3D grid</h3>
+              <p class="quiet" id="mrope-copy">Within each latent frame, height and width enumerate the patch grid. The same temporal ID repeats across all spatial patches.</p>
+              <div class="coord-strip" id="coord-strip"></div>
+              <div class="axis-bars">
+                <div class="axis">time / T<div class="axis-track"><div class="axis-fill" style="width:88%"></div></div></div>
+                <div class="axis">height / H<div class="axis-track"><div class="axis-fill" style="width:62%"></div></div></div>
+                <div class="axis">width / W<div class="axis-track"><div class="axis-fill" style="width:42%"></div></div></div>
+              </div>
+              <div class="formula" id="mrope-formula">position(token) = (temporal_offset + t, h, w)<br>flatten order = t → h → w</div>
+            </div>
+          </div>
+
+          <div class="panel panel-pad" style="margin-top:16px; overflow-x:auto">
+            <table>
+              <thead><tr><th>Stream</th><th>Position IDs</th><th>Cross-modal timing</th></tr></thead>
+              <tbody>
+                <tr><td>Text</td><td><code>(i, i, i)</code></td><td>Monotonic; a large configured margin separates text from media time.</td></tr>
+                <tr><td>Vision</td><td><code>(offset + scaled_t, h, w)</code></td><td>VAE temporal compression and FPS determine real-time spacing.</td></tr>
+                <tr><td>Action</td><td><code>(vision_offset + scaled_t, 0, 0)</code></td><td>Frame-rate tokens; action[0] defaults to vision frame 1.</td></tr>
+                <tr><td>Audio</td><td><code>(vision_offset + scaled_t, 0, 0)</code></td><td>AVAE latent rate—often 25 Hz—aligns to the vision clock; sound[0] aligns to frame 0.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>mrope.py · text positions</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/mrope.py#L41" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/mrope.py" data-line="41">source : 41</span></div>
+            <pre><code class="source-code">ids = torch.arange(num_tokens) + temporal_offset
+mrope_ids = ids.unsqueeze(0).expand(3, -1).contiguous()
+<span class="cm"># token i → (i, i, i), shifted by the current offset</span></code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>mrope.py · vision grid and FPS scaling</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/mrope.py#L168" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/mrope.py" data-line="168">source : 168</span></div>
+            <pre><code class="source-code">tps = fps / temporal_compression_factor
+base_tps = base_fps / effective_base_tcf
+scaled_t = (frame_indices + start_frame_offset) / tps * base_tps + temporal_offset
+t_index = scaled_t[:, None].expand(-1, grid_h * grid_w).flatten()
+h_index = arange(grid_h)[None, :, None].expand(grid_t, -1, grid_w).flatten()
+w_index = arange(grid_w)[None, None, :].expand(grid_t, grid_h, -1).flatten()</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>modalities.py · action is a 1×1 grid aligned after frame 0</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/modalities.py#L426" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/modalities.py" data-line="426">source : 426</span></div>
+            <pre><code class="source-code">action_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
+    grid_t=action_split_len, grid_h=1, grid_w=1,
+    temporal_offset=action_temporal_offset,
+    temporal_compression_factor=1,
+    start_frame_offset=action_start_frame_offset,
+)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>modalities.py · audio is a 1×1 grid aligned at frame 0</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/modalities.py#L537" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/modalities.py" data-line="537">source : 537</span></div>
+            <pre><code class="source-code">sound_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
+    grid_t=sound_split_len, grid_h=1, grid_w=1,
+    temporal_offset=sound_temporal_offset,
+    fps=sound_fps, temporal_compression_factor=1,
+    start_frame_offset=0,
+)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>qwen3_vl.py · interleaved frequency axes → cosine/sine</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/reasoner/qwen3_vl/qwen3_vl.py#L337" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/reasoner/qwen3_vl/qwen3_vl.py" data-line="337">source : 337</span></div>
+            <pre><code class="source-code"><span class="cm"># frequency layout: THTHWHTHW...TT</span>
+freqs_t = freqs[0]
+<span class="kw">for</span> dim, offset <span class="kw">in</span> enumerate((1, 2), start=1):
+    idx = slice(offset, mrope_section[dim] * 3, 3)
+    freqs_t[..., idx] = freqs[dim, ..., idx]
+emb = torch.cat((freqs_t, freqs_t), dim=-1)
+<span class="kw">return</span> emb.cos(), emb.sin()</code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="mot">
+          <div class="section-head">
+            <div><span class="section-no">07 / MIXTURE OF TRANSFORMERS</span><h2>Separate parameters; jointly contextualized.</h2></div>
+            <p>MoT means two modality-specialized pathways inside every decoder layer. It is distinct from sparse Mixture-of-Experts, although Cosmos3 can use an MoE VLM backbone too.</p>
+          </div>
+
+          <div class="panel mot-layer">
+            <div class="mot-grid">
+              <div class="tower und"><h3><span>UNDERSTANDING PATH</span>Text / reasoner</h3><div class="tower-stack"><span>RMSNorm</span><span>q_proj · k_proj · v_proj · o_proj</span><span>causal attention result</span><span>post-attention norm · MLP</span></div></div>
+              <div class="joint-node">JOINT ATTENTION</div>
+              <div class="tower gen"><h3><span>GENERATION PATH</span>Vision / action / audio</h3><div class="tower-stack"><span>RMSNorm_moe_gen</span><span>q/k/v/o_proj_moe_gen</span><span>full attention result</span><span>post-attention norm_moe_gen · MLP_moe_gen</span></div></div>
+            </div>
+            <div class="heads">
+              <div class="head"><b>llm2vae</b>H → 2×2×48<br>vision velocity</div>
+              <div class="head"><b>llm2action[domain]</b>H → 64<br>action velocity</div>
+              <div class="head"><b>llm2sound</b>H → Csound<br>audio velocity</div>
+            </div>
+          </div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>unified_mot.py · separate attention projections</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/unified_mot.py#L516" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/unified_mot.py" data-line="516">source : 516</span></div>
+            <pre><code class="source-code"><span class="cm"># understanding</span>
+self.q_proj = nn.Linear(hidden_size, q_width)
+self.k_proj = nn.Linear(hidden_size, kv_width)
+
+<span class="cm"># generation</span>
+self.q_proj_moe_gen = nn.Linear(hidden_size, q_width)
+self.k_proj_moe_gen = nn.Linear(hidden_size, kv_width)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>unified_mot.py · separate MLPs and norms per decoder layer</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/unified_mot.py#L1098" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/unified_mot.py" data-line="1098">source : 1098</span></div>
+            <pre><code class="source-code">self.self_attn = PackedAttentionMoT(...)
+self.mlp = layer_types.mlp(config)
+self.mlp_moe_gen = layer_types.mlp(config)
+self.input_layernorm = layer_types.rms_norm(...)
+self.input_layernorm_moe_gen = layer_types.rms_norm(...)</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>cosmos3_vfm_network.py · unified forward and modality heads</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py#L1198" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py" data-line="1198">source : 1198</span></div>
+            <pre><code class="source-code">input_pack, attention_meta, _ = build_packed_sequence(...)
+packed_outputs, _ = self.language_model(
+    input_pack, attention_mask=attention_meta,
+    position_ids=packed_position_ids,
+)
+self._decode_vision(...)
+self._decode_action(...)
+self._decode_sound(...)</code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="decoders">
+          <div class="section-head">
+            <div><span class="section-no">08 / FLOW + OUTPUTS</span><h2>The Transformer predicts change, not the final sample.</h2></div>
+            <p>At each solver step Cosmos3 predicts modality velocities. The sampler updates one flat continuous state, then each modality’s codec reverses preprocessing.</p>
+          </div>
+          <div class="decode-flow">
+            <article class="panel decode-card"><div class="eyebrow">Vision</div><h3>Latent → pixels</h3><ol><li><code>llm2vae</code> predicts patch velocity.</li><li>Sampler integrates toward clean latent.</li><li>Unpatchify and video-VAE decode.</li><li>Map [−1,1] to RGB and write JPG/MP4.</li></ol></article>
+            <article class="panel decode-card"><div class="eyebrow">Action</div><h3>64D → native controls</h3><ol><li><code>llm2action[domain]</code> predicts velocity.</li><li>Mask fixed, invalid, and padded channels.</li><li>Slice from 64 back to native D.</li><li>Invert dataset normalization and write JSON.</li></ol></article>
+            <article class="panel decode-card"><div class="eyebrow">Audio</div><h3>Latent → waveform</h3><ol><li><code>llm2sound</code> predicts latent velocity.</li><li>Sampler integrates the audio timeline.</li><li>AVAE decodes waveform samples.</li><li>Optional mux combines sound and video.</li></ol></article>
+          </div>
+
+          <div class="source-card">
+            <div class="source-bar"><span>omni_mot_model.py · condition-aware initial noise</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L2298" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="2298">source : 2298</span></div>
+            <pre><code class="source-code">pure_noise = arch_invariant_rand(x0_token.shape, seed)
+noise = condition_mask * x0_token + (1.0 - condition_mask) * pure_noise
+<span class="cm"># clean conditions stay fixed; all other positions start noisy</span></code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>omni_mot_model.py · classifier-free guidance</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L3344" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="3344">source : 3344</span></div>
+            <pre><code class="source-code">cond_v, uncond_v = self._run_classifier_free_guidance(...)
+v_pred = [
+    u_i + guidance * (c_i - u_i)
+    <span class="kw">for</span> c_i, u_i <span class="kw">in</span> zip(cond_v, uncond_v)
+]
+<span class="kw">return</span> v_pred</code></pre>
+          </div>
+          <div class="source-card">
+            <div class="source-bar"><span>action_processing.py · native action recovery</span><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_processing.py#L418" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_processing.py" data-line="418">source : 418</span></div>
+            <pre><code class="source-code">action = ActionProcessor._unpad_action(action, record.raw_action_dim)
+<span class="kw">if</span> record.action_normalizer is not <span class="kw">None</span>:
+    action = record.action_normalizer.denormalize_action(action)
+<span class="kw">return</span> action</code></pre>
+          </div>
+        </section>
+
+        <section class="section" id="source-map">
+          <div class="section-head">
+            <div><span class="section-no">09 / CODE MAP</span><h2>Open only the lines that answer the question.</h2></div>
+            <p>These local links target the upstream checkout used for this guide. Line numbers are validated against the current files.</p>
+          </div>
+          <div class="panel" style="overflow-x:auto">
+            <table class="source-table">
+              <thead><tr><th>Question</th><th>Primary implementation</th></tr></thead>
+              <tbody>
+                <tr><td>Model dimensions</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/configs/base/experiment/sft/models/nano_model_config.py#L20" data-source="third_party/cosmos-framework/cosmos_framework/configs/base/experiment/sft/models/nano_model_config.py" data-line="20">nano_model_config.py:20–51</span> · action width 64, vision channels 48, patch 2, FPS mRoPE</td></tr>
+                <tr><td>Raw action semantics</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_spec.py#L43" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/action/utils/action_spec.py" data-line="43">action_spec.py:43–71</span> · per-column position/rotation/gripper/joint labels</td></tr>
+                <tr><td>One action token / step</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/modalities.py#L344" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/modalities.py" data-line="344">modalities.py:344–447</span> · condition indexes, loss indexes, temporal IDs</td></tr>
+                <tr><td>Vision VAE tokenization</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L3836" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="3836">omni_mot_model.py:3836–3892</span> · normalization and per-view encoding</td></tr>
+                <tr><td>Audio AVAE tokenization</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py#L5874" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/omni_mot_model.py" data-line="5874">omni_mot_model.py:5874–5904</span> · waveform encode/decode</td></tr>
+                <tr><td>mRoPE coordinates</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/mrope.py#L75" data-source="third_party/cosmos-framework/cosmos_framework/data/generator/sequence_packing/mrope.py" data-line="75">mrope.py:75–225</span> · T/H/W grid, offsets, FPS scaling</td></tr>
+                <tr><td>MoT layer</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/unified_mot.py#L1098" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/unified_mot.py" data-line="1098">unified_mot.py:1098–1158</span> · dual attention/MLP/norm pathways</td></tr>
+                <tr><td>Modality output heads</td><td><span class="source-link" title="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py#L1318" data-source="third_party/cosmos-framework/cosmos_framework/model/generator/mot/cosmos3_vfm_network.py" data-line="1318">cosmos3_vfm_network.py:1318–1332</span> · vision/action/sound decoders</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="footer">Generated as a standalone study artifact. No CDN, framework, font download, or network connection is required.</p>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const actionLayouts = {
+        7: { title: '7D cartesian', copy: 'xyz + axis-angle + gripper.' },
+        10: { title: '10D cartesian', copy: 'xyz + rot6d + gripper.' },
+        13: { title: '13D cartesian', copy: 'xyz + flattened 3×3 rotation + gripper.' },
+        57: { title: '57D hand pose', copy: 'camera, two wrists, and two sets of fingertip positions.' }
+      };
+
+      const grid = document.querySelector('#channel-grid');
+      const nativeShape = document.querySelector('#native-shape');
+      const actionDescription = document.querySelector('#action-description');
+      const actionButtons = [...document.querySelectorAll('[data-action-dim]')];
+
+      const renderAction = (dim) => {
+        grid.replaceChildren(...Array.from({ length: 64 }, (_, index) => {
+          const cell = document.createElement('span');
+          cell.className = `channel ${index < dim ? 'real' : 'invalid'}`;
+          cell.title = index < dim ? `native channel ${index}` : `padded channel ${index} · masked`;
+          return cell;
+        }));
+        const layout = actionLayouts[dim];
+        nativeShape.textContent = `xₜ ∈ R${dim}`;
+        actionDescription.innerHTML = `<strong>${layout.title}:</strong> ${layout.copy}`;
+        actionButtons.forEach((button) => button.classList.toggle('active', Number(button.dataset.actionDim) === dim));
+      };
+      actionButtons.forEach((button) => button.addEventListener('click', () => renderAction(Number(button.dataset.actionDim))));
+      renderAction(10);
+
+      const tokenTrack = document.querySelector('#token-track');
+      const packNote = document.querySelector('#pack-note');
+      const packButtons = [...document.querySelectorAll('[data-pack-mode]')];
+      const packLayouts = {
+        standard: {
+          note: 'Default path: modalities are contiguous blocks. The start of vision defines the shared time origin used again by action and sound.',
+          blocks: [['TXT', 'prompt', 'text-token'], ['VIS', 'T×H×W', 'vision-token'], ['LID', 'optional', 'lidar-token'], ['ACT', 'T×1', 'action-token'], ['AUD', 'T×1', 'sound-token'], ['EOG', 'end', 'end-token']]
+        },
+        causal: {
+          note: 'Temporal-causal option: each visual time slice becomes a supertoken prefixed by its action steps. With VAE TCF=4, up to four action tokens align to each visual latent frame.',
+          blocks: [['TXT', 'prompt', 'text-token'], ['A₀', 'tcf', 'action-token'], ['V₀', 'H×W', 'vision-token'], ['A₁', 'tcf', 'action-token'], ['V₁', 'H×W', 'vision-token'], ['…', 'time', 'end-token'], ['AUD', 'T×1', 'sound-token'], ['EOG', 'end', 'end-token']]
+        }
+      };
+      const renderPacking = (mode) => {
+        const layout = packLayouts[mode];
+        tokenTrack.replaceChildren(...layout.blocks.map(([label, detail, cls]) => {
+          const block = document.createElement('div');
+          block.className = `token-block ${cls}`;
+          block.innerHTML = `${label}<small>${detail}</small>`;
+          return block;
+        }));
+        packNote.textContent = layout.note;
+        packButtons.forEach((button) => button.classList.toggle('active', button.dataset.packMode === mode));
+      };
+      packButtons.forEach((button) => button.addEventListener('click', () => renderPacking(button.dataset.packMode)));
+      renderPacking('standard');
+
+      const mropeData = {
+        vision: {
+          title: 'Video: T-major 3D grid',
+          copy: 'Within each latent frame, height and width enumerate the patch grid. The same temporal ID repeats across all spatial patches.',
+          formula: 'position(token) = (temporal_offset + scaled_t, h, w)\nflatten order = t → h → w',
+          coords: [[0,0,0], [0,0,1], [0,1,0], [0,1,1], [1,0,0], [1,0,1]]
+        },
+        text: {
+          title: 'Text: one scalar copied to all axes',
+          copy: 'Text retains ordinary sequence order by assigning the same monotonically increasing ID to T, H, and W.',
+          formula: 'position(textᵢ) = (offset + i, offset + i, offset + i)',
+          coords: [[0,0,0], [1,1,1], [2,2,2], [3,3,3], [4,4,4], [5,5,5]]
+        },
+        action: {
+          title: 'Action: temporal point with a one-frame shift',
+          copy: 'Each action timestep uses a 1×1 spatial grid. By default action[0] describes the transition into visual frame 1.',
+          formula: 'position(actionₜ) = (vision_offset + scaled(t + 1), 0, 0)',
+          coords: [[1,0,0], [2,0,0], [3,0,0], [4,0,0], [5,0,0], [6,0,0]]
+        },
+        sound: {
+          title: 'Audio: temporal point at AVAE latent rate',
+          copy: 'Audio also uses a 1×1 grid, but sound[0] aligns with visual frame 0. FPS modulation maps its latent rate to the common clock.',
+          formula: 'position(soundₜ) = (vision_offset + t / sound_tps × base_tps, 0, 0)',
+          coords: [[0,0,0], [0.96,0,0], [1.92,0,0], [2.88,0,0], [3.84,0,0], [4.8,0,0]]
+        }
+      };
+      const mropeButtons = [...document.querySelectorAll('[data-mrope-mode]')];
+      const renderMrope = (mode) => {
+        const data = mropeData[mode];
+        document.querySelector('#mrope-title').textContent = data.title;
+        document.querySelector('#mrope-copy').textContent = data.copy;
+        document.querySelector('#mrope-formula').textContent = data.formula;
+        document.querySelector('#coord-strip').replaceChildren(...data.coords.map((coord, index) => {
+          const card = document.createElement('div');
+          card.className = 'coord';
+          card.innerHTML = `<b>(${coord.join(', ')})</b><small>token ${index}</small>`;
+          return card;
+        }));
+        mropeButtons.forEach((button) => button.classList.toggle('active', button.dataset.mropeMode === mode));
+      };
+      mropeButtons.forEach((button) => button.addEventListener('click', () => renderMrope(button.dataset.mropeMode)));
+      renderMrope('vision');
+
+      const navLinks = [...document.querySelectorAll('nav a')];
+      const sections = navLinks.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              navLinks.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${entry.target.id}`));
+            }
+          });
+        }, { rootMargin: '-18% 0px -70% 0px', threshold: 0 });
+        sections.forEach((section) => observer.observe(section));
+      }
+    })();
+  </script>
+</body>
+</html>
