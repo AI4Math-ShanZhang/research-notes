@@ -403,16 +403,16 @@ const BLOG = {
       ],
     },
     {
-      id: "speech-dialogue",
-      name: "Speech Dialogue",
-      blurb: "Spoken dialogue systems — full-duplex interaction, interruption handling, latency, and how to measure them.",
+      id: "real-time-interactive",
+      name: "Real-Time Interactive",
+      blurb: "Models that listen and act while they are still responding — full-duplex interaction, interruption handling, latency, and how to measure them.",
       notes: [
         {
           title:   "FD-Bench — Full-Duplex Metrics, Read Off a Timeline",
           file:    "posts/fdbench-full-duplex-metrics.html",
           date:    "2026-08-30",
           paper:   "Peng, Chao, Ng, Ma, Ni, Ma, Chng (Alibaba-NTU CorpLab · NTU · Alibaba) · arXiv:2507.19040",
-          tags:    ["full-duplex", "spoken dialogue", "benchmark", "interruption", "VAD", "latency"],
+          tags:    ["full-duplex", "real-time interaction", "benchmark", "interruption", "VAD", "latency"],
           summary: "Working through what FD-Bench's nine objective metrics actually measure, since every one of them is a timestamp subtraction or an event count on Silero-VAD marks. Five rates say <em>whether</em> the AI did the right thing — SRR (answered a normal question), SIR (stopped talking when the user cut in), SRIR (after stopping, answered the new thing — denominator is SIs, not all interrupts, so stopping and answering stay separate), EIR (barged into the user), NIR (a door slam fooled it). Four timings say <em>how many milliseconds</em> late or early — IRD (cut-in → goes quiet), FSED (user stops → first sound), ERT (a correct answer starting a few hundred ms too soon) and EIT (barging in ~2 s early); all reported as medians. WER only checks the voice said the words the model itself wrote. Notes carry a worked 24-second timeline where each of SR / NI / SI / SRI / EI is read off one event, plus the count-to-percentage step. The other thing I got stuck on: the script really is an ordinary multi-round dialogue — what makes it full-duplex is that the audio streams nonstop in 80/107/200 ms chunks with fixed silence gaps, so Easy/Medium/Hard are the same conversations at 6–10 s, 4–6 s, 2–4 s gaps, and that change alone drives Moshi's SRR 61.7 → 45.6 → 34.1. Turn-taking benchmarks cannot have a noise gap, cannot let the AI talk over the user, and do the endpointing for the model instead of testing it.",
         },
       ],
