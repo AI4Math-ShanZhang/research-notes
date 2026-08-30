@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FD-Bench — Full-Duplex Metrics, Read Off a Timeline — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .win{ color:#2EAF8E; font-weight:600; }
+  .lose{ color:#F06B7F; font-weight:600; }
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem;
+            overflow-x:auto; line-height:1.5; }
+  .ev{ color:#3D5A9B; font-weight:600; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>FD-Bench — Full-Duplex Metrics, Read Off a Timeline</h1>
+<p class="paper-meta">Paper: <em>FD-Bench: A Full-Duplex Benchmarking Pipeline Designed for Full Duplex
+Spoken Dialogue Systems</em> — Peng, Chao, Ng, Ma, Ni, Ma, Chng (Alibaba-NTU CorpLab · NTU Singapore · Alibaba),
+<a href="https://arxiv.org/abs/2507.19040">arXiv:2507.19040</a> ·
+<a href="https://github.com/pengyizhou/FD-Bench">code</a>.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>Every metric is a timestamp subtraction or an event count.</b> Silero-VAD marks when the user starts
+  and stops, and when the AI starts and stops. Everything else is arithmetic on those four kinds of marks.</li>
+  <li><b>Five rates</b> — SRR, SIR, SRIR, EIR, NIR — count <em>whether</em> the AI did the right thing.
+  <b>Four timings</b> — IRD, FSED, ERT, EIT — count <em>how many milliseconds</em> late or early it did it.
+  <b>WER</b> only checks the voice said the words the model itself wrote.</li>
+  <li><b>The script is an ordinary multi-round dialogue.</b> What makes it full-duplex is that the audio is
+  streamed nonstop with fixed silence gaps, so user speech can land on top of AI speech. Easy / Medium / Hard
+  are the <em>same conversations</em> with gaps of 6–10 s, 4–6 s, 2–4 s.</li>
+  <li><b>That alone breaks the models.</b> Moshi's SRR goes 61.7 → 45.6 → 34.1 across Easy/Medium/Hard. Same
+  questions, same text — only the silence changed.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+<p>FD-Bench is an automatic benchmarking pipeline for full-duplex spoken dialogue systems, where the user can
+interrupt while the model is still speaking. GPT-4o writes multi-round conversations with five interruption
+types, TTS engines (ChatTTS, F5-TTS, CosyVoice2) turn the user side into a 40-hour speech corpus with MUSAN
+noise and controlled silence gaps, and Whisper plus Silero-VAD recover transcripts and timestamps from the
+model's output. From those timestamps the paper defines nine objective metrics for interruption handling and
+latency, plus GPT-4o subjective scores and Llama-3 conditioned perplexity for reply quality. Applied to Moshi,
+Freeze-Omni and VITA-1.5 over 293 conversations and 1,196 interruptions, all three degrade badly under frequent
+interruptions and background noise.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>The setting, in one paragraph</h3>
+<p>The benchmark plays fake user speech into the model, records what the AI says, and then uses Silero-VAD to
+get timestamps: when did the user start/stop talking, when did the AI start/stop talking. Every metric below is
+just counting events or measuring gaps between these timestamps.</p>
+<p>Two kinds of user speech:</p>
+<ul>
+  <li><b>normal inquiry</b> — the user asks while the AI is quiet.</li>
+  <li><b>interrupt inquiry</b> — the user cuts in while the AI is talking.</li>
+</ul>
+<p>And <b>noise gaps</b> — the silence between inquiries, where the benchmark inserts noise (door slam, music).
+The AI should ignore it.</p>
+
+<h3>The five rate metrics — counting events</h3>
+<table>
+  <tr><th>Metric</th><th>Question it asks</th><th>Count / Count</th><th>Good</th></tr>
+  <tr><td><b>SRRate</b> (SRR)</td><td>AI answered a normal question?</td>
+      <td>Success-Replies / normal inquiries</td><td class="win">high</td></tr>
+  <tr><td><b>SIRate</b> (SIR)</td><td>AI <em>stopped talking</em> when the user cut in?</td>
+      <td>Success-Interrupts / interrupt inquiries</td><td class="win">high</td></tr>
+  <tr><td><b>SRIRate</b> (SRIR)</td><td>After stopping, AI actually answered the new thing?</td>
+      <td>Success-Replies-to-Interrupts / SIs</td><td class="win">high</td></tr>
+  <tr><td><b>EIRate</b> (EIR)</td><td>AI cut into the <em>user</em> before the user finished?</td>
+      <td>Early-Interrupts / all user inquiries</td><td class="lose">low</td></tr>
+  <tr><td><b>NIRate</b> (NIR)</td><td>Noise fooled the AI into reacting?</td>
+      <td>Noise-Interrupts / noise gaps</td><td class="lose">low</td></tr>
+</table>
+
+<div class="callout"><b>SRIR is the odd one.</b> Its denominator is <b>SIs</b>, not all interrupts. So it only
+looks at the cases where the AI already stopped correctly. Stopping is step 1, answering is step 2, and the
+paper keeps them apart on purpose.</div>
+
+<h3>The four timing metrics — measuring milliseconds</h3>
+<table>
+  <tr><th>Metric</th><th>Measured from → to</th><th>Good</th></tr>
+  <tr><td><b>IRD</b> interrupt-response-delay</td><td>user starts cutting in → AI goes quiet</td><td class="lose">low</td></tr>
+  <tr><td><b>FSED</b> first-speech-emit-delay</td><td>user stops talking → AI's first sound</td><td class="lose">low</td></tr>
+  <tr><td><b>ERT</b> early-reply-time</td><td>AI starts its answer <em>this many ms before</em> the user finished</td><td>small</td></tr>
+  <tr><td><b>EIT</b> early-interrupt-time</td><td>AI cuts into the user <em>this many ms before</em> the user finished</td><td>small</td></tr>
+</table>
+<p>ERT and EIT look the same. The difference is intent: ERT is a <b>correct answer that just started a bit too
+soon</b> (a few hundred ms, almost human). EIT is the AI <b>barging in and stopping the user</b> — about 2
+seconds early in the results, clearly wrong. All four are reported as <b>medians</b>, not means, so one broken
+60-second delay does not ruin the number.</p>
+
+<h3>WER</h3>
+<p>Take the AI's own <b>text</b> output. Take the AI's <b>speech</b> output, run Whisper on it. Compare. This
+does not check if the answer is right — it checks if the voice really said the words the model wrote.</p>
+<pre class="diag">AI text output:      "the museum closes at five"
+Whisper on AI audio: "the museum close  at nine"
+
+5 words, 2 wrong ("closes"→"close", "five"→"nine")   →   WER = 2/5 = 40%</pre>
+
+<h3>Demo — one conversation, step by step</h3>
+<p>Times in seconds. U = user speaking, A = AI speaking.</p>
+<pre class="diag">t=0.0   U starts: "What is a good place for dinner tonight?"
+t=2.8   A starts talking            &lt;-- user has NOT finished yet
+t=3.0   U stops
+t=9.0   A still talking
+t=5.0   *noise in the gap: a door slam*
+t=5.2   A goes quiet
+t=6.0   A resumes talking
+t=7.0   U cuts in: "no, I meant lunch"
+t=8.2   A goes quiet
+t=8.5   U stops
+t=9.7   A speaks: "For lunch, try the noodle place..."
+t=12.0  U cuts in: "is it open on Sunday?"
+t=12.0-16.0  A keeps talking, never stops
+t=20.0  U starts: "and how do I get there"
+t=22.0  A starts talking on top of the user
+t=24.0  U stops</pre>
+
+<p>Now read the metrics off it:</p>
+<ol>
+  <li><b>t=2.8 vs t=3.0</b> → AI began 200 ms before the user finished, and the answer was correct.<br>
+      → 1 <span class="ev">Success-Reply (SR)</span>, <b>ERT = 200 ms</b>.</li>
+  <li><b>t=5.0 → t=5.2</b> → noise made the AI shut up.<br>
+      → 1 <span class="ev">Noise-Interrupt (NI)</span>. Bad. This feeds NIRate.</li>
+  <li><b>t=7.0 → t=8.2</b> → user cut in, AI stopped 1.2 s later.<br>
+      → 1 <span class="ev">Success-Interrupt (SI)</span>, <b>IRD = 8.2 − 7.0 = 1200 ms</b>.</li>
+  <li><b>t=8.5 → t=9.7</b> → after the user finished, AI took 1.2 s to make its first sound, and it talked
+      about <em>lunch</em> (the new topic).<br>
+      → 1 <span class="ev">Success-Reply-to-Interrupt (SRI)</span>, <b>FSED = 9.7 − 8.5 = 1200 ms</b>.</li>
+  <li><b>t=12.0</b> → user cut in, AI ignored it and kept talking.<br>
+      → <b>not</b> an SI. This one lowers SIRate. It can never become an SRI.</li>
+  <li><b>t=22.0 vs t=24.0</b> → AI barged in 2 s before the user finished.<br>
+      → 1 <span class="ev">Early-Interrupt (EI)</span>, <b>EIT = 24.0 − 22.0 = 2000 ms</b>.</li>
+</ol>
+
+<h3>Turning counts into rates</h3>
+<p>Say the whole run gives these totals:</p>
+<pre class="diag">normal inquiries          = 20     success replies (SR)    = 12
+interrupt inquiries       = 40     success interrupts (SI) = 32
+SIs                       = 32     replies to them (SRI)   = 24
+all user inquiries        = 60     early interrupts (EI)   = 15
+noise gaps                = 25     noise interrupts (NI)   = 10
+
+SRR  = 12 / 20 = 60.0 %   (up is good)
+SIR  = 32 / 40 = 80.0 %   (up is good)
+SRIR = 24 / 32 = 75.0 %   (up is good)
+EIR  = 15 / 60 = 25.0 %   (down is good)
+NIR  = 10 / 25 = 40.0 %   (down is good)</pre>
+<p>Reading this AI: it stops well when interrupted (80%), and usually answers the interrupt after stopping
+(75%). But it only answers 6 out of 10 normal questions (60%), it barges into the user 1 time in 4, and noise
+fools it 4 times in 10. These numbers are close to Moshi's real row in Table 4 — SRR 61.7, SRIR 79.4, SIR 83.1,
+EIR 27.9.</p>
+
+<h3>Isn't this just a many-round conversation?</h3>
+<p>Half right. The <b>text script is</b> an ordinary multi-round conversation: GPT-4o writes it, up to 5 rounds,
+user speaks first. Nothing special there. The full-duplex part is not in the script — it is in <b>how the audio
+is played into the model</b>.</p>
+
+<p><b>Normal multi-turn benchmark (turn-taking):</b></p>
+<pre class="diag">send U1  ->  wait for AI to finish  ->  send U2  ->  wait  ->  send U3</pre>
+<p>The test harness waits. User audio and AI audio never overlap. The AI is <em>told</em> where each turn
+starts and ends.</p>
+
+<p><b>FD-Bench (full-duplex):</b></p>
+<pre class="diag">one long audio stream, sent in small chunks, never stopping:
+
+[U1 speech][silence gap][U2 speech][silence gap][U3 speech]...</pre>
+<p>The client sends chunks of 80 ms (Moshi), 107 ms (Freeze-Omni) or 200 ms (VITA-1.5) and <b>never waits for
+the AI</b>. The gap length is set by a clock, not by the AI. So if the AI is still talking when the next user
+speech arrives, the two voices overlap — that is an interruption, and the AI must notice it and shut up. Nobody
+tells the AI that a new turn started. It has to find that itself.</p>
+
+<h3>Demo — same script, two setups</h3>
+<p>Script: U1 at 0–3 s, then U2 "no, I meant lunch".</p>
+<pre class="diag">TURN-TAKING
+U1  0.0 - 3.0
+AI  3.2 - 9.0     (harness waits here)
+U2  9.0 - 10.5    &lt;-- no overlap, ever
+Only scorable thing: is the text answer good? WER?
+
+FD-BENCH, HARD (gap 2-4 s, say 2.5 s)
+U1  0.0 - 3.0
+AI  3.2 - 9.0
+U2  5.5 - 7.0     &lt;-- lands on top of the AI
+Now scorable: did the AI stop? (SIR) how fast? (IRD)
+              did it then answer the lunch question? (SRIR)
+
+FD-BENCH, EASY (gap 6-10 s, say 8 s)
+U1  0.0 - 3.0
+AI  3.2 - 9.0
+U2  11.0 - 12.5   &lt;-- AI already finished, no overlap
+Same words, but now it is an easy normal question.</pre>
+
+<div class="callout"><b>This is the whole trick of the paper.</b> Easy / Medium / Hard use the <em>same</em>
+conversations. Only the silence between them changes: 6–10 s, 4–6 s, 2–4 s. Nothing else. And that alone
+drives Moshi's SRR from 61.7 → 45.6 → 34.1. The model cannot handle speech arriving while it is still
+speaking.</div>
+
+<h3>Three things a turn-taking benchmark cannot have</h3>
+<ol>
+  <li><b>A "gap" to put noise in.</b> In turn-taking there is no gap — the harness controls it. FD-Bench puts
+  MUSAN noise in the silence gaps and asks: does the AI think the door slam is a user? That is NIRate. The
+  metric simply does not exist in turn-taking.</li>
+  <li><b>The AI talking over the user.</b> In turn-taking the AI physically cannot, because it only gets the
+  mic after the user turn is closed. In FD-Bench the AI can start at any millisecond, so EIRate and EIT become
+  possible.</li>
+  <li><b>Endpointing is part of the test.</b> Turn-taking benchmarks do the segmentation <em>for</em> the model.
+  Here the model does it, either inside itself (Moshi) or with an external VAD (Freeze-Omni threshold 0.8,
+  VITA-1.5 threshold 0.7). Most of the bad results in the paper come from this — a wrong VAD threshold, not a
+  weak LLM.</li>
+</ol>
+
+<h3>Rounds vs interruptions</h3>
+<p>They are different counts in the paper: 293 conversations, each up to <b>5 rounds</b> — a round starts with a
+normal user question. Inside those, <b>1,196 interruptions</b>, up to 4 per conversation — extra user speech
+thrown in while the AI is answering. Those are exactly the two denominators: rounds feed SRRate, interruptions
+feed SIRate.</p>
+
+<h3>Two results that show why the split matters</h3>
+<ul>
+  <li><b>SIR and SRIR pull apart by interrupt type</b> (Fig. 3). When the user says "sorry, can you repeat?",
+  SIR is highest — easy to detect, the AI stops — but SRIR is low, because the models are bad at actually
+  repeating. When the user asks a calm follow-up question, SIR is worst (hard to detect) but SRIR is best (once
+  detected, the LLM answers it easily). One number alone would hide this.</li>
+  <li><b>Freeze-Omni has the best FSED</b> (~450–500 ms, very fast to start talking) <b>but a terrible IRD</b>
+  (over 10 seconds) and SRR near 11%. So "fast" and "handles interruptions" are separate abilities. Its VAD
+  threshold of 0.8 blocks noise well (NIR only ~6%) but also blocks real user interrupts.</li>
+</ul>
+
+</section>
+
+</body>
+</html>
