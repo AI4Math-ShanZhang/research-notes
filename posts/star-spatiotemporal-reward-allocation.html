@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STAR — SpatioTemporal Adaptive Reward Allocation — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem;
+            font-size:.86rem; line-height:1.5; overflow-x:auto; }
+  .qa{ border-left:5px solid #b56b00; background:var(--notes-bg,#fdf6ec);
+       border-radius:0 8px 8px 0; padding:.4rem 1.1rem 1rem; margin:1.6rem 0; }
+  .qa > h2{ font-size:1.18rem; color:#b56b00; margin:.8rem 0 .2rem; }
+  .qa .asked{ font-family:-apple-system,system-ui,sans-serif; font-size:.82rem;
+              color:var(--muted,#7a8794); letter-spacing:.02em; margin:.1rem 0 .9rem; }
+  .qa h3{ font-size:1rem; margin:1.2rem 0 .3rem; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>STAR — SpatioTemporal Adaptive Reward Allocation</h1>
+<p class="paper-meta">Paper: <em>STAR: SpatioTemporal Adaptive Reward Allocation for Text-to-Image RL Post-Training</em>
+— Jinjie Shen, Wei Deng, Xian Hu, Daiguo Zhou, Jian Luan,
+<a href="https://arxiv.org/abs/2606.17979">arXiv:2606.17979</a>.</p>
+
+<!-- ===== Paper summary ===== -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+<p>RL post-training for text-to-image models (Flow-GRPO and friends) turns the final-image reward into
+a single scalar advantage and applies it with equal strength to every denoising step and every latent
+position — even though text alignment is usually decided by a small part of the image. STAR keeps the
+external reward unchanged and instead <em>routes</em> that scalar: it reads the model's own text-image
+attention on the prompt's key phrases, builds a per-step, per-rollout heatmap, and turns it into a
+multiplier between 1 and λ that scales the advantage at each latent position. A stop-gradient trick
+makes the PPO likelihood ratio spatial without changing its forward-pass value, so the clipped
+objective and KL term stay exactly as in Flow-GRPO. On SD3.5-Medium it reports 0.9759 GenEval,
+0.9757 OCR and 23.60 PickScore against the Flow-GRPO baseline's 0.95 / 0.92 / 23.31, at under 2%
+extra training time and 1.56% extra peak memory.</p>
+</section>
+
+<!-- ===== Q&A ===== -->
+
+<section class="qa">
+<h2>Q1 — What is the method?</h2>
+<p class="asked">Asked: “read this paper and tell me the method.”</p>
+
+<h3>The problem</h3>
+<p>You get <b>one number</b> for the whole image — e.g. GenEval says 0.8. That number becomes one
+advantage <code>A</code>, and the same <code>A</code> multiplies the gradient at every denoising step
+and every latent pixel. But if the prompt is “a red bicycle”, the reward depends on the bicycle
+region, not the sky or the road. The credit is spread flat over places that did not earn it.</p>
+
+<h3>1. Pull out the things the user cares about</h3>
+<p>Split the prompt <code>c</code> into K text units: subject, style, attribute, count, spatial
+relation. “generate a futuristic-style building” → “building” and “futuristic style”. Each unit maps
+to a set of token indices.</p>
+
+<h3>2. Read attention out of the model itself — no extra network</h3>
+<p>At each denoising step the backbone already computes image-token-to-text-token attention. For
+SD3.5 this is the image→text block of the joint attention matrix; for SDXL it would be
+cross-attention. They take only transformer blocks <b>10–15</b> and combine layers by max:</p>
+<pre class="diag">alpha_t(u, j) = max over selected layers of alpha_t^layer(u, j)</pre>
+<p>where <code>u</code> is a latent position and <code>j</code> a text token.</p>
+
+<h3>3. Turn attention into one heatmap per step</h3>
+<pre class="diag">M_t^k(u) = (1/|T_k|) * sum over j in T_k of alpha_t(u, j)
+H_t(u)   = (1/K) * sum over k of M_t^k(u)</pre>
+<p>Recomputed for every step <em>and</em> every rollout — that is where “spatiotemporal” and
+“adaptive” come from. Nothing is precomputed or fixed.</p>
+
+<h3>4. Normalize into a bounded multiplier</h3>
+<pre class="diag">C_t(u) = 1 + (lambda - 1) * (H_t(u) - min H_t) / (max H_t - min H_t + eps)</pre>
+<p>The weakest region still gets weight 1 — background is never zeroed out, it still matters for
+overall quality — and the most prompt-relevant region gets λ. They use <b>λ = 1.5</b>, so at most a
+1.5× boost. Very gentle.</p>
+
+<h3>5. Spatial advantage</h3>
+<pre class="diag">A_t(u) = A * C_t(u)</pre>
+<p>The sign of <code>A</code> is preserved. Bad image → relevant regions punished harder; good image
+→ rewarded harder.</p>
+
+<h3>6. Spatially resolved ratio (the clever bit)</h3>
+<p>Normally the PPO ratio is one scalar per step. They need one per latent position, without changing
+the overall scale of the update:</p>
+<pre class="diag">rho_t(u) = sg[ exp(l_bar_new - l_bar_old) ] * exp(l_t(u)) / sg[ exp(l_t(u)) ]</pre>
+<p><code>sg</code> is stop-gradient, <code>l_bar</code> is the spatial mean of the per-position
+log-prob contributions (which equals the usual scalar log-prob). Read it this way: the
+<b>value</b> of <code>rho_t(u)</code> is exactly the usual scalar ratio, because the second fraction
+equals 1 numerically. But the <b>gradient</b> now flows through the per-position term
+<code>l_t(u)</code>. Forward pass unchanged, backward pass becomes spatial.</p>
+
+<h3>7. Standard clipped objective, but per position</h3>
+<pre class="diag">J = E[ (1/T) sum_t (1/|Omega_t|) sum_u
+        min( rho_t(u)*A_t(u), clip(rho_t(u), 1-eps, 1+eps)*A_t(u) ) - beta*KL ]</pre>
+<p>Same PPO clip and same KL to the frozen reference as Flow-GRPO — the only change is that the inner
+sum is over latent positions with position-specific advantage.</p>
+
+<h3>Setup and results</h3>
+<p>SD3.5-Medium, LoRA rank 32 / alpha 64, built on the Flow-GRPO pipeline. ODE-to-SDE rollouts,
+T = 10 sampling steps in training (40 at eval), 512×512, group size G = 24, KL β = 0.04 (GenEval, OCR)
+or 0.01 (PickScore).</p>
+<table>
+  <thead><tr><th></th><th>Flow-GRPO</th><th>+ STAR</th></tr></thead>
+  <tbody>
+    <tr><td>GenEval overall</td><td>0.95</td><td>0.9759</td></tr>
+    <tr><td>OCR accuracy</td><td>0.92</td><td>0.9757</td></tr>
+    <tr><td>PickScore</td><td>23.31</td><td>23.60</td></tr>
+  </tbody>
+</table>
+<p>The GenEval gains sit exactly where you would expect: counting 0.95 → 0.98, colors 0.92 → 0.96,
+attribute binding 0.86 → 0.94 — the sub-tasks where a small region decides the score.</p>
+<p>Ablations: (a) one merged heatmap for all prompt units works as well as per-unit heatmaps, so they
+use the simpler one; (b) middle blocks 10–15 are as good as using all layers, and cheaper;
+(c) overhead is under 2% training time and 1.56% peak memory, because the attention is already
+computed in the forward pass.</p>
+</section>
+
+
+<section class="qa">
+<h2>Q2 — Why split the sentence into words, and is each word tied to a denoising step?</h2>
+<p class="asked">Asked: “why separate the sentence to each word? and how each word with the steps? like each word for each denoising step or what”</p>
+
+<h3>Why split the sentence into parts</h3>
+<p>Because attention is <b>per text token</b>. The raw quantity the model gives you is:</p>
+<pre class="diag">alpha_t(u, j) = how much latent position u looks at text token j</pre>
+<p>So you must decide <em>which j to use</em>. A prompt like “two red apples on a wooden table”
+becomes tokens like:</p>
+<pre class="diag">[BOS] two red app les on a wood en table [EOS] [PAD] [PAD] ...</pre>
+<p>Most of these are junk for our purpose: “on”, “a”, <code>[PAD]</code>, <code>[EOS]</code>. Filler
+and padding tokens usually attend everywhere in a flat way, or attend to nothing useful. Average over
+<b>all</b> tokens and the junk drowns the signal — the heatmap comes out almost uniform, which gives
+you back exactly the flat allocation you were trying to fix.</p>
+<p>The second reason: one word ≠ one token. “apples” may be cut into “app” + “les”. So a text unit
+holds a <b>set</b> of token indices <code>T_k</code>, and they average inside that set first, so a
+word cut into 3 pieces does not get 3× the vote of a word that stayed whole.</p>
+
+<h3>Is each word tied to a different denoising step? No.</h3>
+<p>All words are used at every step. Nothing is assigned word-by-step. At <b>every</b> step t, all
+words are merged into <b>one single map</b>:</p>
+<pre class="diag">M_t^k(u) = average of alpha_t(u, j) over the tokens j of word k   &lt;- one map per word
+H_t(u)   = average of M_t^k(u) over all K words                   &lt;- ONE map, all words merged</pre>
+<p>Small example, 4 latent positions, at one step:</p>
+<pre class="diag">map for "red"          = [0.6, 0.1, 0.1, 0.2]
+map for "apples"       = [0.7, 0.1, 0.1, 0.1]
+map for "wooden table" = [0.1, 0.1, 0.6, 0.6]
+--------------------------------------------------
+H = average            = [0.47, 0.10, 0.27, 0.30]</pre>
+<p>Position 1 (the apples) and positions 3–4 (the table) both get lifted. Position 2 is empty
+background and stays low. One map, all words together. They even tested the alternative — a separate
+map per word, stacked — and it gave <b>no gain</b> and was more complex (their Figure 3a).</p>
+
+<h3>So what actually changes across the steps?</h3>
+<p>The <b>words stay the same. The attention changes.</b> Early in denoising the image is still mostly
+noise, so “apples” attends in a wide, blurry blob. Late in denoising the layout is fixed, so “apples”
+attends sharply on the actual apple pixels. Same word, different map.</p>
+<p>Same 4 positions, one word “apples”, λ = 1.5:</p>
+<pre class="diag">Early step (t = 8, blurry attention)
+H_8 = [0.31, 0.27, 0.23, 0.19]     min 0.19, max 0.31
+C_8 = [1.50, 1.33, 1.17, 1.00]     boost is spread out
+
+Late step (t = 2, sharp attention)
+H_2 = [0.70, 0.10, 0.12, 0.08]     min 0.08, max 0.70
+C_2 = [1.50, 1.02, 1.03, 1.00]     boost is concentrated on position 1</pre>
+<p>Note the min-max normalization always forces the top position to 1.50 and the bottom to 1.00. What
+genuinely changes between steps is the <b>shape in the middle</b> — early on, many positions sit near
+the top; late on, only one does.</p>
+<p>This is the <b>temporal</b> half of SpatioTemporal: not different words at different times, but the
+<em>same</em> words producing a differently-shaped map at each time. And it is also per-rollout —
+image 1 in the group of 24 may put the apples on the left, image 2 on the right, and each gets its own
+map.</p>
+</section>
+
+
+<section class="qa">
+<h2>Q3 — Is the input JSON-processed tokens or the original instruction, and how are the words chosen in the attention map?</h2>
+<p class="asked">Asked: “the input is the json processed tokens or the original instruction? and how to choose the word in the attention map?”</p>
+
+<h3>The input is the original prompt. JSON is the <em>output</em>.</h3>
+<p>Two different things, worth keeping apart:</p>
+<ul>
+  <li><b>What the diffusion model gets:</b> the <b>full original prompt</b>, unchanged. Nothing is
+  removed. The model conditions on all tokens as normal.</li>
+  <li><b>What STAR gets:</b> the same original prompt, run through a small extraction step that
+  returns a JSON list of phrases. That list is used <b>only</b> to decide which columns of the
+  attention matrix to read.</li>
+</ul>
+<pre class="diag">original prompt string
+   -> extraction step (regex or VLM)  -> JSON list of phrases  ["red cat", "wooden table"]
+   -> match phrases back to token indices                       T_1 = {5,6}, T_2 = {9,10}
+   -> read attention only at those indices</pre>
+<p>This runs <b>once per prompt, before training</b>, not at every denoising step. It is offline
+preprocessing — part of why the overhead is under 2%.</p>
+
+<h3>Three extraction rules, one per task (Appendix A)</h3>
+<p><b>GenEval — no LLM at all, just a regex.</b> GenEval prompts follow a fixed template, so they
+strip the boilerplate prefix and keep the rest as <b>one single unit</b>:</p>
+<pre class="diag">regex: ^(?:a|an|the)?\s*(?:photo|picture|image|painting|drawing)\s+of\s+
+
+"a photo of a blue book"                          -> ["a blue book"]
+"a photo of a bus below a cat"                    -> ["a bus below a cat"]
+"a photo of a yellow bus and an orange handbag"   -> ["a yellow bus and an orange handbag"]</pre>
+<p>Note K = 1 here. The whole rest of the sentence is one unit. So for their headline GenEval number
+there is no word-splitting at all — just prefix removal.</p>
+
+<p><b>PickScore — same regex by default</b>, with an optional VLM decomposition. The VLM prompt says:
+return ONLY a JSON list of strings, 1–4 words each:</p>
+<pre class="diag">"a photo of a red cat sitting on a wooden table"
+   -> ["red cat", "wooden table", "sitting on"]</pre>
+
+<p><b>OCR — a VLM with a long, detailed prompt.</b> The most interesting one, because it says what
+they think a good unit is:</p>
+<ul>
+  <li><b>Include:</b> quoted text that must be rendered (“Take With Food”), the surface carrying it
+  (warning label, billboard, screen), visible attributes, main objects, concrete background.</li>
+  <li><b>Exclude:</b> abstract things with no region (urgency, mood, vibe), filler (“a photo of”,
+  “prominently displayed”), bare prepositions (“in”, “on”, “with”), quality tags (“8k”,
+  “masterpiece”), artist names, and the full prompt itself.</li>
+</ul>
+<p>The guiding test is stated directly: keep only phrases that “can plausibly map to a region in the
+image.”</p>
+
+<h3>How the chosen words become columns in the attention map</h3>
+<p>The attention tensor at step t has shape <code>h × w × L_c</code> — for every latent position, one
+weight per text token. Choosing a word means choosing <b>which slice along the token axis</b> to
+read.</p>
+<pre class="diag">tokens:   [BOS]  a   red  cat  sit ting  on   a   wood  en  table  [EOS] [PAD]...
+index:      0    1    2    3    4    5    6   7    8     9   10     11
+                     ^^^^^^^^                     ^^^^^^^^^^^^^^
+                     T_1 = {2,3}                  T_2 = {8,9,10}</pre>
+<pre class="diag">M_t^1(u) = ( alpha_t(u,2) + alpha_t(u,3) ) / 2                    &lt;- "red cat" map
+M_t^2(u) = ( alpha_t(u,8) + alpha_t(u,9) + alpha_t(u,10) ) / 3    &lt;- "wooden table" map
+H_t(u)   = ( M_t^1(u) + M_t^2(u) ) / 2                            &lt;- merged</pre>
+<p>Tokens 0, 1, 4, 5, 6, 7, 11 and all padding are simply never read. That is the whole selection
+mechanism — a masking of the token axis, nothing more.</p>
+<p>One thing the paper does <b>not</b> spell out: the exact algorithm for matching a phrase string
+like <code>"red cat"</code> back to token indices. In practice you tokenize the phrase and find its
+span in the tokenized full prompt, but they leave this as an implementation detail. It matters more
+than it sounds, because a phrase may tokenize differently in isolation than in context, and a VLM can
+return a paraphrase that does not appear literally in the prompt — their own prompt hedges with “keep
+the original wording <em>when possible</em>.” When it is not possible the match fails and that unit is
+presumably dropped. They report no numbers on how often this happens.</p>
+</section>
+
+</body>
+</html>

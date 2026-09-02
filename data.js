@@ -122,6 +122,14 @@ const BLOG = {
       blurb: "Diffusion language models — architecture, sampling, self-conditioning, and interpretability. (The complexity-theory side lives in Loop Transformer.)",
       notes: [
         {
+          title:   "STAR — routing one image-level reward over denoising time and latent space",
+          file:    "posts/star-spatiotemporal-reward-allocation.html",
+          date:    "2026-09-02",
+          paper:   "Shen, Deng, Hu, Zhou & Luan · arXiv:2606.17979",
+          tags:    ["RL post-training", "text-to-image", "flow matching", "credit assignment", "cross-attention", "GRPO"],
+          summary: "Q&amp;A note. Flow-GRPO turns the final-image reward into one scalar advantage and applies it equally to every denoising step and every latent pixel — but for &ldquo;a red bicycle&rdquo; the reward is decided by the bicycle region, not the sky. STAR keeps the reward source unchanged and routes the scalar instead: read the model's own image→text attention (SD3.5 joint attention, blocks 10–15, max over layers), average over the prompt's key phrases into one heatmap per step per rollout, min-max it into a multiplier C in [1, λ] with λ = 1.5, and set A_t(u) = A · C_t(u). The ratio is made spatial by a stop-gradient trick whose forward value equals the usual scalar ratio while the gradient flows per position, so the PPO clip and KL stay as they were. Covers three questions: why the prompt is split into phrases at all (attention is indexed by token, and filler/padding tokens flatten the map), whether words are assigned to steps (no — all words merge into one map at every step; what changes is the attention sharpening as the image forms), and what the actual input is (the original prompt; the JSON phrase list is the offline extraction output — a regex for GenEval, a VLM for PickScore/OCR — used only to pick which columns of the attention matrix to read).",
+        },
+        {
           title:   "AURORA-LM — Keep the Fat Latent, Fix the Diffusion Model",
           file:    "posts/aurora-lm-continuous-latent.html",
           date:    "2026-08-09",
@@ -139,6 +147,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "STAR: SpatioTemporal Adaptive Reward Allocation for Text-to-Image RL Post-Training",
+          link:    "https://arxiv.org/abs/2606.17979",
+          summary: "Keeps the external reward unchanged and reallocates it inside the generative trajectory. Text units are extracted per task (deterministic prefix-stripping regex for GenEval, VLM returning a JSON phrase list for PickScore and OCR), matched to text-token indices, and used to slice the image→text attention; layers are combined by max over transformer blocks 10–15, phrases averaged into one heatmap H_t per step per rollout, then min-max normalized into C_t(u) = 1 + (λ−1)·(H−min)/(max−min+ε) with λ = 1.5, so background keeps weight 1 rather than being zeroed. The spatial advantage is A_t(u) = A·C_t(u), and the likelihood ratio is spatialized as sg[exp(l̄_new−l̄_old)]·exp(l_t(u))/sg[exp(l_t(u))] — numerically identical to the scalar ratio, but with gradients flowing per latent position — inside the standard clipped objective with KL. SD3.5-Medium, LoRA r=32/α=64, Flow-GRPO pipeline, T=10 train / 40 eval, 512×512, G=24, β=0.04 (GenEval, OCR) or 0.01 (PickScore). Results 0.9759 GenEval / 0.9757 OCR / 23.60 PickScore vs 0.95 / 0.92 / 23.31, with counting 0.95→0.98, colors 0.92→0.96, attribute binding 0.86→0.94; overhead &lt;2% training time, +1.56% peak memory. Ablations: a single merged heatmap matches per-component heatmaps, and blocks 10–15 match all-layer routing more cheaply.",
+        },
         {
           name:    "AURORA-LM: Autoencoding Unified Representation for Continuous-Latent Diffusion Language Modeling",
           link:    "https://arxiv.org/abs/2608.02602",
