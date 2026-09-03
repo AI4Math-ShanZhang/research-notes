@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LayerNorm as Implicit Gain Control — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .sym{ background:#fff; border:1px solid #dfe6ee; border-radius:8px; padding:.6rem .9rem; margin:.6rem 0; }
+  .sym b{ color:#3D5A9B; }
+  .eq{ background:#1f2933; color:#e6edf3; border-radius:8px; padding:.7rem 1rem; margin:1rem 0;
+       font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.95rem; white-space:pre; overflow-x:auto; }
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .step{ border-top:2px solid #e3e8ef; padding-top:.3rem; margin-top:1.8rem; }
+  pre.code{ background:#1f2933; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+       font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  pre.code b{ color:#F79A38; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>LayerNorm as Implicit Gain Control in Looped Transformers</h1>
+<p class="paper-meta">Paper: <em>LayerNorm as Implicit Gain Control in Looped Transformers</em> —
+Matthias M. M. Buehlmaier (University of Hong Kong),
+<a href="https://arxiv.org/abs/2607.10681">arXiv:2607.10681</a>. July 2026.
+Code: <a href="https://github.com/clojure-finance/mythjure">clojure-finance/mythjure</a>, tag <code>paper-v1</code>.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Three things to remember</h2>
+<ol>
+  <li><b>LayerNorm divides by the state size.</b> So a big state means a gentle block. And a high carry
+  makes the state big. So turning the carry up automatically makes the block gentler. Free, automatic,
+  nobody tuned it.</li>
+  <li><b>Judge safety by long-run growth, not worst-case growth.</b> The budget is 1 minus long-run growth.
+  It falls from 0.16 to 0.01 as the carry goes to 1. Long memory costs you your safety margin.</li>
+  <li><b>The block is the memory. The carry is just a brake.</b> Cut the block's view of the state and
+  accuracy drops from 1.00 to 0.09 — and the carry does not rise to fill in.</li>
+</ol>
+<p style="margin-bottom:.6rem;"><b>Two warnings:</b> the danger is activations <em>shrinking</em>, not
+exploding; and watch the smallest single token, not the average.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Part 1 — The notation</h2>
+
+<h3>The loop equation</h3>
+
+<div class="eq">h_next  =  A * h  +  f(h, e)</div>
+
+<p>That is the whole paper in one line. Six symbols. Here they are.</p>
+
+<div class="sym"><b>h</b> — the hidden state.<br>
+This is the thing that goes around the loop. A big pile of numbers. Think of it as the model's current
+"working notes."</div>
+
+<div class="sym"><b>t</b> — which loop step you are on.<br>
+You start with <code>h_0</code>. Run the block, get <code>h_1</code>. Run it again, get <code>h_2</code>.
+And so on. Say 8 steps total.</div>
+
+<div class="sym"><b>e</b> — the input.<br>
+The encoded prompt. It gets fed in fresh at <em>every</em> loop step, not just the first. It never changes
+during the loop.</div>
+
+<div class="sym"><b>f</b> — the block.<br>
+One transformer block: attention + MLP, with LayerNorm inside. It reads the current <code>h</code> and the
+input <code>e</code>, and outputs a <em>change</em> to add. Not a new <code>h</code> — just the change.
+Like "adjust your notes by this much."</div>
+
+<div class="sym"><b>A</b> — the carry.<br>
+One number per channel, always between 0 and 1. It says how much of the old <code>h</code> you keep. If
+<code>A = 0.9</code>, you keep 90% of your old notes. If <code>A = 0.2</code>, you throw away 80% and
+mostly start fresh each step.</div>
+
+<div class="sym"><b>rho</b> — the biggest number in <code>A</code>.<br>
+Just a shorthand. Instead of talking about 32 channels, you talk about the single slowest one. When I say
+"high carry," I mean rho close to 1.</div>
+
+<p>So the line reads:</p>
+
+<div class="callout">new notes = (keep some of the old notes) + (the block's suggested change)</div>
+
+<p>That's it. Two paths bring information from one loop step to the next:</p>
+<ul>
+  <li><b>Path 1, the carry:</b> <code>A * h</code>. Dumb and linear. Just multiply by a number.</li>
+  <li><b>Path 2, the block:</b> <code>f(h, e)</code>. Smart and nonlinear. It actually reads
+  <code>h</code> and thinks about it.</li>
+</ul>
+
+<div class="mermaid">
+flowchart LR
+  H["h_t (working notes)"] --> C["carry: A * h<br/>linear, dumb"]
+  H --> B["block: f(h, e)<br/>nonlinear, smart"]
+  E["e (input, frozen)"] --> B
+  C --> S(("+"))
+  B --> S
+  S --> H2["h_t+1"]
+</div>
+
+<div class="callout"><b>The paper's main question:</b> which of these two paths is the model's real memory?</div>
+
+<h3>Four more symbols you need</h3>
+
+<div class="sym"><b>h*</b> — where the loop settles.<br>
+If you loop enough times and <code>h</code> stops changing, that resting value is <code>h*</code>.
+Called a fixed point. Read it "h-star."</div>
+
+<div class="sym"><b>|h|</b> — the size of <code>h</code>.<br>
+Squash the whole pile of numbers into one number saying "how big." Like a volume knob reading.</div>
+
+<div class="sym"><b>Lip(f)</b> — the sensitivity of the block.<br>
+If the input to the block moves a little, how much does the output move? Sensitivity 5 means the output
+moves 5x as much as the input did. Sensitivity 0.1 means it barely reacts.<br>
+<em>This is the key symbol.</em> High sensitivity = the loop is jumpy and can blow up.
+Low sensitivity = the loop is calm and settles.</div>
+
+<div class="sym"><b>F</b> — the size of the block's output at the settled point.<br>
+So <code>F = |f|</code>. In their runs this sat around 25 and barely moved. LayerNorm is why it barely
+moves.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Part 2 — The story, one step at a time</h2>
+
+<h3 class="step">Step 1. LayerNorm divides by the size of the state</h3>
+
+<p>That's all LayerNorm does that matters here. It divides.</p>
+<p>So if <code>h</code> gets bigger, the block's sensitivity gets smaller. Here is what they measured:</p>
+
+<table>
+  <tr><th>size of h</th><th>sensitivity of the block</th><th>the two multiplied</th></tr>
+  <tr><td>2</td><td>17</td><td>36</td></tr>
+  <tr><td>11</td><td>2.9</td><td>31</td></tr>
+  <tr><td>44</td><td>0.65</td><td>28</td></tr>
+  <tr><td>218</td><td>0.12</td><td>27</td></tr>
+</table>
+
+<p>Read the table: when <code>h</code> was tiny (2), the block was wildly jumpy (17). When <code>h</code>
+was big (218), the block barely reacted (0.12). And the last column — the two multiplied together — is
+almost the same number every time. So:</p>
+
+<div class="eq">sensitivity  =  C / (size of h)          where C is about 27</div>
+
+<p>That constant <code>C</code> is the first real finding. Sensitivity is not free to be anything.
+It is locked to the size of <code>h</code>.</p>
+
+<h3 class="step">Step 2. The carry decides how big h settles at</h3>
+
+<p>When the loop has settled, nothing changes anymore. So whatever the carry throws away, the block must
+put back. Exactly.</p>
+<p>The carry throws away <code>(1 - rho)</code> of the state each step. The block puts back <code>F</code>.
+Setting them equal:</p>
+
+<div class="eq">(1 - rho) × |h*|  =  F
+
+|h*|  =  F / (1 - rho)</div>
+
+<p>With <code>F</code> about 25, plug in numbers:</p>
+
+<table>
+  <tr><th>rho</th><th>1 - rho</th><th>settled size of h</th></tr>
+  <tr><td>0.3</td><td>0.7</td><td>36</td></tr>
+  <tr><td>0.9</td><td>0.1</td><td>250</td></tr>
+</table>
+
+<p>So a high carry forces a big state. Makes sense — you're keeping more each round, so more piles up.</p>
+
+<h3 class="step">Step 3. Chain Step 1 and Step 2 together</h3>
+
+<p>This is the actual finding of the paper.</p>
+<ul>
+  <li>Step 1 said: sensitivity = C / (size of h)</li>
+  <li>Step 2 said: size of h = F / (1 - rho)</li>
+</ul>
+<p>Substitute the second into the first:</p>
+
+<div class="eq">sensitivity  =  (C / F) × (1 - rho)</div>
+
+<p>They measured <code>C / F</code> at about 2.5, and it stayed about 2.5 across every carry they tried.
+So <code>sensitivity ≈ 2.5 × (1 - rho)</code>. Here it is with numbers:</p>
+
+<table>
+  <tr><th>rho</th><th>sensitivity of the block</th></tr>
+  <tr><td>0.30</td><td>1.63</td></tr>
+  <tr><td>0.50</td><td>1.23</td></tr>
+  <tr><td>0.70</td><td>0.83</td></tr>
+  <tr><td>0.90</td><td>0.24</td></tr>
+  <tr><td>0.95</td><td>0.12</td></tr>
+</table>
+
+<p>Read this out loud: <b>when you turn the carry up, the block automatically becomes gentler.</b></p>
+<p>Nobody programmed that. Nobody tuned it. It happens because turning the carry up makes <code>h</code>
+bigger, and LayerNorm divides by the size of <code>h</code>.</p>
+
+<div class="callout">That is what "implicit gain control" means. Gain = sensitivity.
+It gets controlled on its own.</div>
+
+<h3 class="step">Step 4. But this is not enough to keep the loop safe</h3>
+
+<p>You'd hope the two paths add up to less than 1, so each step shrinks. Add them:</p>
+
+<div class="eq">carry + sensitivity  =  rho + 2.5 × (1 - rho)
+
+  rho = 0.3  →  0.3 + 1.75  =  2.05
+  rho = 0.9  →  0.9 + 0.25  =  1.15
+  rho = 1.0  →  1.0 + 0.00  =  1.00</div>
+
+<p>All above 1. This sum never says "safe" — except right at rho = 1, which is useless.</p>
+<p>And yet the loop does settle in practice. So this sum is measuring the wrong thing.</p>
+
+<h3 class="step">Step 5. Two different ways to measure "growth per step"</h3>
+
+<p>Here is the piece that makes the whole thing work.</p>
+<ul>
+  <li><b>Worst-case growth</b> (the paper says "operator norm"): push the state in the single worst
+  direction. How much does it grow in one step?</li>
+  <li><b>Long-run growth</b> (the paper says "spectral radius"): run many steps. On average, per step,
+  does it grow or shrink?</li>
+</ul>
+<p>These are not the same number. They measured both:</p>
+
+<table>
+  <tr><th>rho</th><th>worst-case growth</th><th>long-run growth</th></tr>
+  <tr><td>0.30</td><td>1.74</td><td>0.92</td></tr>
+  <tr><td>0.70</td><td>1.30</td><td>0.96</td></tr>
+  <tr><td>0.95</td><td>1.02</td><td>0.99</td></tr>
+</table>
+
+<p>Look at the first row. Worst-case is 1.74, so a bump can get 74% bigger in one step. But long-run is
+0.92, so it shrinks 8% per step over time.</p>
+<p><b>Meaning: a disturbance grows first, then dies.</b> It bulges, then fades. That's fine.
+The loop is safe.</p>
+<p>Why can these differ? Because the two paths push in different directions. The carry is diagonal — it
+only stretches along the channel axes. The block is dense — attention mixes channels together. They don't
+line up, so the worst case never actually happens twice in a row.</p>
+
+<div class="eq">budget  =  1 - long-run growth</div>
+
+<h3 class="step">Step 6. The price of memory</h3>
+
+<p>Now use that budget formula on their numbers. Averaged over 10 random starts:</p>
+
+<table>
+  <tr><th>rho</th><th>budget</th></tr>
+  <tr><td>0.30</td><td>0.159</td></tr>
+  <tr><td>0.50</td><td>0.104</td></tr>
+  <tr><td>0.70</td><td>0.053</td></tr>
+  <tr><td>0.90</td><td>0.026</td></tr>
+  <tr><td>0.95</td><td>0.012</td></tr>
+</table>
+
+<p>From 0.159 down to 0.012. <b>Thirteen times thinner.</b></p>
+<p>High carry means information survives longer across loop steps. It also means almost no safety margin.
+You cannot have both.</p>
+<p>Also: out of 10 random starts, 1 or 2 never settled at all. They just circled forever. That happened
+even at low carry.</p>
+
+<div class="warn">This is the <b>"necessary but not sufficient"</b> line. Forcing rho &lt; 1 controls the
+dumb linear path. It says nothing about the smart nonlinear path. So rho &lt; 1 does not guarantee the
+loop converges.</div>
+
+<h3 class="step">Step 7. The danger is the opposite of what you'd guess</h3>
+
+<p>Go back to the Step 1 table:</p>
+<ul>
+  <li><code>h</code> big (218) → sensitivity 0.12 → <b>calm, safe</b></li>
+  <li><code>h</code> small (2) → sensitivity 17 → <b>jumpy, dangerous</b></li>
+</ul>
+
+<p>So the thing that kills you is <code>h</code> <b>shrinking</b>, not exploding. If activations collapse
+toward zero, LayerNorm's division blows the sensitivity up, the loop stops settling, and gradients
+explode. Explosion caused by things getting too small.</p>
+<p>One more wrinkle: LayerNorm works <em>per token</em>. So one single collapsed token is enough to spike
+the sensitivity, while the overall average still looks perfectly healthy.</p>
+
+<div class="warn"><b>What to watch:</b> the smallest per-token spread. Not the global average.</div>
+
+<h3 class="step">Step 8. Which path is the actual memory? (the ablation)</h3>
+
+<p>Back to the main question from Part 1. Two paths — carry, or block. Which one carries memory across
+loop steps?</p>
+
+<p><b>The task.</b> A sequence like <code>[A] [pad] [pad] [pad] [?]</code>. Answer <code>A</code> at the
+<code>?</code>. The gap is <code>k</code> positions.</p>
+
+<p><b>The trick to make it hard.</b> They restricted attention so each position can only see itself and
+the one before it. Now info must crawl one position per loop step. You genuinely need multi-step memory.</p>
+
+<table>
+  <tr><th>run</th><th>can the block read h?</th><th>attention</th><th>accuracy</th><th>learned max(A)</th></tr>
+  <tr><td><b>A</b> full model</td><td>yes</td><td>restricted</td><td>1.00</td><td>0.517</td></tr>
+  <tr><td><b>B</b> ablated</td><td><b>no</b></td><td>restricted</td><td><b>0.09</b></td><td>0.522</td></tr>
+  <tr><td><b>C</b> ablated</td><td>no</td><td>full</td><td>1.00</td><td>0.529</td></tr>
+</table>
+
+<p>In run B they cut one wire: the block can no longer see <code>h</code>. It only sees the input
+<code>e</code>. So the carry becomes the only path carrying anything across loop steps.</p>
+<ul>
+  <li><b>A vs B:</b> one wire changed. 1.00 falls to 0.09. So the memory was flowing through the block.</li>
+  <li><b>B vs C:</b> same cut block, but now let attention see everything. Back to 1.00. This proves B
+  didn't fail because the model got weaker. It failed because it lost the specific ability to pass info
+  across loop steps.</li>
+</ul>
+<p><b>And the carry did not step up to help.</b> In run B it sat at 0.522, basically where it started.
+It had every reason to rise and take over the job. It couldn't.</p>
+
+<p>They also checked the other direction: as the gap <code>k</code> grew from 2 to 6, the carry should
+have climbed toward 0.83 if it were doing the memory job. It went <em>down</em> instead — 0.524 to 0.486.</p>
+
+<h4>How to actually run this ablation</h4>
+
+<p>It is one line. The block's input is normally <code>h + e</code>. You feed it just <code>e</code>.</p>
+
+<pre class="code">def block_increment(h, e, see_h=True):
+    x = (h + e) if see_h else e      <b># &lt;-- the whole ablation</b>
+    out = transformer_block(x)       # pre-LN attention + MLP
+    return out - x                   # return only the CHANGE
+
+A = torch.exp(-torch.exp(log_A))     # forces A into (0, 1)
+h = torch.zeros_like(e)
+for t in range(T):                   # T = 8
+    h = A * h + block_increment(h, e, see_h)</pre>
+
+<p>Two details in that snippet. <b>One:</b> the block returns <code>out - x</code>, not <code>out</code>.
+A transformer block already has its own residual, so returning <code>out</code> would give you the
+identity twice — once inside the block, once from the carry — and the loop would blow up. <b>Two:</b>
+<code>log_A</code> passed through a double exponential is what forces the carry into (0, 1) by
+construction.</p>
+
+<p><b>Why the cut is so clean.</b> <code>e</code> never changes during the loop. So if the block only sees
+<code>e</code>, it produces <em>the same output at every step</em>. You can hoist it out:</p>
+
+<pre class="code">c = block_increment(None, e, see_h=False)   # compute ONCE
+for t in range(T):
+    h = A * h + c                           # c is a fixed constant</pre>
+
+<p>The loop became multiply-and-add. With A = 0.5 and c = 10, starting at 0: 10, 15, 17.5, 18.75 … sliding
+toward 20. That's all it can ever do. It cannot move information from position 3 to position 7. It is a
+leaky bucket filling up. Hence 0.09 — basically guessing.</p>
+
+<p>And that is exactly why run C rescues it: with full attention, the one-time computation of <code>c</code>
+already has the answer inside it before the loop even starts.</p>
+
+<div class="analogy"><b>The exam analogy.</b>
+<code>e</code> is the question sheet — printed, on the desk, never changes.
+<code>h</code> is your scratch paper — you update it each round.
+<b>Normal:</b> each round you look at the question <em>and</em> your scratch paper, so round 3 builds on
+round 2. <b>Ablated:</b> you may only look at the question sheet. So every round you have the identical
+first thought and write it down again. Eight rounds, zero progress.
+<b>The carry</b> is your scratch paper slowly fading — but nobody is reading it. Faded notes nobody reads
+don't help.</div>
+
+<h4>If you run it yourself</h4>
+<ul>
+  <li>Keep everything else identical. Only <code>see_h</code> changes between A and B; only the attention
+  mask changes between B and C.</li>
+  <li>Train from scratch each time (the paper says "cold start"). Fine-tuning B from A's weights measures
+  forgetting, not capability.</li>
+  <li><b>Leave the carry trainable.</b> You want it to have the chance to take over. The fact that it
+  doesn't is the result. Freezing it would prove nothing.</li>
+  <li>Verify the cut is real: in ablated mode the increment must be byte-identical at every loop step.
+  <code>assert torch.allclose(increments[0], increments[-1])</code>. If that fails, <code>h</code> is
+  leaking in somewhere.</li>
+  <li>Their settings: gap k=4, T=8 loop steps, d=24, attention window 1.</li>
+</ul>
+
+<h3 class="step">Step 9. The one case where the carry does get used</h3>
+
+<p>They built a task where each channel just needs to remember its own value, decaying at its own rate.
+No mixing between channels. That is exactly, literally what a carry does.</p>
+<p>There the carry moved, and it matched the target rates at correlation 0.92.</p>
+
+<div class="callout"><b>Why this experiment matters:</b> without it you couldn't tell "the carry is not
+needed" apart from "the gradient is broken." This proves the gradient works fine. The carry just doesn't
+get used for normal tasks.</div>
+
+<p>Language tasks always mix channels. So for language, the carry stays idle.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section" style="background:#fff6f7;border-left:5px solid #F06B7F;">
+<h2 style="color:#b23a4c;">⚠ How much to trust it</h2>
+<ul>
+  <li>Single author, business faculty, not an ML lab. Hours on a consumer laptop.</li>
+  <li>d = 8 to 32, at most 4 heads, sequence lengths up to 32, CPU only, written from scratch in Clojure
+  with hand-derived backprop (verified against finite differences to 1e-6).</li>
+  <li>The six "tasks" are Tiny Shakespeare plus toy synthetics.</li>
+  <li><b>The stability tables use random untrained weights.</b> Those growth and budget numbers describe
+  the model at initialization, not after training. The paper says so.</li>
+  <li>The math in the appendix is clean and doesn't depend on dimension — the coupling follows from the
+  normalizer ignoring scale, so it holds for RMSNorm too. Post-LN would not get it.</li>
+</ul>
+<p>Verdict: take the mechanism seriously, treat the numbers as a small-scale illustration.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section" style="background:#f4f1fa;border-left:5px solid #9B72CF;">
+<h2 style="color:#6b4ba1;">🔗 Hooks to the rest of this category</h2>
+<ul>
+  <li><b>Ouro's exit gate.</b> The paper flags that any adaptive-depth halting rule reading activation size
+  will make bad calls in the small-norm regime — exactly when the dynamics are least trustworthy.</li>
+  <li><b>Why depth extrapolation saturates.</b> The improvement per extra loop step decays at roughly the
+  long-run growth rate. That is the mechanism behind the saturating-exponential test-time scaling law, and
+  it lines up with Ouro peaking at its trained depth and degrading past it.</li>
+  <li><b>Mixture-of-Recursions.</b> Per-channel carry has the same memory-versus-stability tension as
+  diagonal SSMs (S4, Mamba) — only the axis differs (depth instead of sequence). One slow channel pins the
+  whole margin: 31 channels at 0.5 plus one at 0.99 is as bad as all of them at 0.99.</li>
+</ul>
+</section>
+
+</body>
+</html>

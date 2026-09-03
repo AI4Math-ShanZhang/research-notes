@@ -47,6 +47,14 @@ const BLOG = {
       ],
       notes: [
         {
+          title:   "LayerNorm as Implicit Gain Control in Looped Transformers",
+          file:    "posts/layernorm-gain-control-looped.html",
+          date:    "2026-09-03",
+          paper:   "Buehlmaier · arXiv:2607.10681",
+          tags:    ["looped TF", "LayerNorm", "stability", "fixed point", "ablation design", "toy scale"],
+          summary: "Written as notation first, then nine steps. The loop is h_next = A·h + f(h,e), with two paths across steps: the dumb linear carry and the smart nonlinear block. LayerNorm divides by state size, so block sensitivity is C/|h| with C≈27 measured flat across two orders of magnitude; the fixed-point balance makes |h*| = F/(1−rho); chain them and sensitivity ≈ 2.5·(1−rho) — raise the carry and the block gets gentler on its own, with nobody tuning it. That still never certifies safety (rho + 2.5(1−rho) exceeds 1 everywhere), and the resolution is that worst-case growth and long-run growth come apart: 1.74 vs 0.92 at rho=0.3, so a bump bulges then fades. The real budget is 1 − long-run growth, collapsing 0.159 → 0.012 as rho → 1, with 1–2 of 10 seeds never settling at all — so rho < 1 is necessary but not sufficient. The failure direction is inverted: small activations spike sensitivity to 17, so watch the smallest per-token spread, not the global norm. Includes the three-cell A/B/C ablation (1.00 / 0.09 / 1.00) with the one-line code change that implements it, why hoisting f(e) out of the loop makes the collapse to a leaky bucket obvious, the exam analogy, and the positive control on a per-channel EMA task (r=0.92) that rules out a dead gradient.",
+        },
+        {
           title:   "Chain of Thought vs Latent Thought",
           file:    "posts/cot-vs-latent-thought.html",
           date:    "2026-07-19",
@@ -88,6 +96,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "LayerNorm as Implicit Gain Control in Looped Transformers",
+          link:    "https://arxiv.org/abs/2607.10681",
+          summary: "Single-author, University of Hong Kong. Studies the Parcae-style gated recurrence h_{t+1} = Ā⊙h_t + f(h_t,e), where Ā is a diagonal carry constrained to (0,1) and f is the pre-LN block's increment (the block's own residual is folded into the carry, so f contains no identity). Central mechanism: a normalizer that ignores scale has a Jacobian scaling like 1/‖x‖ — a degree-0 homogeneity fact, so it holds for RMSNorm and ScaleNorm too but not post-LN — which gives Lip(f) = C/‖h‖ with C≈27 measured flat across ‖h‖ from 2 to 218. Combine with the fixed-point balance (1−ρ)‖h*‖ = ‖f‖ and you get Lip(f) ≈ (C/F)(1−ρ) with C/F ≈ 2.5 near-constant over ρ ∈ [0.3, 0.95]: raising the carry automatically softens the block, unprompted. The correction to the obvious reading is that this does NOT deliver an operator-norm certificate — ρ + 2.5(1−ρ) descends from ≈2 to 1 only in the ρ→1 limit, and the measured ‖J_G‖₂ exceeds 1 in every converged instance (1.74 at ρ=0.3). The recurrence Jacobian is non-normal, so the load-bearing quantity is the spectral margin 1 − ρ_spec, which falls monotonically 0.159 → 0.012 across ρ = 0.3 → 0.95 (10 seeds), and 1–2 of 10 initializations sit on bounded non-settling orbits forever: ρ(Ā) < 1 is necessary but not sufficient. Asymmetric failure mode: large activations are safe, small ones spike Lip(f) to ~17, so activation implosion (not explosion) is the risk, and because LN acts per token the binding diagnostic is the minimum per-token spread, not the global norm. Training half: across six tasks the optimizer never recruits the carry for memory — Tiny Shakespeare max(Ā) crawls 0.19→0.23, windowed copy declines 0.524→0.486 as the gap grows (predicted climb was to 0.833), and the A/B/C ablation (block reads h + windowed = 1.00; block cut + windowed = 0.09; block cut + full attention = 1.00) isolates the block's nonlinear recurrence as the depth-memory path, with the carry refusing to compensate. The boundary is a constructed per-channel EMA task where the carry IS recruited (r=0.92), which doubles as the control proving the gradient isn't dead. Explains why Parcae's spectral-radius constraint is cheap: it restricts a degree of freedom gradient descent doesn't use. Caveat that limits everything: d ≤ 32, ≤4 heads, seq ≤ 32, CPU-only Clojure implementation, and the stability tables are measured at random initialization rather than after training.",
+        },
         {
           name:    "Ouro — Scaling Latent Reasoning via Looped Language Models",
           link:    "https://arxiv.org/abs/2510.25741",
