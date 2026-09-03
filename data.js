@@ -20,6 +20,11 @@ const BLOG = {
       blurb: "Latent / looped reasoning, chain-of-thought, expressivity & complexity.",
       repos: [
         {
+          name:    "huskydoge/Awesome-Loop-Models",
+          link:    "https://github.com/huskydoge/Awesome-Loop-Models",
+          summary: "Reading list for this whole category — ~150 papers under one definition: a shared layer/block/operator reused inside a single forward pass (agent loops and solver rounds are excluded). Split into theory and mechanism (34), architecture and algorithms (97), and applications (20), plus a blogs section, and tagged by loop mechanism (hierarchical / flat / parallel loop, implicit layer), by focus (objective, training, architecture, data, inference), and by domain. TAXONOMY.md states the inclusion rule and TAGS.md the tag inventory; there is also a browser for filtering and a release-trend view.",
+        },
+        {
           name:    "raymin0223/mixture_of_recursions",
           link:    "https://github.com/raymin0223/mixture_of_recursions",
           summary: "Mixture-of-Recursions (NeurIPS 2025) — a router gives each token its own recursion depth, and the recursion-aware KV cache fixes the hole that Ouro named as its blocker. The adaptive per-position depth piece, already working.",
