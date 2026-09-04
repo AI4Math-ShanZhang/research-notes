@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoGe — Reading Figure 1 — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table.shapes{ border-collapse:collapse; margin:1rem 0; font-size:.92rem; }
+  table.shapes th, table.shapes td{ border:1px solid #d8dee6; padding:.4rem .7rem; text-align:left; }
+  table.shapes th{ background:#f3f6fa; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>RoGe — Reading Figure 1: tokenizers, ray maps, and the geometry adapter</h1>
+<p class="paper-meta">Paper: Xiaolei Lang, Ze Kang, Zehao Huang &amp; Naiyan Wang (Xiaomi EV · Northeastern University) ·
+<a href="https://arxiv.org/abs/2609.02847">arXiv:2609.02847</a> ·
+<a href="https://roge.github.io">project page</a>.
+Short note — only the pipeline diagram, not the experiments.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 What goes in, what comes out</h2>
+
+<p>You give it <b>6 posed images</b> and a <b>camera path of 81 poses</b>. It gives back an 81-frame video
+walking along that path. The paper calls this <i>roaming a scene anchored by sparse views</i>.</p>
+
+<p>The claim in the title is <b>implicit</b>. Other hybrid methods reconstruct the scene into something you
+can look at — a point map, 3D Gaussians, a rendered image — and hand that to a video model. RoGe never builds
+that thing. The scene stays as transformer tokens, and the diffusion model reads the tokens directly. That
+also means gradients can flow back, so the two halves train together.</p>
+
+<pre class="calc">6 posed images ──► Camera-Conditioned VGGT ──► scene tokens (2048-d)
+                                                     │
+87 ray maps ──► Ray Map Encoder ──► ray tokens ──► Ray–Scene Cross-Attention
+     │                                                   │
+     │                                                   ▼
+     │                                          geometric features F_r
+     │                                                   │
+     │                                    Latent-Aligned Geometry Adapter
+     │                                                   │
+     ▼                                                   ▼
+  pack + unshuffle ─────────────────┐                    │
+                                    ▼                    ▼
+6 images + noise ──► 3D Causal VAE ──► Patch Embed ⊕ ──► Video DiT ──► video</pre>
+
+<p>In the figure the <b>snowflake</b> sits on the 3D Causal VAE (frozen). The <b>flames</b> sit on the
+camera-conditioned VGGT, the geometry adapter, the patch embeddings, and the Video DiT. The DiT and the
+cross-attention blocks only move through LoRA (rank 32 and rank 8).</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Ray maps — the same thing used two different ways</h2>
+
+<p>For every pixel of every view you take the ray it looks along: the origin <code>o</code> (the camera
+centre) and the unit direction <code>d</code>. Store the six numbers <code>(d, o × d)</code>. That is the
+Plücker coordinate. Stack over all pixels and you get a 6-channel image the same size as the picture.</p>
+
+<div class="callout">
+<b>Why not just pass the pose matrix?</b> A pose is one vector for the whole frame. A ray map gives
+<i>every pixel</i> its own ray, so the network keeps the link between a spatial location in the latent and
+the direction that location looks in. That link is what later lets the diffusion model line geometry up with
+the right part of the picture.
+</div>
+
+<p>Ray maps are built for all 87 views — the 6 inputs and the 81 targets. And Figure 1 shows them leaving in
+<b>two arrows</b>, because the paper keeps two encodings of the same thing:</p>
+
+<table class="shapes">
+<tr><th></th><th>Tokenized ray map</th><th>Packed ray map</th></tr>
+<tr><td>Made by</td><td>Ray Map Encoder (8×8 conv)</td><td>Pack4 + PixelUnshuffle8</td></tr>
+<tr><td>Goes to</td><td>Ray–Scene Cross-Attention</td><td>straight into the DiT patch embed</td></tr>
+<tr><td>Job</td><td>ask the scene "what is along this ray?"</td><td>tell the DiT where the camera is</td></tr>
+<tr><td>Lossy?</td><td>yes, patches are compressed</td><td>no — every pixel's ray survives</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 The three tokenizers in the figure</h2>
+
+<p><b>1. Camera-Conditioned VGGT — makes the scene tokens.</b> VGGT is a pretrained multi-view geometry
+transformer. RoGe adds one small thing: a 2-layer MLP turns each camera's intrinsics and pose into a
+1024-dim token, which is <b>added to VGGT's own camera token</b> for that view. Then the tokens from the last
+local attention layer and the last global attention layer are glued along channels, 1024 + 1024 = <b>2048-dim
+scene tokens</b>. It stops there — no depth map, no point cloud, no Gaussians.</p>
+
+<div class="keypt">
+<b>Why the camera conditioning is not a detail.</b> Plain VGGT builds features in its <i>own</i> frame,
+anchored to its first input view, at a scale it picks itself. Your target trajectory is in the frame of the
+poses you gave. Those two disagree, and you cannot re-express the tokens in a new frame afterwards. The
+ablation shows what that costs: raw VGGT tokens as conditioning score <b>worse than feeding no geometry at
+all</b> (18.50 vs 19.01 PSNR). Conditioning VGGT on the input cameras fixes it (19.35).
+</div>
+
+<p><b>2. Ray Map Encoder — makes the ray tokens.</b> One 2D convolution with 8×8 patches, one ray token per
+patch, for all 87 views, plus 4 learnable <b>register tokens</b> per view (the DINOv2 trick — give the model
+somewhere to dump global junk so it does not pollute the patch tokens).</p>
+
+<p>Then <b>Ray–Scene Cross-Attention</b> is the "query" step. Scene tokens are squeezed 2048 → 768, and 12
+blocks run three operations each:</p>
+
+<pre class="calc">Q̃ = Q + SelfAttn(Q)                 # rays talk to each other, within one view
+Q ← Q̃ + CrossAttn(Q̃, Z, Z)          # rays read the scene
+Z ← Z  + CrossAttn(Z, Q̃, Q̃)         # the scene reads the rays back  ← only blocks 1..11</pre>
+
+<p>The backward arrow is the interesting one: the scene representation gets refined by the rays that are
+asking about it. The last block drops it and only reads. Output is <code>F_r</code>, the per-view geometric
+features. A small RGB head decodes them for the render loss (weight 0.1) — the dashed branch going down in
+the figure. That loss is an anchor, not the output.</p>
+
+<p><b>3. The 3D Causal VAE — and it is used in a split way.</b> This is the frozen Wan2.1 video tokenizer.
+The problem it has to solve: 6 context views are an unordered <i>set</i>, 81 target frames are an ordered
+<i>video</i>. Feed them the same way and you either invent a fake ordering for the context, or you break time
+continuity in the output. So:</p>
+
+<ul>
+  <li>each context image is encoded <b>alone</b>, as a 1-frame video → 6 latent slots</li>
+  <li>the target video is encoded <b>jointly</b> → 1 + 80/4 = <b>21</b> latent slots</li>
+</ul>
+
+<p>Total <b>27</b> slots. In the figure those are the clean boxes ("Clean Context Latents") and the grainy
+boxes ("Noisy Target Latents"). Remember 27 — the adapter exists to hit that number.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Latent-Aligned Geometry Adapter</h2>
+
+<p>This is the box that makes the whole idea work, and it is doing something very plain: <code>F_r</code> and
+the VAE latents disagree on three axes, and it fixes each one.</p>
+
+<table class="shapes">
+<tr><th>Mismatch</th><th>Fix</th><th>Numbers</th></tr>
+<tr><td>channels</td><td>1×1 convolution</td><td>768 → 384</td></tr>
+<tr><td>spatial size</td><td>bilinear resize to the latent grid</td><td>→ 24 × 42</td></tr>
+<tr><td><b>time</b></td><td><b>Pack4</b></td><td>87 views → 27 slots</td></tr>
+</table>
+
+<p>The first two are bookkeeping. <code>Pack4</code> is the one worth reading twice. VGGT produced 87
+separate per-view feature maps. The VAE produced 27 latent slots. They must line up one to one, so:</p>
+
+<pre class="calc">6 context frames   ──► each replicated 4×  ──► 24
+1st target frame   ──► replicated 4×       ──►  4
+80 remaining target frames ──► unchanged   ──► 80
+                                              ───
+                                              108   then stack every 4 along channels
+                                              108 / 4 = 27   ✓ exactly the latent slots
+                                              channels 4 × 384 = 1536</pre>
+
+<div class="keypt">
+<b>The replication is not padding.</b> It copies exactly what the causal VAE did in time — keep frame 1, then
+compress every 4 frames after it. That is why the name is "latent-<i>aligned</i>". Slot <i>k</i> of the
+geometry condition covers the same frames as slot <i>k</i> of the latent.
+</div>
+
+<p>The raw ray maps get the same treatment on the right-hand path: <code>Pack4</code> turns 6 channels into
+24, then <code>PixelUnshuffle8</code> folds each 8×8 pixel block into channels, 24 × 64 = <b>1536</b>, also at
+24 × 42. Nothing is thrown away — the ray information just moves from space into channels. That is what
+"lossless packed ray map" means.</p>
+
+<p>Then the <b>⊕</b> in the figure. Three <i>separate</i> 3D convolutional patch embeddings, then a plain
+sum:</p>
+
+<pre class="calc">X̃ = PatchEmbed_1( [noisy latent ; appearance condition] )   # pretrained Wan weights
+  + PatchEmbed_2( packed ray maps    )                      # 1536 ch, random init
+  + PatchEmbed_3( geometry condition )                      # 1536 ch, random init</pre>
+
+<p>The appearance condition is a binary mask saying which slots are context, plus the context latents in
+their 6 slots and <b>zeros</b> in the 21 target slots. After a 2×2 spatial patch you get 27 × 12 × 21 = 6804
+tokens into the DiT.</p>
+
+<p>One detail that is in the text but not in the figure: <b>temporal RoPE is switched off on the 6 context
+slots</b> and kept only along the target trajectory. So the context stays permutation-invariant (a set) and
+the output stays a video. Same motive as the split VAE encoding.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 What I take away</h2>
+
+<div class="keypt">
+<b>The contribution is the gradient path, not the adapter.</b> The adapter is a 1×1 conv, a resize, and a
+replicate-and-stack. Nothing clever. What is new is that the flow-matching loss flows back <i>through</i> it,
+through the cross-attention, and into VGGT. Two-stage methods (GEN3C, NeoVerse) cannot do this — the
+reconstruction is finished and frozen before generation starts, so generation inherits its errors and
+reconstruction never hears about them.
+</div>
+
+<p>Their ablation is the honest version of the argument, and I like that they published the row where their
+own idea loses:</p>
+
+<table class="shapes">
+<tr><th>Geometric condition</th><th>Joint train</th><th>PSNR</th></tr>
+<tr><td>none (generation only)</td><td>–</td><td>19.01</td></tr>
+<tr><td>raw VGGT patch tokens</td><td>–</td><td><b>18.50</b> — worse than nothing</td></tr>
+<tr><td>+ camera-conditioned</td><td>–</td><td>19.35</td></tr>
+<tr><td>rendered RGB</td><td>–</td><td>20.35</td></tr>
+<tr><td>ray-queried features</td><td>–</td><td>20.59</td></tr>
+<tr><td>ray-queried features</td><td>✓</td><td>20.92</td></tr>
+</table>
+
+<p>So the ordering is: geometry in the wrong frame is actively harmful; a rendered image is already decent;
+querying the implicit features beats the render by a little; joint training adds the last third of a point.
+End-to-end is the smallest of the three gains, which is worth remembering when reading the abstract.</p>
+
+<div class="warn">
+<b>Things I could not pin down from the paper.</b>
+<ul>
+  <li>Equation 10 writes <code>F_r</code> at H/4 × W/4, but the ray encoder uses 8×8 patches, which gives
+  H/8 × W/8. The two branches also run at different resolutions (288×504 for reconstruction, 192×336 for
+  generation), so the resolution bookkeeping does not close cleanly for me. It does not matter downstream —
+  the adapter bilinearly resizes anyway.</li>
+  <li>The VAE channel count and the DiT hidden width are not stated; I am reading them off Wan2.1-I2V-14B.</li>
+  <li>The scene-token count out of VGGT is never given. VGGT uses 14-pixel patches, which divides neither 288
+  nor 504, so there is a resize step the paper does not describe.</li>
+  <li>All results are on DL3DV with 10 test sequences from SEVA. That is a small evaluation set for the
+  size of the claim.</li>
+</ul>
+</div>
+
+<p><b>In one paragraph:</b> Figure 1 is two tracks meeting at a sum. The lower track turns 6 posed images into
+VGGT scene tokens, then lets ray tokens from all 87 views query them through 12 bidirectional cross-attention
+blocks. The upper track uses a frozen causal VAE that encodes context images one at a time and the target
+video jointly, giving 27 latent slots. The Latent-Aligned Geometry Adapter is the bridge — channels by 1×1
+conv, space by bilinear resize, and time by a replicate-and-stack that maps 87 view features onto exactly
+those 27 slots so they can be added to the noisy latent inside the DiT patch embedding.</p>
+</section>
+
+</body>
+</html>
