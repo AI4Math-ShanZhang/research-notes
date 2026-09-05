@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnyWorld — how a human video becomes robot training data — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  table.shapes{ border-collapse:collapse; margin:1rem 0; font-size:.92rem; }
+  table.shapes th, table.shapes td{ border:1px solid #d8dee6; padding:.4rem .7rem; text-align:left; }
+  table.shapes th{ background:#f3f6fa; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>AnyWorld — how a human video becomes robot training data</h1>
+<p class="paper-meta">Paper: <em>AnyWorld: Factorized Egocentric World Models for Cross-Embodiment
+Generalization</em> — Chen, Bai, Wei, Chen, Zheng, Wu, Yang, Chen, Li, Yue, Guo, Ge, Lin &amp; Liu
+(NTU · A*STAR · XPENG Robotics · Zhejiang · CUHK) ·
+<a href="https://arxiv.org/abs/2608.29242">arXiv:2608.29242</a> ·
+<a href="https://xpeng-robotics.github.io/anyworld/">project page</a> ·
+<a href="https://github.com/xpeng-robotics/AnyWorld">code</a>.
+Note focused on the data pipeline — how human experience is turned into robot supervision.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<p>AnyWorld is a video world model that splits an egocentric interaction into three independent conditions —
+action, camera, and embodiment — so that a single human clip can be re-rendered with a robot body, in a new
+scene, or from a new viewpoint. It is trained in two stages on <b>unpaired</b> data (200K EgoDex human clips,
+then a small human + robot mix) and never sees the same interaction performed by both a human and a robot.
+The generated robot rollouts are paired with calibrated robot actions and used as extra adaptation data for a
+VLA, raising RoboCasa GR1 pick-and-place from 49.8% to 54.6% and real IRON grasping from 20.0% to 55.0%.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Reading Figure 1</h2>
+
+<p>The teaser is the whole idea in one picture. On the left, two reference videos: a <b>human</b> one
+(labelled in blue <code>A_H</code>, <code>S_H</code>, <code>E_H</code> — action, scene, embodiment) and a
+<b>robot</b> one (in orange <code>A_R</code>, <code>S_R</code>, <code>E_R</code>). On the right, four rows,
+each a different mix:</p>
+
+<table class="shapes">
+<tr><th>Row</th><th>Recipe</th><th>What you see</th></tr>
+<tr><td>Embodiment</td><td><code>A_H + S_H + E_R</code></td><td>human's motion, human's kitchen, robot hand doing it</td></tr>
+<tr><td>Scene</td><td><code>A_H + S_R + E_H</code></td><td>human's motion, robot's scene, still a human hand</td></tr>
+<tr><td><b>Full</b></td><td><code>A_H + S_R + E_R</code></td><td>human's motion, robot's scene, robot hand — <b>this row is the data engine</b></td></tr>
+<tr><td>Viewpoint</td><td>same mix, camera swapped</td><td>"Camera pose #1 / #2 / #1"</td></tr>
+</table>
+
+<div class="keypt">
+Every row keeps <code>A_H</code>. The action is <i>always</i> the human's; only the body, the scene, and the
+camera get swapped. Rows 1 and 2 exist to show the three conditions really are independent — you can move one
+and hold the others still.
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 The action condition is a drawing, not numbers</h2>
+
+<p>This was the part I had to look at the figures to believe. <code>A_1:T</code> is a <b>second video</b> —
+same length, same resolution, blank white frames with a small coloured hand skeleton drawn on them. EgoDex is
+recorded with a headset that already tracks 3D hand pose, so you project those joints into the image plane and
+draw them.</p>
+
+<p>The paper's reason:</p>
+
+<div class="callout">
+"This places the action in the image plane, specifying <b>where</b> motion should occur in the video rather
+than <b>how</b> a particular body should actuate. Compared with joint commands or robot-specific action
+vectors, such pixel-space control provides a more embodiment-agnostic interface."
+</div>
+
+<p>A joint-angle vector for a human arm means nothing to an IRON humanoid — different joint count, different
+limits. "The hand should be at this pixel, in this pose, at frame 12" makes sense for any body. That is the
+whole trick.</p>
+
+<p>Three conditions, three different injection points, from a <b>WAN Fun-Control 14B</b> backbone:</p>
+
+<pre class="calc">action    H_in = Concat[ Z_s , Z^a_1:T , Z^0_1:T ]          # channel concat with the noisy latent  (eq 1)
+camera    H_0  = PatchEmbed(H_in) + Adapter( Z^c_1:T )      # Plücker rays, added to patch embed    (eq 2)
+embodiment H_l+1 = DiTBlock_l( H_l ; E_tau )                # text tag via cross-attention          (eq 3)</pre>
+
+<p>The embodiment tag is a structured caption that separates scene / action / subject, so only the subject
+phrase changes: "a human" → "an IRON humanoid robot" → "a RoboCasa GR1 robot".</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 There is no action prediction at inference</h2>
+
+<p>I got this wrong on first read, so it is worth stating plainly. Section 3.5: <i>"Given a source video, we
+extract its action and camera controls."</i> The action is <b>copied from a human clip you already have</b>.
+Nothing predicts it, and the VLA is not in the loop.</p>
+
+<table class="shapes">
+<tr><th></th><th>Running AnyWorld</th><th>Running the robot</th></tr>
+<tr><td>When</td><td>offline, in the lab</td><td>deployment</td></tr>
+<tr><td>Action comes from</td><td>an existing EgoDex clip</td><td>the VLA's own output</td></tr>
+<tr><td>AnyWorld</td><td>generating video</td><td><b>not running at all</b></td></tr>
+</table>
+
+<p>So it is a <b>data factory</b>, not a planner and not an evaluator. Nothing imagines-then-selects.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Where the first frame comes from — reverse pseudo-pairs</h2>
+
+<p>To re-embody, you need an edited first frame <code>Ĩ_0</code> showing the robot in the human's scene. There
+is no paired data to train that editor on. The supplementary (§2.1) has a neat trick.</p>
+
+<div class="keypt">
+Open-domain image editors are <b>much better at drawing plausible human hands than at drawing a specific
+robot morphology</b>. So run the easy direction: take ~800 egocentric <i>robot</i> frames per embodiment,
+use Nano-Banana to edit the robot arms into human arms while holding camera, background, and object state
+fixed. Now (robot image, generated human image) is an approximately aligned pair — and you train the
+<b>inverse</b> human→robot editor on it.
+</div>
+
+<p>Cheap, and it sidesteps the impossible requirement of reproducing the same contact state with two different
+bodies.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Wrist path → gripper path, the seven steps</h2>
+
+<p>The main text says only <i>"an action-calibration module maps the human wrist trajectory into the target
+robot's relative end-effector action space"</i> and defers. The recipe is in supplementary §2.4, and it is a
+fixed geometry pipeline — no learning:</p>
+
+<pre class="calc">1. resample   16 FPS (EgoDex) → 30 FPS (IRON), cut to 50 steps   = 1.67 s, one action chunk
+2. interpolate  position: linear in R^3      rotation: SLERP on SO(3)
+3. relativize   donor-relative local deltas   ← this is where body size / arm length drops out
+4. hand         project active side into the IRON-hand PCA action subspace   ("eigengrasps")
+5. rescale      three separate factors: position, velocity, rotation
+6. clip         to the valid IRON dynamic range
+7. re-anchor    onto the robot's own S0, then RelativeActionTransform (same one used at deployment)
+
+   non-target arm: held close to its initial state</pre>
+
+<p>Step 3 is the one that makes the transfer legal. Instead of "the wrist is at (0.31, 0.05, 1.42) in the
+room" you get "the wrist moved 4 cm forward and turned 3 degrees since last step." Where the person stood, how
+tall they were, how long their arm was — all gone. Only the <i>shape</i> of the motion survives.</p>
+
+<p>Step 4 is the answer to "how does a five-finger hand become a gripper command": you do not solve it, you
+project onto the robot's own low-dimensional grasp basis and keep whatever lands there.</p>
+
+<p>So the human motion is used <b>twice, in two formats</b>, from the same source trajectory:</p>
+
+<pre class="calc">human 3D wrist/hand trajectory
+   ├─► project + draw ──► A_1:T  (picture)  ──► world model ──► V̂  robot video   [the observation]
+   └─► calibration    ──► Ã_1:T  (numbers)  ─────────────────────────────────────► [the action label]
+
+training item:   D_trans = { ( V̂_1:T , ℓ , Ã_1:T ) }     (eq 4)</pre>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Numbers worth remembering</h2>
+
+<table class="shapes">
+<tr><th>Stage</th><th>Data</th><th>Compute</th></tr>
+<tr><td>Stage 1 — human pretrain</td><td>200K EgoDex clips, 30K steps</td><td>32 × H200</td></tr>
+<tr><td>Stage 2 — mixed fine-tune</td><td>5K EgoDex + 5K robot clips per embodiment, 5K steps</td><td>8 × H200</td></tr>
+<tr><td>Editor training</td><td>~800 robot frames per embodiment</td><td>—</td></tr>
+<tr><td>VLA adaptation</td><td>generated : real robot = 1:1, added only in stage 2</td><td>—</td></tr>
+</table>
+
+<table class="shapes">
+<tr><th>Downstream (baseline = UniT)</th><th>Eval</th><th>Before</th><th>After</th></tr>
+<tr><td>RoboCasa GR1</td><td>18 pick-and-place tasks</td><td>49.8%</td><td>54.6% (+4.8)</td></tr>
+<tr><td>IRON real robot</td><td><b>20</b> banana-grasp trials</td><td>20.0%</td><td>55.0% (+35.0)</td></tr>
+</table>
+
+<p>The UniT baseline <b>already pretrains on large-scale EgoDex</b>, so the gain is not "human data helps" —
+it is "re-embodied human data helps <i>on top of</i> raw human data." That is the right control and I am glad
+they ran it.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 What I take away</h2>
+
+<div class="keypt">
+<b>The contribution is the interface, not the model.</b> The backbone is off-the-shelf WAN Fun-Control, and
+a control video is exactly what it already eats. What is new is deciding that <i>action = a drawing</i>, which
+is what makes human and robot share one conditioning channel and lets unpaired training work at all.
+</div>
+
+<div class="warn">
+<b>Things that bother me.</b>
+<ul>
+  <li><b>Nothing checks the video against the action.</b> <code>Ã</code> comes from the original human
+  trajectory; <code>V̂</code> comes from a diffusion model. If the generated robot hand drifts off the
+  skeleton, the label is silently wrong for that video. No filtering step is described anywhere.</li>
+  <li><b>The scale factors are never printed.</b> "Calibrate position, velocity, and rotation scales" — with
+  no values, and no description of how the IRON-hand PCA basis was fitted or how many components it keeps.</li>
+  <li><b>The mixing ratio does not agree with itself.</b> Table 3 concludes "we therefore use the 2:1 mixture
+  for our main model", the setup says 5K human + 5K robot, and supplementary §2.2 says "we maintain a 1:1
+  ratio between human and robot data within each epoch" with the human subset re-sampled each epoch. Possibly
+  reconcilable, but as written the three statements do not line up.</li>
+  <li><b>n = 20.</b> The headline 20% → 55% real-robot jump is 20 grasp trials of one object. That is 4
+  successes versus 11. Directionally fine, but it is a very thin plank for a +35 point number.</li>
+  <li><b>The calibration is only spelled out for IRON</b>, under §2.4 "Targeted Human-to-IRON Visual–Action
+  Pair Construction" — i.e. for the Section 4.6 closed-loop experiments. Whether the main-table pipeline is
+  identical is not stated.</li>
+  <li><b>It needs tracked 3D hand pose.</b> EgoDex ships it for free. Point this at ordinary internet video
+  and both branches die at once — no skeleton to draw, no trajectory to calibrate.</li>
+</ul>
+</div>
+
+<p><b>In one paragraph:</b> AnyWorld takes a human clip, keeps its hand-skeleton control video and its camera
+path, swaps only the first frame and the embodiment tag, and generates the same interaction performed by a
+robot in a different scene. In parallel a non-learned geometry pipeline turns the same human wrist trajectory
+into relative end-effector actions — resample, SLERP, go relative, project the hand onto a PCA grasp basis,
+rescale, clip, re-anchor on the robot's own start state. Video plus instruction plus calibrated action is a
+normal VLA training triple, and mixing those synthetic triples 1:1 with real robot data is what produces the
+reported gains. Never any paired human–robot clips, and never any check that the two halves of each generated
+triple actually agree.</p>
+</section>
+
+</body>
+</html>
