@@ -448,6 +448,14 @@ const BLOG = {
       blurb: "Models that listen and act while they are still responding — full-duplex interaction, interruption handling, latency, and how to measure them.",
       notes: [
         {
+          title:   "Self Forcing — Rolling Out on Your Own Frames",
+          file:    "posts/self-forcing-ar-video-diffusion.html",
+          date:    "2026-09-07",
+          paper:   "Huang, Li, He, Zhou, Shechtman (Adobe Research · UT Austin) · NeurIPS 2025 · arXiv:2506.08009",
+          tags:    ["autoregressive video", "rolling KV cache", "exposure bias", "streaming", "latency", "distribution matching", "VBench"],
+          summary: "Self Forcing unrolls the model on its own generated chunks during training with KV caching, so the training loop <em>is</em> the inference loop and a DMD/SiD/GAN loss can land on the whole finished video instead of on frames conditioned on ground truth. Notes work through the rolling KV cache (a finished frame's K/V never change, so you pop the oldest instead of recomputing — 84 attention units per frame vs 525 and 1764), why noisy context frames break caching on four separate counts, why Self Forcing training needs <b>no attention mask at all</b> while TF and DF need block-sparse ones, what the enable/disable-gradient lines in Algorithm 1 actually cut, and why neither training nor inference can feed all chunks at once. Ends on the evaluation: VBench Total reproduces exactly as 0.8·Quality + 0.2·Semantic (so the 0.05 win over Wan2.1 hides a +11.48 Semantic gain over CausVid at identical speed), and the real-time claim is deliberately two numbers — 17.0 FPS against a 16 FPS playback rate and 0.69 s first-frame latency on one H100, a bar the frame-wise variant misses at 8.9 FPS.",
+        },
+        {
           title:   "FD-Bench — Full-Duplex Metrics, Read Off a Timeline",
           file:    "posts/fdbench-full-duplex-metrics.html",
           date:    "2026-08-30",
@@ -457,6 +465,7 @@ const BLOG = {
         },
       ],
       papers: [
+        { name:"CausVid — From Slow Bidirectional to Fast Autoregressive Video Diffusion Models", link:"https://arxiv.org/abs/2412.07772", summary:"Yin, Zhang, Zhang, Freeman, Durand, Shechtman, Huang (MIT · Adobe). Adapts a pretrained bidirectional video diffusion transformer into a causal autoregressive one that emits frames on the fly, and extends distribution matching distillation to video to compress the 50-step teacher into a 4-step generator — held stable by two additions, a student initialized on the teacher's ODE trajectories and an <em>asymmetric</em> distillation scheme where the bidirectional teacher supervises the causal student. With KV caching this gives 1.3 s initial latency against 219 s for the teacher to finish a 128-frame video, then continuous streaming at 9.4 FPS on a single GPU, a VBench-Long total of 84.27, and zero-shot streaming video-to-video, image-to-video and dynamic prompting. It is the baseline Self Forcing targets: because CausVid trains with Diffusion Forcing, its DMD loss is matching the distribution of DF outputs rather than the one the model actually produces at inference." },
         {
           name:    "MOSS-Video-Preview: Toward Real-Time Video Understanding via Cross-Attention",
           link:    "https://arxiv.org/abs/2606.07639",

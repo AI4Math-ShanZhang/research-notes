@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self Forcing — Rolling Out on Your Own Frames — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .win{ color:#2EAF8E; font-weight:600; }
+  .lose{ color:#F06B7F; font-weight:600; }
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem;
+            overflow-x:auto; line-height:1.5; }
+  .ev{ color:#3D5A9B; font-weight:600; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Self Forcing — Rolling Out on Your Own Frames</h1>
+<p class="paper-meta">Paper: <em>Self Forcing: Bridging the Train-Test Gap in Autoregressive Video Diffusion</em> —
+Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, Eli Shechtman (Adobe Research · UT Austin), NeurIPS 2025,
+<a href="https://arxiv.org/abs/2506.08009">arXiv:2506.08009</a> ·
+<a href="https://self-forcing.github.io/">project page</a>.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>Training is the inference loop.</b> Figure 2(c) is labelled &ldquo;Self Forcing / <em>AR Inference</em>&rdquo; —
+  one picture for both. The model generates chunk by chunk on its own outputs with a KV cache, then one
+  distribution-matching loss (DMD / SiD / GAN) lands on the <em>whole finished video</em>.</li>
+  <li><b>No attention mask.</b> Causality comes from the shape of the tensor, not from a mask — the future
+  chunks do not exist yet. That is also why it runs on FlashAttention-3 while TF/DF are stuck on FlexAttention.</li>
+  <li><b>Rolling KV cache = O(T·L) forever.</b> A finished frame's K and V never change, so you pop the oldest
+  entry instead of recomputing. 84 units per frame vs 525 (recompute) vs 1764 (bidirectional), with L=21, T=4.</li>
+  <li><b>Real-time is two numbers, not one.</b> Throughput must beat the 16 FPS playback rate <em>and</em>
+  first-frame latency must be short. Chunk-wise: <b>17.0 FPS, 0.69 s</b> on one H100.</li>
+  <li><b>The cleanest result:</b> CausVid and Self Forcing are identical in speed (17.0 FPS, 0.69 s) and base
+  model. Semantic Score goes <b>69.80 → 81.28</b>. The entire gap is the training method.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+<p>Autoregressive video diffusion models are normally trained with <b>Teacher Forcing</b> (denoise frame i given
+clean ground-truth frames before it) or <b>Diffusion Forcing</b> (given ground-truth frames with random noise
+added). Both feed the model a context it will never see at test time, so errors compound during generation —
+exposure bias. Self Forcing instead unrolls the model during training: each chunk is denoised conditioned on the
+chunks the model itself just produced, with KV caching, exactly as at inference. Because the rollout produces
+true samples from the inference-time distribution, the loss can be a holistic video-level distribution match
+(DMD, SiD, or GAN) rather than a frame-wise MSE. Two tricks keep it affordable — a 4-step diffusion backbone and
+a stochastic gradient truncation that backprops through only one denoising step per chunk. A rolling KV cache
+then extends generation to arbitrary length without recomputing anything. On Wan2.1-1.3B at 832×480 this gives
+17.0 FPS with 0.69 s first-frame latency on a single H100, matching or beating models roughly 150× slower.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>The numbers I keep reusing</h3>
+<pre class="diag">base model        Wan2.1-T2V-1.3B, 832x480, 5 s at 16 FPS
+latent frames     81 real frames -> 21 latent frames  (causal 3D VAE)
+tokens per frame  832/16 x 480/16 = 52 x 30 = 1560
+chunk             3 latent frames = 4680 tokens
+chunks per video  21 / 3 = 7
+denoise steps     T = 4
+batch size        768</pre>
+
+<!-- ---------------------------------------------------------- -->
+<h3>1. Rolling KV cache — why nothing is ever recomputed</h3>
+
+<p>The model is a causal transformer. Each token only looks <b>backward</b>. So a past frame's Key and Value
+depend only on that frame and older ones — never on the future. Once frame 3 is clean, its K and V are
+<b>final numbers forever</b>.</p>
+
+<p>Algorithm 2 does exactly this per frame: <b>4 denoise passes</b> (query = the noisy new chunk, keys/values =
+the cache), then <b>1 extra pass</b> with the now-clean frame at timestep 0 just to make its K/V and push them
+into the cache. Five forwards, and that is it.</p>
+
+<p>The three ways to slide a window, counted in frame-to-frame attention units with <b>L = 21, T = 4</b>:</p>
+
+<table>
+  <tr><th>Figure 3</th><th>What it does</th><th>Cost</th><th>Number</th></tr>
+  <tr><td>(a) Bidirectional</td><td>No cache possible — frame 3 looks at frame 20, so its K/V change every shift</td>
+      <td>T·L²</td><td class="lose">1764</td></tr>
+  <tr><td>(b) Causal + recompute</td><td>Has a cache, but rebuilds the overlapping frames on every window shift</td>
+      <td>L² + T·L</td><td>525</td></tr>
+  <tr><td>(c) Rolling (ours)</td><td>Pop the oldest, push the newest. Never rebuild.</td>
+      <td>T·L</td><td class="win">84</td></tr>
+</table>
+
+<p>21× cheaper than (a), 6× cheaper than (b) — and flat. A 10-minute video costs the same per frame as the
+first frame. Because (b)'s rebuild is expensive, prior work slides in <b>big jumps</b>, which the paper notes
+&ldquo;compromises temporal consistency&rdquo; — the first frame of a new window suddenly has almost no history.</p>
+
+<p>Walk it through with L = 4:</p>
+<pre class="diag">after frames 1-4:   cache = [ kv1, kv2, kv3, kv4 ]   (full)
+
+generate frame 5:
+  cache is full -> pop the oldest -> cache = [ kv2, kv3, kv4 ]
+  denoise frame 5 for 4 steps, each step attends to [kv2,kv3,kv4]
+  frame 5 is now clean -> 1 pass -> kv5
+  push -> cache = [ kv2, kv3, kv4, kv5 ]
+
+generate frame 6:
+  pop kv2 -> [ kv3, kv4, kv5 ]
+  denoise 4 steps
+  push kv6 -> [ kv3, kv4, kv5, kv6 ]
+
+... forever</pre>
+
+<div class="callout"><b>The catch they had to fix.</b> The naive rolling cache flickers badly. The
+<b>first</b> latent frame is not like the others — the causal VAE encodes it as a single image with no temporal
+compression, so it has different statistics, and the model saw it in context during all of training. Once the
+cache rolls past it, the model has never seen a world without it. Fix (§3.4): <b>during training, block
+attention to the first chunk when denoising the last chunk</b>. Measured effect on 10-second videos:
+recompute 4.6 FPS → rolling + this trick <b>16.1 FPS</b>, without the artifacts.</div>
+
+<!-- ---------------------------------------------------------- -->
+<h3>2. Why noisy context frames wreck the KV cache</h3>
+
+<p>First, Figure 1. All three panels answer one question: <em>to make frame i, what goes in the context?</em></p>
+
+<table>
+  <tr><th></th><th>Context</th><th>The gap</th></tr>
+  <tr><td>(a) Teacher Forcing</td><td>clean <b>real</b> frames from the dataset</td>
+      <td>at test time the context is the model's own slightly-wrong frames — never seen in training</td></tr>
+  <tr><td>(b) Diffusion Forcing</td><td><b>real</b> frames + random noise, own level per frame</td>
+      <td>still real data underneath. Gaussian noise is not the same thing as model error — a melting face
+      looks nothing like Gaussian noise</td></tr>
+  <tr><td>(c) Self Forcing</td><td>the model's <b>own generated</b> frames</td>
+      <td>none — training <em>is</em> inference</td></tr>
+</table>
+
+<p>The clean way to say it: (a) and (b) ask <em>&ldquo;given a real past, is my next frame right?&rdquo;</em>,
+frame by frame. (c) asks <em>&ldquo;is the whole video I just made indistinguishable from a real one?&rdquo;</em></p>
+
+<p>Now the cache. Some methods keep past frames <b>noisy at inference</b> to bridge the gap. Four things break:</p>
+
+<ol>
+  <li><b>A cache entry must be final.</b> Clean context: frame 3 is denoised once, you compute kv3 one time,
+  done. Noisy context: frame 3 sits at noise level 500 and keeps getting cleaner as the window moves — its
+  content changes, so its K/V change, so <b>the cached entry is wrong</b> and you rerun it. Cost goes right back
+  up to the O(L²) of Figure 3(b).</li>
+  <li><b>The timestep is an input, so the cache grows a dimension.</b> K and V depend on (content, t), since t
+  is injected through AdaLN. Clean context means t = 0 always → one entry per frame, <b>21 entries</b>. Noisy
+  context might need a frame at t = 250, 500, 750… → worst case one entry per (frame, timestep) pair,
+  <b>21 × 4 = 84 entries</b>, and you must pick which one to serve each step. That is the
+  &ldquo;complicates the KV-cache design&rdquo;.</li>
+  <li><b>Latency.</b> If frame 5 is still noisy because it will be refined later, you cannot show it. You wait.
+  That kills the whole point.</li>
+  <li><b>Temporal consistency.</b> Frame 6 needs to copy fine detail from frame 5 — the exact stripes on a
+  shirt. If frame 5 in the cache is blurred by noise, those details are not there to copy, so frame 6 invents
+  them slightly differently. Over 100 frames the shirt drifts.</li>
+</ol>
+
+<p>And it does not <em>fix</em> exposure bias anyway. Adding noise makes the model less sensitive to a bad
+context; it does not teach it to recover from its own specific mistakes.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>3. How bidirectional diffusion generates &ldquo;all frames at once&rdquo;</h3>
+
+<p>This phrase confused me. It does <b>not</b> mean one forward pass. It means <b>every frame is worked on in
+every forward pass</b>.</p>
+
+<pre class="diag">start:   frame1=noise  frame2=noise  frame3=noise  frame4=noise  frame5=noise
+
+step 1:  put ALL 5 frames' tokens into ONE forward pass.
+         full attention: frame1's tokens see frame5's tokens, and vice versa.
+         output: predicted noise for all 5 -> all 5 get 2% cleaner
+
+step 2:  same again, all 5 together -> 4% cleaner
+...
+step 50: all 5 frames are clean at the same moment</pre>
+
+<p>So &ldquo;simultaneously&rdquo; = all frames share the same noise level and walk down the ladder in lock
+step. 50 forward passes, each covering the entire video.</p>
+
+<p>Bidirectional attention buys <b>coherence</b>: while shaping frame 1 the model already sees a draft of frame
+5, so it can plan the trajectory. That is why quality is high, and exactly why it cannot stream:</p>
+<ul>
+  <li><b>Nothing exists until everything exists.</b> At step 49 of 50 every frame is still a noisy mess. First-frame
+  latency = full generation time. Wan2.1: <b>103 seconds</b>.</li>
+  <li><b>Length is fixed.</b> The whole video is one block of tokens; you cannot append frame 6 later, because
+  frame 6 would change frames 1–5.</li>
+  <li><b>No KV cache.</b> Past frames look at future frames, so their K/V keep changing. Nothing is reusable.</li>
+</ul>
+
+<!-- ---------------------------------------------------------- -->
+<h3>4. Rolling diffusion — why it is not <em>strictly</em> autoregressive</h3>
+
+<p>Rolling diffusion uses a progressive noise schedule: near frames almost clean, far frames almost pure noise.
+Each iteration the staircase shifts down one notch and a fresh noise frame enters at the back.
+(1000 = pure noise, 0 = clean.)</p>
+
+<pre class="diag">iter 1:   f1=250   f2=500   f3=750   f4=1000
+iter 2:   f1=0 OK  f2=250   f3=500   f4=750    f5=1000 enters
+iter 3:            f2=0 OK  f3=250   f4=500    f5=750    f6=1000 enters
+iter 4:                     f3=0 OK  f4=250    f5=500    f6=750</pre>
+
+<p>Frames come out in order, one at a time, forever — which is why people call it autoregressive. But strict AR
+means <code>p(x1) · p(x2 | x1) · p(x3 | x1,x2)</code>: to sample x2, <b>x1 must be completely final</b> and
+<b>x3 must not exist yet</b>. Look at iter 2 — the moment f1 became clean, f2 was already at 250 and f3 at 500.
+Those drafts were made <em>before</em> f1 was done. So f1 and f3 were shaped together. It is a joint model over
+the window with a clever sampler, not a chain of conditionals.</p>
+
+<div class="callout"><b>The kitchen analogy.</b> Rolling diffusion is a chef with 4 pans on the stove at
+different stages. Pan 1 is ready and comes to your table. You taste it and say <b>&ldquo;make it spicy!&rdquo;</b>
+— but pans 2 and 3 are already half cooked without spice. Only pan 4, barely started, can be spicy. You wait
+three dishes. A strictly autoregressive chef has <b>one</b> pan on the stove: you say spicy, the very next dish
+is spicy.<br><br>
+Same thing in a game: you press jump, but the next 3 frames of walking are already drafted, so you jump 3 frames
+late. At 16 FPS that is ~190 ms where the game visibly ignores you. That is the paper's exact complaint —
+<em>&ldquo;future frames are partially pre-generated before the current frame is presented to the user&hellip;
+this premature commitment restricts the impact of real-time user-injected controls.&rdquo;</em></div>
+
+<p>To be fair: these methods do reduce error accumulation and do generate long videos. The complaint is
+specifically about the factorization and about responsiveness.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>5. Algorithm 1 — what the enable/disable gradient lines do</h3>
+
+<p>In code it is literally <code>torch.no_grad()</code>. <b>Disable</b> means the forward pass <em>still runs</em>
+and its output <em>is still used</em> — only the backprop bookkeeping (graph + saved activations) is skipped.</p>
+
+<p>The problem: 7 chunks × 4 steps = <b>28 chained forward passes</b>. All in the graph = 28× the activations and
+a 28-deep chain. Their fix keeps exactly <b>one pass per chunk</b> in the graph.</p>
+
+<p><code>s</code> is sampled <b>once per iteration</b> (line 4, outside the frame loop), and line 7 runs
+<code>j = T, …, s</code>, so <code>j = s</code> is the <b>last</b> step for that chunk. One chunk with T = 4 and
+s = 2:</p>
+
+<table>
+  <tr><th>j</th><th>branch</th><th>gradient?</th><th>what it does</th></tr>
+  <tr><td>4</td><td>else</td><td class="lose">off</td><td>denoise from pure noise, re-noise to t3</td></tr>
+  <tr><td>3</td><td>else</td><td class="lose">off</td><td>denoise, re-noise to t2</td></tr>
+  <tr><td>2</td><td>j = s</td><td class="win"><b>ON</b></td><td>denoise → this x̂0 is the output, appended to X<sub>θ</sub></td></tr>
+  <tr><td>—</td><td>line 13</td><td class="lose">off</td><td>one more pass on the clean frame to make its KV</td></tr>
+</table>
+
+<p><b>Why gradient goes off again at line 12, before caching the KV.</b> This is a second, separate truncation:
+&ldquo;<em>we additionally detach the gradients of the previous frames from the current frame&hellip; by
+restricting gradient flow into KV cache embeddings.</em>&rdquo; If the KV pass were in the graph, the loss on
+chunk 7 would backprop into chunk 6's KV, then chunk 5's, all the way down — rebuilding the exact deep chain
+they just removed. With it detached, <code>kv_i</code> is a plain constant:</p>
+
+<pre class="diag">what the backward pass actually sees:
+
+chunk1: [one G_theta pass] --+
+chunk2: [one G_theta pass] --+
+chunk3: [one G_theta pass] --+--> distribution matching loss (line 23)
+   ...                       |
+chunk7: [one G_theta pass] --+
+
+no arrows between the chunks</pre>
+
+<p><b>Why s is random.</b> If s were always 1, only the final denoising step would ever get a gradient — steps
+4, 3, 2 would never learn. Drawing s fresh each iteration (s=4 → 1 step, s=3 → 2 steps, s=2 → 3, s=1 → 4) gives
+every step its turn. That is the <em>stochastic</em> in stochastic gradient truncation.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>6. The attention mask — there isn't one</h3>
+
+<p>Figure 2 caption: Self Forcing &ldquo;<em>mirrors the AR inference process with KV caching and <b>does not
+rely on special attention masks</b></em>&rdquo;. §4: &ldquo;<em>Self Forcing always uses <b>full attention</b>
+during training and can leverage&hellip; <b>FlashAttention-3</b></em>&rdquo;.</p>
+
+<p>A mask exists to hide tokens that are <em>in the tensor but must not be seen</em>. In TF/DF the whole video is
+in one forward pass, so frame 5's tokens sit next to frame 2's and must be masked. In Self Forcing, when the
+model works on chunk 3 the future chunks <b>do not exist yet</b> — the query tensor holds only chunk 3, the cache
+holds only chunks 1 and 2. <b>Causality comes from the shape of the tensor.</b></p>
+
+<p>Reading the masks off Figure 2 exactly (paper's toy setting: 3 frames, 2 tokens each):</p>
+
+<p><b>(a) Teacher Forcing</b> — the sequence holds <b>two copies</b> of most frames, a clean one (context) and a
+noisy one (the denoising target), so 5 blocks not 3:</p>
+
+<pre class="diag">                K -&gt;   x0     x1     x0_t   x1_t   x2_t
+                     (clean)(clean)(noisy)(noisy)(noisy)
+  Q
+  x0    (clean)        Y      .      .      .      .
+  x1    (clean)        Y      Y      .      .      .
+  x0_t  (noisy)        .      .      Y      .      .
+  x1_t  (noisy)        Y      .      .      Y      .
+  x2_t  (noisy)        Y      Y      .      .      Y
+
+  Y = attend      . = masked out (gray in the figure)</pre>
+
+<p>Read the noisy rows: <b>x0_t</b> sees only itself (frame 0 is first, no history) and is masked from clean
+<code>x0</code> — its own clean copy is the answer, that would be cheating. <b>x1_t</b> sees clean x0 + itself.
+<b>x2_t</b> sees clean x0, x1 + itself. There is no clean <code>x2</code> because nothing after frame 2 needs it
+as context.</p>
+
+<p><b>(b) Diffusion Forcing</b> — one copy per frame, noisy, each with its own level t<sup>i</sup>. Plain
+block-causal including the diagonal:</p>
+
+<pre class="diag">                K -&gt;   x0_t0   x1_t1   x2_t2
+  Q
+  x0_t0                 Y       .       .
+  x1_t1                 Y       Y       .
+  x2_t2                 Y       Y       Y</pre>
+
+<p><b>(c) Self Forcing</b> — not a matrix at all. Figure 2(c) is three rows going down the page, one per frame,
+with dashed &ldquo;KV caching&rdquo; arrows between them. Inside each row the boxes are denoising steps, dark
+green → light green → white. The white blocks on the left are the cached clean past; the green block is the
+current chunk. Attention over that whole strip is <b>full and dense</b>:</p>
+
+<table>
+  <tr><th>step</th><th>query tokens</th><th>KV cache tokens</th><th>mask</th></tr>
+  <tr><td>chunk 1</td><td>4680</td><td>0</td><td>none</td></tr>
+  <tr><td>chunk 2</td><td>4680</td><td>4680</td><td>none</td></tr>
+  <tr><td>chunk 3</td><td>4680</td><td>9360</td><td>none</td></tr>
+  <tr><td>chunk 4</td><td>4680</td><td>14040</td><td>none</td></tr>
+  <tr><td>chunk 5</td><td>4680</td><td>18720</td><td>none</td></tr>
+  <tr><td>chunk 6</td><td>4680</td><td>23400</td><td>none</td></tr>
+  <tr><td>chunk 7</td><td>4680</td><td>28080</td><td>none</td></tr>
+</table>
+
+<p>Two details worth keeping: <b>inside a chunk attention is bidirectional</b> — the 3 latent frames of chunk 3
+see each other freely, so causality is enforced at <em>chunk</em> granularity, not frame granularity. And the
+current chunk's queries see <b>both</b> the cached clean past <b>and</b> its own noisy tokens — exactly the mix
+the model meets at inference.</p>
+
+<p>The one restriction that does exist is not a mask matrix but a <b>window</b>: for chunk 7 only, drop chunk 1
+from the cache (28080 → 23400 tokens), which is the same operation the rolling cache performs at inference.</p>
+
+<div class="callout"><b>Why &ldquo;no mask&rdquo; is not just cosmetic.</b> Self Forcing is sequential, yet its
+per-iteration time matches TF and DF and it converges in ~1.5 hours on 64 H100s. Two reasons: it still runs all
+4680 tokens inside a chunk in parallel, and TF/DF need custom block-sparse masks which force them onto
+<b>FlexAttention</b>, while Self Forcing needs none and runs <b>FlashAttention-3</b>.</div>
+
+<!-- ---------------------------------------------------------- -->
+<h3>7. Can you feed all the chunks at once?</h3>
+
+<p><b>Training: no.</b> Not a design choice — a <b>data dependency</b>. Chunk 3's context is the <em>clean output
+of chunk 2</em>, which does not exist until you have run the model on chunk 2.</p>
+
+<pre class="diag">chunk 1 noise --denoise 4 steps--&gt; chunk 1 output --&gt; kv1
+                                                       |
+                                                       v
+chunk 2 noise --denoise 4 steps (attends kv1)--&gt; chunk 2 output --&gt; kv2
+                                                                     |
+                                                                     v
+chunk 3 noise --denoise 4 steps (attends kv1,kv2)--&gt; chunk 3 output</pre>
+
+<p>TF and DF <em>can</em> feed everything at once because their context is ground-truth data already sitting on
+disk. Nothing waits on anything. That convenience is exactly where exposure bias comes from — you cannot have
+both.</p>
+
+<p>The sequential part is only over <b>time</b>. Everything else stays wide:</p>
+
+<table>
+  <tr><th>dimension</th><th>parallel?</th><th>size</th></tr>
+  <tr><td>tokens inside one chunk</td><td class="win">yes</td><td>4680, all at once</td></tr>
+  <tr><td>the 3 latent frames in a chunk</td><td class="win">yes</td><td>full bidirectional attention</td></tr>
+  <tr><td><b>batch</b></td><td class="win">yes</td><td><b>768</b></td></tr>
+  <tr><td>chunks over time</td><td class="lose">no</td><td>7, strictly one after another</td></tr>
+</table>
+
+<p>Batch 768 is the trick — each sequential step is still a fat GPU-saturating matmul. You parallelize across the
+batch instead of across time. Per iteration the average is <code>7 × 2.5 = 17.5</code> denoise passes (s is
+uniform over 1–4, so 4/3/2/1 steps, average 2.5) plus 7 KV passes ≈ <b>25 sequential forwards</b> against TF's
+<b>1</b> — and it still measures comparable, paid for by the 4-step backbone, gradient truncation, batch 768,
+and the missing mask.</p>
+
+<p><b>Inference: split the question in two.</b></p>
+<ul>
+  <li><b>Pre-sampling all the noise</b> — allowed, and mathematically identical, since Gaussian noise per chunk
+  is independent. But pointless, and it throws away the best property: in a streaming app you do not know M in
+  advance. Algorithm 2 samples inside the loop.</li>
+  <li><b>Denoising the whole video at once</b> — impossible. To denoise chunk 3 you need <code>kv2</code>, and
+  Algorithm 2 line 9 builds that from the <em>fully clean</em> chunk 2. Feeding all 7 noisy chunks together
+  would just be bidirectional diffusion, which the causal model has never seen.</li>
+</ul>
+
+<p>And you would not want to. One chunk at a time is <em>why</em> there is sub-second latency:</p>
+
+<pre class="diag">one chunk at a time:
+  4 denoise steps -&gt; chunk 1 is clean -&gt; SHOW IT   &lt;-- sub-second
+  then chunk 2 -&gt; show it
+  then chunk 3 -&gt; show it                          &lt;-- 17 FPS streaming
+
+whole video at once:
+  ...nothing to show...
+  everything appears at the end                    &lt;-- minutes</pre>
+
+<table>
+  <tr><th></th><th>feed all at once?</th><th>why</th></tr>
+  <tr><td>TF / DF <b>training</b></td><td class="win">yes</td><td>context is real data, already on disk</td></tr>
+  <tr><td>Self Forcing <b>training</b></td><td class="lose">no</td><td>context is the model's own output, must be made first</td></tr>
+  <tr><td>Bidirectional <b>inference</b></td><td class="win">yes</td><td>full attention, all frames share a noise level</td></tr>
+  <tr><td>Self Forcing <b>inference</b></td><td class="lose">no</td><td>chunk i needs chunk i−1's finished clean KV</td></tr>
+</table>
+
+<!-- ---------------------------------------------------------- -->
+<h3>8. VBench — the 16 dimensions and how Total is built</h3>
+
+<p><b>Quality Score</b> — is the video nice to look at? subject consistency · background consistency · temporal
+flickering · motion smoothness · dynamic degree · aesthetic quality · imaging quality.</p>
+
+<p><b>Semantic Score</b> — did it make what the prompt asked for? object class · multiple objects · human action
+· color · spatial relationship · scene · appearance style · temporal style · overall consistency.</p>
+
+<div class="callout"><b>dynamic degree is an anti-cheat.</b> A completely still video scores near-perfect on
+subject consistency, background consistency, temporal flickering and motion smoothness. So VBench pairs them
+against a metric that asks whether anything moves at all.</div>
+
+<p>The weighting is not stated in the paper, but it reproduces every row of Table 1 exactly:</p>
+
+<pre class="diag">Total = 0.8 x Quality + 0.2 x Semantic</pre>
+
+<table>
+  <tr><th>model</th><th>Quality</th><th>Semantic</th><th>0.8·Q + 0.2·S</th><th>paper's Total</th></tr>
+  <tr><td>Self Forcing (chunk)</td><td>85.07</td><td>81.28</td><td>68.056 + 16.256 = <b>84.312</b></td><td>84.31</td></tr>
+  <tr><td>Wan2.1</td><td>85.30</td><td>80.09</td><td>68.240 + 16.018 = <b>84.258</b></td><td>84.26</td></tr>
+  <tr><td>CausVid</td><td>84.05</td><td>69.80</td><td>67.240 + 13.960 = <b>81.200</b></td><td>81.20</td></tr>
+  <tr><td>MAGI-1</td><td>82.04</td><td>67.74</td><td>65.632 + 13.548 = <b>79.180</b></td><td>79.18</td></tr>
+</table>
+
+<p><b>This changes how Table 1 reads.</b> Semantic only counts 20%. Self Forcing beats Wan2.1 on Total by
+<b>0.05</b> (84.31 vs 84.26) despite a <b>+1.19</b> Semantic lead, and Wan2.1 actually has <em>higher</em>
+Quality. The honest headline is not &ldquo;we beat Wan2.1 on quality&rdquo; — it is &ldquo;we match it while
+being ~150× faster in latency&rdquo;, which is what the paper says.</p>
+
+<p><b>The controlled comparison.</b> CausVid and Self Forcing share base model, size, resolution, throughput
+(17.0 FPS) and latency (0.69 s). Everything except the training method is identical:</p>
+
+<pre class="diag">CausVid       Total 81.20   Quality 84.05   Semantic 69.80
+Self Forcing  Total 84.31   Quality 85.07   Semantic 81.28
+                   +3.11         +1.02          +11.48</pre>
+
+<p>Semantic <b>+11.48</b>, at zero extra inference cost.</p>
+
+<p><b>They did not trust VBench alone.</b> Human study (Fig. 4, App. E): two videos side by side, same prompt,
+pick the better one — 1003 prompts from MovieGenBench, one user each. Preferred over CausVid <b>66.1%</b>,
+Wan2.1 <b>62.7%</b>, SkyReels-V2 <b>57.9%</b>, MAGI-1 <b>54.2%</b>. Note the gap over Wan2.1 is much bigger to
+humans (62.7%) than to VBench Total (0.05 points) — the metric is not sensitive enough.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>9. The streaming test — two numbers, on purpose</h3>
+
+<p>This is the most opinionated part of the paper, and it is a methodology argument:</p>
+
+<div class="callout">&ldquo;<em>While some recent works claim &lsquo;real-time&rsquo; video generation abilities
+based solely on <b>throughput</b>, we argue that true real-time performance requires <b>both</b> sufficient
+throughput (exceeding video playback rate) <b>and</b> lower latency than the perceptual threshold.</em>&rdquo;</div>
+
+<p>So both numbers, both on <b>a single H100</b>:</p>
+<ul>
+  <li><b>Throughput (FPS)</b> — must beat the <b>16 FPS</b> playback rate, or you wait longer than you watch.</li>
+  <li><b>First-frame latency (s)</b> — wall clock from &ldquo;go&rdquo; to the first frame on screen. For a
+  bidirectional model this equals the <em>entire</em> generation time, because nothing is viewable until all 50
+  steps finish on all frames.</li>
+</ul>
+
+<table>
+  <tr><th>model</th><th>type</th><th>FPS ↑</th><th>latency ↓</th><th>≥16 FPS?</th><th>sub-1s?</th></tr>
+  <tr><td>Wan2.1 1.3B</td><td>bidirectional</td><td>0.78</td><td>103 s</td><td class="lose">no</td><td class="lose">no</td></tr>
+  <tr><td>LTX-Video</td><td>bidirectional</td><td>8.98</td><td>13.5 s</td><td class="lose">no</td><td class="lose">no</td></tr>
+  <tr><td>SkyReels-V2</td><td>chunk AR</td><td>0.49</td><td>112 s</td><td class="lose">no</td><td class="lose">no</td></tr>
+  <tr><td>MAGI-1 4.5B</td><td>chunk AR</td><td>0.19</td><td>282 s</td><td class="lose">no</td><td class="lose">no</td></tr>
+  <tr><td>Pyramid Flow</td><td>AR</td><td>6.7</td><td>2.5 s</td><td class="lose">no</td><td class="lose">no</td></tr>
+  <tr><td>NOVA</td><td>AR</td><td>0.88</td><td>4.1 s</td><td class="lose">no</td><td class="lose">no</td></tr>
+  <tr><td>CausVid</td><td>chunk AR</td><td>17.0</td><td>0.69 s</td><td class="win">yes</td><td class="win">yes</td></tr>
+  <tr><td><b>Self Forcing (chunk)</b></td><td>chunk AR</td><td><b>17.0</b></td><td><b>0.69 s</b></td><td class="win">yes</td><td class="win">yes</td></tr>
+  <tr><td>Self Forcing (frame)</td><td>frame AR</td><td>8.9</td><td><b>0.45 s</b></td><td class="lose">no</td><td class="win">yes</td></tr>
+</table>
+
+<p>Wan2.1's 103 s → 0.69 s is the ~150× the paper quotes.</p>
+
+<p><b>The chunk-wise vs frame-wise trade-off goes both ways.</b> Frame-wise has <em>better latency</em> (0.45 s —
+chunk 1 is smaller, and the causal VAE makes the very first latent frame encode just one image) but
+<em>worse throughput</em> (8.9 FPS — you pay the fixed per-step overhead 21 times instead of 7).</p>
+
+<div class="callout"><b>Being straight about it:</b> frame-wise fails the paper's own throughput test. 8.9 FPS is
+below the 16 FPS playback rate, so it cannot sustain live playback — it suits on-demand interactive use, not
+fixed-rate streaming. The paper words it softly (&ldquo;suitable for latency-sensitive real-time
+applications&rdquo;) but the number is the number. Appendix C shows the matching quality trade-off: frame-wise
+has <b>higher dynamic degree</b> but <b>worse background consistency, motion smoothness and more temporal
+flickering</b>. More AR steps, more chances to drift.</div>
+
+<p><b>Long-video throughput</b> is measured separately, on 10-second videos (longer than the 5 s training
+length): recompute-on-shift <b>4.6 FPS</b> vs rolling KV cache + local-attention training <b>16.1 FPS</b>. Still
+clears the 16 FPS bar.</p>
+
+<h3>What the evaluation does not cover</h3>
+<ol>
+  <li><b>VBench is run on 5-second videos</b> — the training length. The long extrapolation case is never
+  scored. The rolling-cache quality claim rests on the 16.1 FPS number and <b>qualitative</b> pictures in
+  Appendix B, Fig. 7. No VBench score for long videos anywhere.</li>
+  <li>The paper says so in Limitations: &ldquo;<em>quality degradation remains observable when generating videos
+  substantially longer than those seen during training.</em>&rdquo;</li>
+  <li>All speed numbers are <b>one H100</b>.</li>
+  <li>Both speed numbers are <b>text-to-video</b>. The interactive control scenario motivated in the intro
+  (games, live user input) is argued for but never benchmarked.</li>
+</ol>
+
+</section>
+
+</body>
+</html>
