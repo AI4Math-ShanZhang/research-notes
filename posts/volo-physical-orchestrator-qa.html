@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Six questions worked through on VoLo (NVIDIA, arXiv:2606.07723): safety-aware idling, GraspGen vs the VLA, how a bare policy 'recovers', and how the failure metrics are defined.">
+<title>VoLo — Q&amp;A from our discussion</title>
+<style>
+  :root{--ink:#23303e;--muted:#5f6b78;--bg:#f7f9fc;--card:#fff;--line:#e4e9f0;
+    --idle:#F79A38;--tool:#4A8ED4;--metric:#3DBD79;--brand:#3D5A9B;--warn:#F06B7F;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.65;}
+  header{background:linear-gradient(135deg,#3D5A9B,#38BDB8);color:#fff;padding:36px 20px;text-align:center;}
+  header h1{margin:0 0 6px;font-size:1.6rem;}
+  header p{margin:0;opacity:.95;font-size:.95rem;}
+  header a{color:#fff;}
+  .wrap{max-width:880px;margin:0 auto;padding:24px 18px 70px;}
+  .back{font-size:.9rem;margin:0 0 4px;}
+  .back a{color:var(--brand);text-decoration:none;}
+  .toc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 20px;margin:16px 0;}
+  .toc a{color:var(--tool);text-decoration:none;margin-right:14px;font-size:.9rem;white-space:nowrap;}
+  .toc a:hover{text-decoration:underline;}
+  .setup{background:#eef3fb;border:1px solid #cddcf2;border-radius:12px;padding:14px 20px;margin:18px 0;font-size:.93rem;}
+  .setup b{color:var(--brand);}
+  h2{font-size:1.28rem;margin-top:36px;display:flex;align-items:center;gap:9px;border-bottom:2px solid var(--line);padding-bottom:6px;}
+  .dot{width:13px;height:13px;border-radius:50%;display:inline-block;}
+  details{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:9px 0;padding:2px 18px;box-shadow:0 1px 6px rgba(30,50,90,.03);}
+  details[open]{box-shadow:0 2px 12px rgba(30,50,90,.06);}
+  summary{cursor:pointer;font-weight:700;padding:12px 0;list-style:none;position:relative;padding-right:26px;}
+  summary::-webkit-details-marker{display:none;}
+  summary::after{content:"+";position:absolute;right:2px;top:10px;font-size:1.3rem;color:var(--muted);font-weight:400;}
+  details[open] summary::after{content:"–";}
+  .a{padding:0 0 16px;}
+  .a .one{background:#f7f9fc;border-left:3px solid var(--tool);border-radius:0 8px 8px 0;padding:9px 13px;margin-top:12px;font-size:.92rem;}
+  .a .one b{color:var(--tool);}
+  blockquote{margin:10px 0;padding:8px 14px;border-left:3px solid var(--muted);background:#f3f5f9;border-radius:0 8px 8px 0;font-size:.9rem;color:var(--muted);}
+  blockquote .zh{display:block;color:var(--ink);margin-top:4px;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:.88rem;}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:#f0f4fa;}
+  code{background:#eef1f6;border-radius:5px;padding:1px 6px;font-size:.85em;font-family:ui-monospace,Menlo,Consolas,monospace;}
+  ul,ol{margin:8px 0;padding-left:22px;} li{margin:5px 0;}
+  ol.timeline{counter-reset:none;}
+  ol.timeline li{margin:8px 0;}
+  .caveat{background:#fdf0f2;border:1px solid #f7ccd3;border-radius:10px;padding:10px 15px;margin:12px 0;font-size:.9rem;}
+  .caveat b{color:var(--warn);}
+  .num{background:#ecf9f1;border:1px solid #bfe6cf;border-radius:10px;padding:10px 15px;margin:12px 0;font-size:.9rem;}
+  .num b{color:#2a8a58;}
+  footer{max-width:880px;margin:0 auto;padding:0 18px 50px;font-size:.85rem;color:var(--muted);}
+</style>
+</head>
+<body>
+<header>
+  <h1>VoLo — Q&amp;A from our discussion</h1>
+  <p>Six questions worked through on <a href="https://arxiv.org/abs/2606.07723">arXiv:2606.07723</a>. Click any question to expand.</p>
+</header>
+
+<div class="wrap">
+  <p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+  <div class="setup">
+    <b>The setup, so the answers make sense.</b> VoLoAgent is a VLM (Claude Opus 4.6) acting as the boss.
+    It calls three families of tools: a <b>VLA</b> (π0.5), <b>perception models</b> (SAM3, Molmo2, GroundingDINO),
+    and hand-written <b>grasp/place primitives</b>. The arm runs at <b>15 Hz</b>. The VLM looks at a camera image
+    and thinks at <b>0.2 Hz</b> — once every 5 seconds — and each cloud call costs <b>1–5 s</b> of latency.
+    Everything below follows from that speed gap.
+  </div>
+
+  <div class="toc">
+    <a href="#idle">① The timing problem</a>
+    <a href="#tools">② GraspGen vs the VLA</a>
+    <a href="#metrics">③ Reading the numbers</a>
+  </div>
+
+  <!-- ================= ① TIMING ================= -->
+  <h2 id="idle"><span class="dot" style="background:var(--idle)"></span> ① The timing problem</h2>
+
+  <details open><summary>What is (P3) Safety-aware idling?</summary>
+  <div class="a">
+    <p>It solves a pure timing problem. The arm runs at 15 Hz, so one step is 0.067 seconds. One VLM call takes
+    1 to 5 seconds. So while the VLM thinks <em>"the robot grabbed the wrong object, what now?"</em>, the robot would
+    execute another 15 to 75 steps.</p>
+    <p>That leaves two bad options:</p>
+    <ol>
+      <li><b>Let the robot keep going.</b> It keeps carrying the wrong object and drops it in the wrong bin.
+      Now you have a second failure to fix on top of the first.</li>
+      <li><b>Kill the running tool.</b> The arm may freeze mid-motion in a bad pose, or open the gripper and
+      drop the object on the floor.</li>
+    </ol>
+    <p>P3 is the third option: <b>hold the robot still and keep it safe while the VLM thinks.</b> Concretely
+    (Sec. 4.2, "Recovery"): when the monitor returns <code>recovery</code>, the in-flight action chunk is halted and
+    the arm idles — holding its current pose and current gripper state. Then the VLM enters the slow
+    <em>deliberation</em> context and picks what to do next (continue / replan / rewrite / grasp / place).
+    In their API the "do nothing" tool slot is literally called <code>noop</code>.</p>
+    <p><b>Why "safety-aware" and not just "stop".</b> For their setup — a fixed-base Franka bolted to a table —
+    idling <em>is</em> just stopping; nothing bad happens. They state the design choice in general form because for
+    other robots stopping is not safe. A walking humanoid that freezes falls over. A mobile base that freezes in a
+    doorway blocks it. Such a robot must <b>keep acting</b> in order to stay still and safe. They admit in
+    Limitations that only the easy version is implemented:</p>
+    <blockquote>"Safe idling currently reduces to halting the arm, which does not generalize to embodiments that
+    must act to stay safe (e.g., a balancing humanoid)."</blockquote>
+    <div class="one"><b>One line:</b> P3 = freeze the arm to buy thinking time for a slow cloud VLM. The
+    <em>requirement</em> is general; the <em>implementation</em> here is a stop command, and the paper says so.</div>
+  </div>
+  </details>
+
+  <!-- ================= ② TOOLS ================= -->
+  <h2 id="tools"><span class="dot" style="background:var(--tool)"></span> ② GraspGen vs the VLA</h2>
+
+  <details><summary>What is GraspGen, and what does "geometry-grounded motion but rigid under contact-rich interaction" mean?</summary>
+  <div class="a">
+    <p><b>GraspGen</b> (Murali et al., 2025, NVIDIA) is a diffusion model that generates grasp poses.
+    Input: a 3D point cloud of an object. Output: a set of 6-DoF gripper poses (position x, y, z + rotation) with a
+    score for each, meaning <em>"put the gripper here and close it, and you will probably be holding this object."</em>
+    It is a pure geometry model — it does not know the task, does not read language, does not run a control loop.</p>
+    <p><b>IK</b> = inverse kinematics. GraspGen gives a pose in world space; IK converts it into the 7 joint angles the
+    Franka must move to. VoLo uses a damped least-squares solver with several random starting guesses
+    ("multi-start IK") so it does not land in a bad solution.</p>
+    <p>The full <code>grasp(target)</code> pipeline (Appendix B.2), where <code>target</code> is a text phrase the VLM
+    wrote, like "the lemon":</p>
+    <ol>
+      <li>GroundingDINO or SAM3 finds "the lemon" in the RGB image → a mask.</li>
+      <li>Use the depth image to cut out just that object's points → a small point cloud.</li>
+      <li>GraspGen takes that point cloud → a 6-DoF grasp pose.</li>
+      <li>Multi-start IK → joint angles.</li>
+      <li>Build a straight-line Cartesian trajectory, stream it in the same chunk format the VLA uses.</li>
+    </ol>
+    <p><b>Now the sentence itself, in two halves:</b></p>
+    <ul>
+      <li><b>Geometry-grounded — the good part.</b> The whole chain sits on real 3D measurements
+      (mask + depth + point cloud). So it aims very accurately, and it picks the object you <em>named</em>, not the
+      object that merely looks familiar. This is exactly what the VLA is bad at: π0.5 grabbed an orange when asked
+      for a lemon (Fig. 4).</li>
+      <li><b>Rigid under contact-rich interaction — the bad part.</b> The plan is computed once, up front, then
+      executed open-loop with no feedback after the fingers touch. So the moment reality differs from the point
+      cloud it has no answer: the object slides when touched, a finger catches the bowl rim, one attempt nudges the
+      object 2 cm away. A human would wiggle and re-try. This pipeline just runs its trajectory and fails.</li>
+    </ul>
+    <p>That is why VoLoAgent (No VLA) "struggles with contact-rich picks and exhausts the step budget" (Fig. 4).</p>
+    <div class="one"><b>One line:</b> GraspGen answers <em>where</em>, perfectly, once — and has nothing to say
+    about <em>what happens after you touch the thing</em>.</div>
+  </div>
+  </details>
+
+  <details><summary>If seeing the object already gives you the action, why do you still need the VLA? And how are the two connected?</summary>
+  <div class="a">
+    <p>The instinct is right for one thing: seeing the object does tell you where to put the gripper. But that is not
+    the same as doing the task.</p>
+
+    <p><b>What GraspGen actually outputs is one static pose.</b> Notice what is missing from that output:</p>
+    <ul>
+      <li><b>No time.</b> It is a snapshot, not a movement. There is no "and then what."</li>
+      <li><b>No re-try.</b> If it fails, GraspGen has nothing more to say — you would re-run the whole pipeline from a new photo.</li>
+      <li><b>No task knowledge.</b> It knows "this is a good way to hold a mug." It does not know "hold it by the
+      handle because we will pour later," or "lift straight up, not sideways, because it is wedged."</li>
+      <li><b>It trusts the point cloud.</b> A depth camera sees only the <em>front surface</em>; the back is guessed.
+      If the lemon is half-hidden behind the orange, the point cloud is a fragment and the pose comes out wrong.</li>
+    </ul>
+    <p>And after GraspGen, IK builds <em>one</em> trajectory that the arm then runs <b>blind</b> — no camera, no
+    feedback, until it finishes. Real contact is messy: the lemon rolls 2 cm when a finger brushes it and the
+    pre-computed pose now points at empty air; a finger catches the bowl rim and the arm keeps pushing along its
+    planned path; the grasp is off-center and the object squeezes out.</p>
+
+    <p><b>The VLA is a policy, not a pose generator.</b> Every 1/15 second π0.5 takes fresh camera images plus the
+    language instruction and outputs the next few joint moves — it re-decides continuously. Trained on real robot
+    data, it <em>learned</em> the messy contact behaviors: the small wiggle, the re-grasp after a slip, the adjust
+    when a finger snags. Its weakness is the mirror image: it grounds language badly, because in training a round
+    yellow-ish fruit near a bowl usually meant "grab the thing that looks like this."</p>
+
+    <table>
+      <thead><tr><th></th><th>Answers</th><th>Loop</th><th>Good at</th><th>Bad at</th></tr></thead>
+      <tbody>
+        <tr><td><b>grasp primitive</b><br>SAM3 → depth → GraspGen → IK</td><td><b>where</b></td><td>open loop, one shot</td><td>naming any object in words; exact 3D aim</td><td>anything after contact</td></tr>
+        <tr><td><b>VLA</b> (π0.5)</td><td><b>how</b></td><td>closed loop, 15 Hz</td><td>contact, adjusting, finishing</td><td>knowing <em>which</em> object</td></tr>
+        <tr><td><b>VLM</b> orchestrator</td><td><b>when to switch</b></td><td>0.2 Hz</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <p>They fail in opposite directions. That is the whole design.</p>
+
+    <p><b>One concrete timeline.</b> Task: <em>"put the lemon in the bowl."</em> There is also an orange on the table.</p>
+    <ol class="timeline">
+      <li><b>t = 0 s.</b> VLM plans subgoals. Calls <code>vla("pick up the lemon and put it in the bowl")</code>. π0.5 starts at 15 Hz.</li>
+      <li><b>t = 5 s.</b> VLM monitor tick. It looks at the front camera. The gripper is closing on the <b>orange</b>. It returns <code>recovery</code>.</li>
+      <li>The in-flight VLA action chunk is halted. The arm holds still — this is P3 idling — while the VLM does its slower thinking call.</li>
+      <li>VLM decides: call <code>grasp("the lemon")</code>.</li>
+      <li>The primitive runs: SAM3 masks the lemon → depth crops the point cloud → GraspGen gives a 6-DoF pose → multi-start IK → a Cartesian trajectory.</li>
+      <li>The arm drives to the lemon and closes. <b>Say the grasp fails</b> — the lemon rolls, the fingers slip. The primitive has no answer; it is finished.</li>
+      <li><b>But look at the state it left behind.</b> The gripper is directly above the lemon, fingers a centimeter away, camera pointed straight down at it, and the orange is out of the picture.</li>
+      <li>VLM calls <code>vla("pick up the lemon")</code> again. Now the VLA's weakness <em>does not matter</em> — there is nothing left to confuse it with. Its strength does: it closes, adjusts on contact, lifts.</li>
+    </ol>
+    <blockquote>"even a failed grasp leaves the gripper near the target with a clean view for the VLA to finish the pick" — Sec. 4.2</blockquote>
+    <p>So the grasp primitive is used as an <b>aiming</b> tool, not a grasping tool. A failed grasp is still useful,
+    because it moved the robot to the right place.</p>
+
+    <p><b>The mechanical connection.</b> Both tools emit the same thing: an action chunk of 8 steps, each step
+    7 joint positions plus 1 binary gripper command, streamed at 15 Hz. Appendix H says the primitives "emit chunks
+    of the same shape so the eval client treats them identically to VLA outputs." The robot cannot tell which tool
+    produced a chunk — which is why the VLM can swap between them mid-task without anything resetting.</p>
+
+    <div class="num"><b>And neither one alone is enough</b> (Table 2): primitives only → <b>17.76</b>;
+    VLA only → <b>34.97</b>; both → <b>41.80</b>. If GraspGen alone were sufficient, the first row would be high.
+    Those runs instead "exhaust the step budget" on contact-rich picks.</div>
+
+    <div class="one"><b>One line:</b> GraspGen picks the <em>right object</em>; the VLA handles the <em>right
+    motion</em>. They share one action-chunk format, so the VLM can cut one off and start the other mid-task.</div>
+  </div>
+  </details>
+
+  <!-- ================= ③ METRICS ================= -->
+  <h2 id="metrics"><span class="dot" style="background:var(--metric)"></span> ③ Reading the numbers</h2>
+
+  <details><summary>In Sec. 5.3, how can π0.5 "recover" by itself? It is just a VLA.</summary>
+  <div class="a">
+    <p>This looks strange, and the answer is that <b>"recovery" is a label on the world state, not a skill the model
+    has.</b></p>
+    <p>Per Appendix K.1, a separate detector program watches the simulator's ground-truth state every step and fires
+    events by fixed rules. Nobody asks π0.5 anything.</p>
+    <ul>
+      <li><code>wrong_object_picked</code> fires when the gripper holds an object that is not a target of the current sub-task.</li>
+      <li><code>stuck</code> fires after ~10 s with no end-effector progress.</li>
+      <li><code>recovery</code> fires when <em>"a previously-fired failure's underlying condition has resolved."</em></li>
+    </ul>
+    <p>Two concrete ways that happens with no reasoning at all:</p>
+    <ul>
+      <li><b>Stuck.</b> π0.5 pushes against the table edge for 10 s → <code>stuck</code> fires. It is a closed-loop
+      policy: every step it gets a fresh image and outputs a new action. Ten seconds later the image has changed
+      enough that it outputs something different and the arm moves again. Condition resolved → <code>recovery</code>.
+      The policy never "knew" it was stuck.</li>
+      <li><b>Wrong object.</b> π0.5 grabs the orange instead of the lemon → WOP fires. Then the grasp slips, or the
+      policy releases and reaches again. Condition resolved → <code>recovery</code>. Luck plus reactivity, not
+      diagnosis.</li>
+    </ul>
+    <p>There is also a bookkeeping rule that inflates the count:</p>
+    <blockquote>"Successful episodes are post-hoc resolved as 'all recovered' (success implies every spell ended
+    favorably even if the recovery event was cut off by the success terminal)."</blockquote>
+    <p>π0.5 had 10 successes total and only 11 "all recovered" episodes out of 86 — so a large share of its
+    recoveries are this rule firing on episodes that happened to end well.</p>
+    <div class="num"><b>The contrast is the real result.</b> π0.5 recovers in 13% of failure episodes (11/86) by
+    accident. VoLoAgent recovers in 54% (38/70) on purpose — because it has a monitor that <em>detects</em> the
+    failure, an idle step (P3) to buy thinking time, and a menu of corrections. Same detector, same rules, both
+    sides. 13% is the baseline for "what luck alone gives you."</div>
+  </div>
+  </details>
+
+  <details><summary>How do they make sure a WOP is not just the VLM planning badly?</summary>
+  <div class="a">
+    <p><b>Straight answer: they don't separate it. WOP counts that case too, on purpose.</b></p>
+    <p>Per Appendix K.1, the sub-task sequence the detector uses is <b>hand-written ground truth</b>, not the VLM's plan:</p>
+    <blockquote>"Each long-horizon task is decomposed into an ordered sequence of sub-tasks S1 → S2 → … → SK, where
+    each Sk carries a set of target objects with their required end-states."</blockquote>
+    <p>These come from <code>gt_success_checks</code> in the task class, authored by hand when the task was written.
+    And the pointer moves forward by <b>physics</b>, not by the VLM's opinion:</p>
+    <blockquote>"The active sub-task advances to S(k+1) once every predicate is satisfied."</blockquote>
+    <p>The VLM saying "advance!" does not move it. Only simulator state does.</p>
+    <p>Now trace the bad-planning case. GT sub-task 1 wants the corn can back on the tray. The VLM plans wrong and
+    says <code>grasp("the banana")</code>. The robot executes perfectly and picks up the banana. The detector checks:
+    gripper holds an object that is not a target of the active sub-task → <b>WOP fires.</b> The robot did nothing
+    wrong. The event fires anyway.</p>
+
+    <p><b>Why that is the right design.</b> The two streams answer two different questions about the <em>same</em>
+    episodes:</p>
+    <ul>
+      <li><b>World failures = the symptom.</b> "Right now, is the world in a bad state?" It does not care whose fault it is.</li>
+      <li><b>VLM failures = the cause.</b> "Which specific VLM call was wrong?"</li>
+    </ul>
+    <p>They are not two disjoint buckets. Both read the same <code>gt_state</code> stream over the same 90 episodes,
+    and Appendix K.2 pairs each VLM call with the GT predicate it should have checked at that step. So one bad-plan
+    moment appears <b>twice</b>: as WOP in the world stream, as <code>vlm_plan_mismatch</code> in the VLM stream.
+    Excluding planning-caused WOPs would turn Fig. 5 from "how often is the world broken" into "how often is the
+    world broken for reasons we chose to count."</p>
+
+    <p><b>Is bad planning actually driving the numbers? No.</b> That is what Fig. 6 and Table 8 are for.
+    Claude Opus 4.6, across all 90 episodes:</p>
+    <table>
+      <thead><tr><th>VLM error type</th><th>count</th></tr></thead>
+      <tbody>
+        <tr><td>planning (<code>vlm_plan_mismatch</code>)</td><td><b>4</b></td></tr>
+        <tr><td>tool-use, wrong grasp target name</td><td><b>12</b></td></tr>
+        <tr><td>completion monitor</td><td>84</td></tr>
+        <tr><td>failure monitor</td><td>2</td></tr>
+        <tr><td><b>total</b></td><td><b>102</b></td></tr>
+      </tbody>
+    </table>
+    <p>Four planning errors in 90 episodes. Even adding the 12 wrong-target calls gives 16 events — against
+    <b>70 episodes containing failures</b>. Sixteen bad decisions cannot be the source of 70 broken episodes. The
+    main text says it directly: "Planning errors are rare for every backend (≤ 9 events per 90 episodes)."
+    So the answer is <em>empirical</em>, not definitional — they don't prove WOP excludes planning errors, they
+    measure planning errors separately and show the number is tiny.</p>
+
+    <p><b>The cleanest check is the baseline.</b> π0.5 alone has no VLM at all — no planner, no monitor, no tool
+    calls — and still hits 86 failure episodes out of 90, with 28 unrecovered WOPs. That is a control group: it
+    proves the WOP rule fires purely from policy behavior, and it means π0.5's numbers are completely uncontaminated
+    by VLM error.</p>
+
+    <div class="caveat"><b>One real soft spot.</b> The detector enforces the <em>GT ordering</em> of sub-tasks.
+    Inside a sub-task you are free — all N objects are tracked in parallel, and re-grasping an object belonging to
+    the current sub-task is explicitly not a failure ("an in-flight re-grasp of o is part of the plan, not a
+    failure"). But <em>across</em> sub-tasks, if a task genuinely allows two valid orderings and the agent picks the
+    other one, the detector reads it as picking a non-target object. The paper does not discuss this. Most of these
+    instructions force the order, so it is probably minor — but it is a limitation of the metric.</div>
+  </div>
+  </details>
+
+  <details><summary>In Table 2, what is the "Exterior camera" row, and how is it used?</summary>
+  <div class="a">
+    <p>It sits under the <b>Perception</b> axis, so it is not a new camera. It is about <b>which camera image gets
+    sent to the orchestrator VLM.</b></p>
+    <p>The sim has three cameras, matching the real DROID cell (Appendix H):</p>
+    <table>
+      <thead><tr><th>Camera</th><th>Where</th><th>Who normally uses it</th></tr></thead>
+      <tbody>
+        <tr><td>Exterior ZED 2i</td><td>on a tripod, off to the side</td><td>the <b>VLA</b> (π0.5)</td></tr>
+        <tr><td>Wrist ZED mini</td><td>on the gripper</td><td>the <b>VLA</b> (π0.5)</td></tr>
+        <tr><td>Front ZED 2i</td><td>egocentric, on the robot, looking forward at the table</td><td>the <b>orchestrator VLM</b> and the grasp/place tools</td></tr>
+      </tbody>
+    </table>
+    <p><b>Default setup (41.80).</b> π0.5 sees exterior + wrist, as it was trained to. The VLM monitor gets the
+    <b>front</b> camera at 0.2 Hz, and the grasp/place primitives consume the front camera's depth. The front view
+    was chosen because it looks down at the table from the robot's own viewpoint, so objects are less hidden.</p>
+    <p>A nice detail in Appendix C: the front camera is flipped <em>both</em> left/right and front/behind relative to
+    the robot's frame — so they paste a warning note into every prompt about the flip, otherwise the VLM says "left"
+    when it means "right".</p>
+    <p><b>The ablation (36.94).</b> Take the front camera away from the orchestrator and give it the <b>exterior</b>
+    camera instead — the same view the VLA already gets. Now the whole system runs on just the two standard DROID
+    cameras, no extra hardware. Score drops ~5 points; their explanation is that "objects are sometimes occluded in
+    the exterior and wrist views" — from the side, the arm's own body blocks objects and objects hide behind each
+    other, so the VLM sometimes cannot tell whether a subgoal is done.</p>
+    <div class="num"><b>But the drop is not statistically significant</b> (p = 0.0942, Appendix F). This ablation and
+    the perception-model swap are the only two rows in Table 2 that failed to separate from the full system. The
+    practical message: the extra front camera helps a bit, but you do not need it. VoLoAgent still gets 36.94 vs
+    12.57 for bare π0.5 on an unmodified DROID rig — the gains come from the orchestration loop, not from special
+    hardware.</div>
+  </div>
+  </details>
+
+</div>
+
+<footer>
+  Source: Chen, Hadfield, Zook, Uy, Song, Coumans, Yang, Ladhak, Qu, Birchfield, Tremblay &amp; Blukis
+  (NVIDIA + University of Michigan), <a href="https://arxiv.org/abs/2606.07723">arXiv:2606.07723</a>.
+  Section, table, figure and appendix references above point into that paper.
+</footer>
+
+</body>
+</html>
