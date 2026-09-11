@@ -47,6 +47,14 @@ const BLOG = {
       ],
       notes: [
         {
+          title:   "Hyperloop Transformers — hyper-connections at the loop boundary",
+          file:    "posts/hyperloop-transformers.html",
+          date:    "2026-09-11",
+          paper:   "Zeitoun, Torroba-Hennigen &amp; Kim (MIT) · arXiv:2604.21254",
+          tags:    ["looped TF", "hyper-connections", "residual stream", "parameter efficiency", "quantization", "logit lens"],
+          summary: "A hyper-connection is a residual connection with more wires: carry n=4 parallel streams instead of 1, and replace the hard-coded \"+1\" skip with three small learned matrices, while attention and the MLP still run at normal width C. The paper applies them only at the loop boundary — 3 instead of 12 — which is both the cheapest and the best setting, giving 579.7M params at PPL 9.65 against a 990.5M Transformer at 10.19. Notation first, then eleven steps with real numbers, including a full walkthrough of what Figure 3 shows and how it was generated.",
+        },
+        {
           title:   "LayerNorm as Implicit Gain Control in Looped Transformers",
           file:    "posts/layernorm-gain-control-looped.html",
           date:    "2026-09-03",
@@ -96,6 +104,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "Hyperloop Transformers",
+          link:    "https://arxiv.org/abs/2604.21254",
+          summary: "MIT. Combines a middle-cycle looped Transformer (25% begin / 50% middle looped 3× / 25% end) with manifold-constrained hyper-connections, but applies them only after each loop instead of after every layer — 3 hyper-connections, ~200K extra parameters, 95–99% of baseline training throughput where mHC's every-layer version runs at 65%. Three edits to mHC: a diagonal sigmoid for H_res in place of sinkhorn over a dense matrix (14.40 vs 14.59), a per-loop position embedding making it a depth-wise RNN with matrix-valued state, and the loop-level placement, which the ablation shows is both cheapest and best. 579.7M params reach PPL 9.65 against a 990.5M Transformer's 10.19, INT4 degradation matches a plain transformer where plain Looped degrades badly, and the proposed explanation — hyper-connections let each loop pass do more new work (cross-loop cosine similarity 0.923 → 0.871) — is presented as suggestive, not causal.",
+        },
         {
           name:    "LayerNorm as Implicit Gain Control in Looped Transformers",
           link:    "https://arxiv.org/abs/2607.10681",

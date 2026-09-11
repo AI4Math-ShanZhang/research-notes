@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hyperloop Transformers — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .sym{ background:#fff; border:1px solid #dfe6ee; border-radius:8px; padding:.6rem .9rem; margin:.6rem 0; }
+  .sym b{ color:#3D5A9B; }
+  .eq{ background:#1f2933; color:#e6edf3; border-radius:8px; padding:.7rem 1rem; margin:1rem 0;
+       font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.95rem; white-space:pre; overflow-x:auto; }
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .step{ border-top:2px solid #e3e8ef; padding-top:.3rem; margin-top:1.8rem; }
+  pre.code{ background:#1f2933; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+       font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  pre.code b{ color:#F79A38; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Hyperloop Transformers</h1>
+<p class="paper-meta">Paper: <em>Hyperloop Transformers</em> —
+Abbas Zeitoun, Lucas Torroba-Hennigen &amp; Yoon Kim (MIT),
+<a href="https://arxiv.org/abs/2604.21254">arXiv:2604.21254</a>. July 2026 (v3).</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Three things to remember</h2>
+<ol>
+  <li><b>A hyper-connection is just a residual connection with more wires.</b> Instead of one stream and a
+  fixed "+1" skip, you carry <code>n</code> streams and the skip becomes a small learned matrix. The
+  attention and MLP still see one normal-width vector, so compute barely moves.</li>
+  <li><b>Apply them once per loop, not once per layer.</b> That is the whole trick. 3 loops means 3
+  hyper-connections. About 200K extra parameters, and 95% of baseline training speed — where the
+  every-layer version (mHC) runs at 65%.</li>
+  <li><b>A looped model repeats itself, and that is the problem being fixed.</b> In a plain looped model
+  the same layer gives a 0.92-similar output in every loop. Hyperloop drops that to 0.87, and the
+  perplexity drops with it.</li>
+</ol>
+<p style="margin-bottom:.6rem;"><b>Headline:</b> 579.7M parameters, perplexity 9.65 — against a 990.5M
+Transformer at 10.19. Half the parameters, better number. This survives INT4 quantization (9.81 vs 10.27).</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Part 1 — The notation</h2>
+
+<p>Everything in this paper is one equation. Here it is up front, so you know where we are going:</p>
+
+<div class="eq">y_new  =  H_res · y_old  +  H_post · F( H_pre · y_old )</div>
+
+<p>Eight symbols. Here they are.</p>
+
+<div class="sym"><b>T</b> — how many tokens in the input.<br>
+Say 100. Nothing in this paper depends on it.</div>
+
+<div class="sym"><b>C</b> — the width of one residual stream.<br>
+The normal model dimension. 1024 for the small models in the paper, 2048 for the big ones.</div>
+
+<div class="sym"><b>n</b> — how many parallel streams. The expansion factor.<br>
+This is the new thing. The paper uses <code>n = 4</code>. A normal transformer is <code>n = 1</code>.</div>
+
+<div class="sym"><b>x</b> — an ordinary residual vector for one token.<br>
+<code>C</code> numbers. 1024 of them.</div>
+
+<div class="sym"><b>y</b> — the <em>expanded</em> residual for one token.<br>
+<code>n × C</code>. A 4 &times; 1024 matrix. Four separate 1024-vectors stacked up. This is what goes around
+the loop instead of <code>x</code>.</div>
+
+<div class="sym"><b>F</b> — the actual work.<br>
+One attention layer, or one MLP layer, or the whole middle block. It takes <code>C</code> numbers in and
+gives <code>C</code> numbers out. <b>It never sees the expanded thing.</b> Remember this — it is why the
+method is cheap.</div>
+
+<div class="sym"><b>H_pre</b> — the <em>read</em> weights. Shape <code>1 × n</code>.<br>
+Blends the 4 streams down into 1 stream, so <code>F</code> has something normal-sized to chew on.</div>
+
+<div class="sym"><b>H_post</b> — the <em>write</em> weights. Shape <code>n × 1</code>.<br>
+Takes the single output of <code>F</code> and decides how much of it goes into each of the 4 streams.</div>
+
+<div class="sym"><b>H_res</b> — the <em>skip</em> weights. Shape <code>n × n</code>.<br>
+The old residual "+1", generalized. Lets the streams mix into each other without going through
+<code>F</code> at all.</div>
+
+<div class="callout">Set <code>n = 1</code> and <code>H_pre = H_post = H_res = 1</code> and the big equation
+collapses to <code>x_new = x_old + F(x_old)</code>. A hyper-connection is a <b>generalized skip
+connection</b>. That is the one-line definition.</div>
+
+<h3>Two more, for the loop side</h3>
+
+<div class="sym"><b>l</b> — which loop iteration you are on.<br>
+The paper uses 3 loops, so <code>l</code> is 0, 1, 2.</div>
+
+<div class="sym"><b>e_l</b> — the loop position embedding. <code>C</code> numbers.<br>
+A learned vector added after the middle block, different for each loop. It tells the shared block
+"you are on pass number 2 now."</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 Part 2 — The story, one step at a time</h2>
+
+<h3 class="step">Step 1. Cut the transformer into three pieces</h3>
+
+<p>This part is not new — it is the "middle cycle" recipe from Bae et al. 2025. Take a transformer and
+split it into <b>begin</b>, <b>middle</b>, <b>end</b>. Loop only the middle.</p>
+
+<p>Parameter budget in this paper: 25% begin, 50% middle, 25% end. Loop the middle 3 times.</p>
+
+<p>So a model written <code>2L → 4L (×3) → 2L</code> has 2 begin layers, 4 middle layers run three
+times, and 2 end layers. You <em>store</em> 8 layers. You <em>execute</em> 16.</p>
+
+<div class="eq">stored   : 2 + 4 + 2          =  8 layers   →  135M params
+executed : 2 + 4 + 4 + 4 + 2  = 16 layers   →  same cost as a 238M Transformer</div>
+
+<div class="callout"><b>Read this carefully:</b> looping saves <b>memory</b>, not compute. You still run 16
+layers of matmuls. You just only keep 8 layers of weights around. That is the whole point of the paper —
+it targets phones and edge devices, where RAM is the wall, not FLOPs.</div>
+
+<p>Problem: plain looped transformers are <em>worse</em> than a depth-matched transformer on perplexity.
+Table 1 shows it — 14.85 for looped vs 14.65 for the 238M transformer. That gap is what Hyperloop closes.</p>
+
+<h3 class="step">Step 2. Why looping loses: the model repeats itself</h3>
+
+<p>The middle block has one set of weights. You run it three times. What stops it from doing the same
+thing all three times?</p>
+
+<p>Nothing. And it largely does. The paper measures this directly (Table 8) — take the output of middle
+layer 1 in loop 0, and the output of middle layer 1 in loop 1, and compare them:</p>
+
+<table>
+  <tr><th>model size</th><th>plain Looped</th><th>Hyperloop</th></tr>
+  <tr><td>136M</td><td>0.743</td><td>0.738</td></tr>
+  <tr><td>579M</td><td>0.915</td><td><b>0.872</b></td></tr>
+  <tr><td>991M</td><td>0.923</td><td><b>0.871</b></td></tr>
+</table>
+
+<p>0.92 similarity means loop 1 is almost a copy of loop 0. You paid for 3 passes and got maybe 1.5 passes
+of new work.</p>
+
+<div class="callout"><b>The fix the paper proposes:</b> give the loop a place to store side information that
+changes between passes. That place is the extra parallel streams.</div>
+
+<h3 class="step">Step 3. What a hyper-connection actually is</h3>
+
+<p>Start from the normal residual connection:</p>
+
+<div class="eq">x_new  =  x_old  +  F(x_old)</div>
+
+<p>One stream. The weight on the skip path is hard-coded to 1. Hyper-connections (Zhu et al. 2025a, then
+Xie et al. 2026) change three things at once:</p>
+
+<ol>
+  <li><b>One stream becomes n streams.</b> Carry 4 vectors of 1024 instead of 1 vector of 1024.</li>
+  <li><b>The fixed "+1" becomes a learned n × n matrix.</b> Streams can now pour into each other.</li>
+  <li><b>Reading and writing become learned too.</b> A weighted blend goes in; a weighted spread comes out.</li>
+</ol>
+
+<div class="mermaid">
+flowchart LR
+  Y["y_old<br/>4 streams × 1024"] -->|H_pre<br/>blend 4 → 1| IN["1 × 1024"]
+  IN --> F["F<br/>attention / MLP<br/>normal width"]
+  F --> OUT["1 × 1024"]
+  OUT -->|H_post<br/>spread 1 → 4| ADD(("+"))
+  Y -->|H_res<br/>mix 4 → 4| ADD
+  ADD --> Y2["y_new<br/>4 streams × 1024"]
+</div>
+
+<div class="callout"><b>Why this is nearly free:</b> look at the box in the middle. <code>F</code> takes
+1024 in and gives 1024 out, exactly as before. Attention and the MLP are where all the FLOPs live, and
+they did not change. You only added three small matrices on the outside.</div>
+
+<h3 class="step">Step 4. One pass, with real numbers</h3>
+
+<p>Use <code>n = 2</code> streams and <code>C = 3</code>, so it fits on the page.</p>
+
+<p><b>Start.</b> Two streams for one token:</p>
+<div class="eq">stream A = [1, 0, 2]
+stream B = [0, 3, 1]</div>
+
+<p><b>Read.</b> <code>H_pre = [0.8, 0.2]</code>. Blend into one vector:</p>
+<div class="eq">0.8·A + 0.2·B  =  [0.8, 0.6, 1.8]     ← this is what attention/MLP receives</div>
+
+<p><b>Work.</b> Say <code>F</code> returns:</p>
+<div class="eq">u  =  [0.1, -0.5, 0.4]</div>
+
+<p><b>Write.</b> <code>H_post = [1.5, 0.5]</code>. Stream A gets 1.5 of it, stream B gets 0.5 of it:</p>
+<div class="eq">into A : [0.15, -0.75, 0.6]
+into B : [0.05, -0.25, 0.2]</div>
+
+<p><b>Mix.</b> <code>H_res = [[0.9, 0.1], [0.2, 0.8]]</code>:</p>
+<div class="eq">A base = 0.9·A + 0.1·B = [0.9, 0.3, 1.9]
+B base = 0.2·A + 0.8·B = [0.2, 2.4, 1.2]</div>
+
+<p><b>Add.</b></p>
+<div class="eq">A_new = [1.05, -0.45, 2.5]
+B_new = [0.25,  2.15, 1.4]</div>
+
+<p>Done. One hyper-connected step. Notice stream B kept its big <code>2.15</code> in the middle slot while
+stream A went negative there — the two streams are now carrying different things. That is the capacity
+being bought.</p>
+
+<h3 class="step">Step 5. The H matrices are computed, not stored</h3>
+
+<p>This is the part people miss. <code>H_pre</code>, <code>H_post</code>, <code>H_res</code> are not
+weights. They are <b>outputs</b>, recomputed for every single token from that token's current state. The
+weights are the things that produce them.</p>
+
+<div class="eq">z       = RMSNorm(flatten(y))                     ← 4×1024 squashed to 4096
+H_pre   =     sigmoid( α_pre  · (W_pre · z) )  + b_pre
+H_post  = 2 · sigmoid( α_post · (W_post · z) ) + b_post
+H_res   = sinkhorn( α_res · reshape(W_res · z) + b_res )</div>
+
+<p>Sizes, for <code>n = 4</code>, <code>C = 1024</code>:</p>
+
+<table>
+  <tr><th>thing</th><th>size</th><th>job</th></tr>
+  <tr><td><code>W_pre</code></td><td>4 × 4096</td><td>turn the state into 4 raw scores</td></tr>
+  <tr><td><code>α_pre</code></td><td><b>1 number</b></td><td>temperature — how sharply to react</td></tr>
+  <tr><td><code>b_pre</code></td><td>4 numbers</td><td>shift the result</td></tr>
+  <tr><td><code>W_res</code></td><td>16 × 4096</td><td>16 numbers, reshaped into a 4 × 4 grid</td></tr>
+</table>
+
+<p><b>The α is a learned scalar</b> — one single trainable number. It does not change the scores, it
+changes how sharply the sigmoid reacts to them. Say the raw scores are <code>[2.0, -3.0]</code>:</p>
+
+<table>
+  <tr><th>α</th><th>α × scores</th><th>after sigmoid</th><th>behaviour</th></tr>
+  <tr><td>0.1</td><td>[0.2, -0.3]</td><td>[0.550, 0.426]</td><td>both near 0.5 — basically a fixed connection</td></tr>
+  <tr><td>1.0</td><td>[2.0, -3.0]</td><td>[0.881, 0.047]</td><td>genuinely reacts to the input</td></tr>
+  <tr><td>10</td><td>[20, -30]</td><td>[1.000, 0.000]</td><td>saturated — a hard on/off switch</td></tr>
+</table>
+
+<p>So α is a learned knob for <b>how input-dependent this connection should be</b>. Start it small and the
+model begins life behaving like an ordinary residual connection, which is known to train well; it can turn
+the knob up later if that helps.</p>
+
+<p><b>Why H_post has the extra 2.</b> With α small, sigmoid gives 0.5, and <code>2 × 0.5 = 1.0</code>. So
+the default write weight is exactly 1 — a plain residual connection. The 2 exists to put "do nothing
+special" at the right place.</p>
+
+<p><b>What sinkhorn does.</b> Take the 4 × 4 grid and normalize rows, then columns, then rows again, ~20
+times. You end up with every row summing to 1 and every column summing to 1 ("doubly stochastic"). That
+means the mixing is a <b>soft shuffle</b> — nothing is created, nothing is destroyed, so the residual
+cannot quietly explode or die over depth. The constraint is what "manifold-constrained" (mHC) refers to.</p>
+
+<h3 class="step">Step 6. What Hyperloop changes — three edits</h3>
+
+<p>Everything up to here is background (§2.2). Here is the actual paper (§3). Three edits to mHC:</p>
+
+<p><b>Edit 1 — throw away sinkhorn, use a diagonal.</b></p>
+<div class="eq">H_res  =  diag( sigmoid( α_res · (W_res · z) + b_res ) )</div>
+<p>Diagonal means <em>no mixing between streams at all</em>. Each stream just gets its own gate between 0
+and 1. <code>W_res</code> shrinks from 16 × 4096 to 4 × 4096. And it is not a compromise — it wins:</p>
+
+<table>
+  <tr><th>H_res parameterization</th><th>PPL</th></tr>
+  <tr><td>Identity (no gate at all)</td><td>14.61</td></tr>
+  <tr><td>Sinkhorn (mHC's version)</td><td>14.59</td></tr>
+  <tr><td><b>Diagonal (this paper)</b></td><td><b>14.40</b></td></tr>
+</table>
+
+<p><b>Edit 2 — add the loop position embedding <code>e_l</code>.</b> A learned <code>C</code>-vector added
+after the middle block, different for each loop. The recurrence becomes:</p>
+
+<div class="eq">y^(l+1)  =  H_res · y^(l)  +  H_post · ( F( H_pre · y^(l) )  +  e_l )</div>
+
+<p>The paper's framing: read this as a <b>depth-wise RNN</b> whose hidden state is a matrix. The initial
+<code>Y^(0)</code> is the input, fed in at every time step, and <code>e_l</code> is the step counter.</p>
+
+<p><b>Edit 3 — apply hyper-connections only at the loop boundary.</b> Not after every attention and MLP.
+3 loops, 3 hyper-connections, that is all. Inside the middle block the layers keep their own ordinary
+skip connections and know nothing about the 4 streams.</p>
+
+<p>This one sounds like a pure cost saving, so you would expect it to hurt quality. It does not:</p>
+
+<table>
+  <tr><th>hyper-connections</th><th>where</th><th>PPL</th></tr>
+  <tr><td>12</td><td>every layer</td><td>14.45</td></tr>
+  <tr><td>6</td><td>every 2 layers</td><td>14.50</td></tr>
+  <tr><td>4</td><td>every 3 layers</td><td>14.50</td></tr>
+  <tr><td><b>3</b></td><td><b>every loop (this paper)</b></td><td><b>14.40</b></td></tr>
+  <tr><td>2</td><td>every 6 layers</td><td>14.50</td></tr>
+  <tr><td>1</td><td>every 12 layers</td><td>14.63</td></tr>
+</table>
+
+<div class="callout">The cheapest setting is also the best one, and it beats the setting with 4× the
+parameters and compute. The paper's own words: "perhaps unintuitive." Placement matters more than
+quantity — being <em>aligned with the loop boundary</em> beats being frequent.</div>
+
+<h3 class="step">Step 7. The whole forward pass</h3>
+
+<pre class="code">X_begin = begin_block(tokens)          # T × 1024
+Y = stack([X_begin] * 4)               # <b>duplicate</b> → T × 4 × 1024
+
+for l in range(3):                     # 3 loops
+    z      = rmsnorm(flatten(Y))       # T × 4096
+    H_pre  =     sigmoid(a_pre[l]  * z @ W_pre[l].T)  + b_pre[l]    # T × 4
+    H_post = 2 * sigmoid(a_post[l] * z @ W_post[l].T) + b_post[l]   # T × 4
+    H_res  =     sigmoid(a_res[l]  * z @ W_res[l].T   + b_res[l])   # T × 4 (diagonal)
+
+    inp = einsum('tn,tnc->tc', H_pre, Y)          # <b>blend 4 streams → 1</b>
+    out = middle_block(inp) + e[l]                # 4 shared layers + loop embedding
+    Y   = H_res[...,None] * Y + H_post[...,None] * out[:,None,:]
+
+X_end = Y.mean(dim=1)                  # <b>average</b> the 4 streams → T × 1024
+logits = lm_head(end_block(X_end))</pre>
+
+<p>Two bookends worth naming, because they are the simplest possible choice in both cases:
+<b>duplicate</b> to get from 1 stream to 4 at the start, and <b>average</b> to get from 4 back to 1 at
+the end. No learned projection at either end.</p>
+
+<p><b>Parameter cost.</b> Per loop: three W matrices at about 16K each, plus <code>e_l</code> at 1024,
+plus 3 α scalars and a handful of biases. Roughly 50K per loop, 150K for three loops. That matches the
+measured 135.7M − 135.5M = <b>200K</b>. The α's are 9 numbers out of 200,000.</p>
+
+<h3 class="step">Step 8. The results table</h3>
+
+<p>FineWeb-Edu, 2.5× Chinchilla tokens, Llama-2 tokenizer, SwiGLU + RoPE, <code>n = 4</code>, 3 loops.</p>
+
+<table>
+  <tr><th>size</th><th>model</th><th>params</th><th>PPL (BF16)</th><th>PPL (INT4)</th><th>task acc</th><th>tok/s</th></tr>
+  <tr><td rowspan="4">135M</td><td>Transformer</td><td>238.0M</td><td>14.65</td><td>14.85</td><td>41.1%</td><td>786K</td></tr>
+  <tr><td>mHC</td><td>241.0M</td><td>14.55</td><td>14.73</td><td>41.1%</td><td>514K</td></tr>
+  <tr><td>Looped</td><td>135.5M</td><td>14.85</td><td>15.18</td><td>41.4%</td><td>786K</td></tr>
+  <tr><td><b>Hyperloop</b></td><td>135.7M</td><td><b>14.40</b></td><td><b>14.68</b></td><td><b>41.6%</b></td><td>750K</td></tr>
+  <tr><td rowspan="4">579M</td><td>Transformer</td><td>990.5M</td><td>10.19</td><td>10.27</td><td>48.0%</td><td>367K</td></tr>
+  <tr><td>mHC</td><td>997.5M</td><td>10.07</td><td>10.16</td><td>48.6%</td><td>237K</td></tr>
+  <tr><td>Looped</td><td>579.4M</td><td>10.02</td><td>10.24</td><td>49.2%</td><td>367K</td></tr>
+  <tr><td><b>Hyperloop</b></td><td>579.7M</td><td><b>9.65</b></td><td><b>9.81</b></td><td><b>49.8%</b></td><td>354K</td></tr>
+  <tr><td rowspan="4">990M</td><td>Transformer</td><td>2018.0M</td><td>8.60</td><td>8.71</td><td>52.8%</td><td>181K</td></tr>
+  <tr><td>mHC</td><td>2033.0M</td><td>8.57</td><td>8.62</td><td>53.7%</td><td>109K</td></tr>
+  <tr><td>Looped</td><td>990.5M</td><td>8.68</td><td>8.97</td><td>53.3%</td><td>183K</td></tr>
+  <tr><td><b>Hyperloop</b></td><td>990.8M</td><td><b>8.49</b></td><td><b>8.59</b></td><td><b>54.6%</b></td><td>180K</td></tr>
+</table>
+
+<p>Three things to read out of it:</p>
+<ul>
+  <li><b>Half the parameters, better perplexity.</b> 579.7M beats 990.5M, 9.65 vs 10.19.</li>
+  <li><b>Speed is the quiet win.</b> Hyperloop runs at 95–99% of baseline throughput. mHC runs at 65%.
+  Same idea, but applied 12 times instead of 3, in plain PyTorch.</li>
+  <li><b>Quantization holds.</b> Plain Looped degrades badly under INT4 (14.85 → 15.18, and 8.68 → 8.97).
+  Hyperloop degrades like a normal transformer (8.49 → 8.59). The worry was that looped layers, having
+  seen more inputs, would be harder to quantize. Hyper-connections absorb some of that.</li>
+</ul>
+
+<p><b>Also worth knowing</b> (Table 3): a <code>3L → 2L (×6) → 3L</code> Hyperloop with <b>477M</b>
+parameters scores 9.86, still under the 990.5M Transformer's 10.19. And under heavy overtraining
+(Table 2, 100B tokens = 20× Chinchilla) plain Looped falls apart (12.56 vs 12.15) while Hyperloop stays
+level (12.19).</p>
+
+<h3 class="step">Step 9. Is this just LoRA on a looped model?</h3>
+
+<p>Fair question — the hyper-connection weights differ per loop, so the looped block does behave slightly
+differently each pass. LoRA per loop step (Bae et al.'s relaxed recursive transformers) does the same
+thing more directly. The paper ran it:</p>
+
+<table>
+  <tr><th>LoRA rank per loop</th><th>params</th><th>PPL</th></tr>
+  <tr><td>0 (plain looped)</td><td>135.5M</td><td>14.85</td></tr>
+  <tr><td>4</td><td>136.0M</td><td>14.85</td></tr>
+  <tr><td>8</td><td>137.0M</td><td>14.81</td></tr>
+  <tr><td>16</td><td>139.0M</td><td>14.80</td></tr>
+  <tr><td>32</td><td>143.0M</td><td>14.77</td></tr>
+  <tr><td><b>Hyperloop</b></td><td><b>136.0M</b></td><td><b>14.40</b></td></tr>
+</table>
+
+<p>LoRA rank 32 spends 7.5M extra parameters to gain 0.08. Hyperloop spends 0.5M to gain 0.45. So "vary
+the weights across loops" is <em>not</em> the mechanism — if it were, LoRA would have caught up.
+Something about the extra streams is doing the work.</p>
+
+<h3 class="step">Step 10. Figure 3 — the evidence for why it works</h3>
+
+<p>Nine heatmaps. Rows are model sizes (135M / 580M / 1B), columns are architectures
+(Transformer / Looped / Hyperloop).</p>
+
+<p><b>How each one was made:</b></p>
+<ol>
+  <li>Run 50M held-out FineWeb-Edu tokens through the trained model.</li>
+  <li>At every <em>effective</em> layer — unrolled, so middle-layer-2-in-loop-0 and middle-layer-2-in-loop-1
+  are two separate points — record the residual vector. For Hyperloop they record the <b>inner</b> stream,
+  the <code>C</code>-dim thing that actually enters attention, i.e. <code>H_pre · y</code>.</li>
+  <li>For every <em>pair</em> of layers (i, j), compute cosine similarity, averaged over tokens.</li>
+  <li>Draw the grid. Row = layer i, column = layer j. <b>Blue = near 1, red = near 0.</b> The main diagonal
+  is always dark blue, because a layer is identical to itself.</li>
+</ol>
+
+<p><b>The axis labels.</b> On the looped panels you see <code>2(0)</code>, <code>4(0)</code>,
+<code>2(1)</code>, <code>4(1)</code>… That reads "middle layer 2, during loop 0". The dashed lines mark
+where one loop ends and the next starts. <code>e</code> at the end is the end block.</p>
+
+<p><b>What you see:</b></p>
+<ul>
+  <li><b>Transformer (left):</b> a smooth gradient. Nearby layers similar, far layers less so. The last
+  row and column turn red — the final layer swings hard to line up with the vocabulary. Ordinary.</li>
+  <li><b>Looped (middle):</b> square blocks between the dashed lines, and — the thing to actually look at —
+  bright blue <b>stripes running parallel to the main diagonal</b>, one loop-length away from it. That
+  stripe <em>is</em> the repetition. Same layer, different loop, nearly the same output.</li>
+  <li><b>Hyperloop (right):</b> that parallel stripe is visibly lighter. Same layer, different loop,
+  genuinely different output.</li>
+</ul>
+
+<div class="callout"><b>Table 8 is that stripe, as a number.</b> 0.915 → 0.872 at 579M, 0.923 → 0.871 at
+991M. Lower means each loop pass does more new work, which is the whole claim.</div>
+
+<div class="analogy"><b>The rereading analogy.</b> A looped model is a student reading the same page three
+times. If you take no notes, the third reading is the first reading again — 0.92 similarity. The four
+parallel streams are a margin to scribble in: what you already worked out, what is still confusing. Now
+the second read starts from a different place, so it gets somewhere different. And you only need to update
+the margin <em>between</em> readings, not after every sentence — which is exactly why one hyper-connection
+per loop beats twelve per layer.</div>
+
+<h3 class="step">Step 11. Figure 4 — the logit lens, and a free hint</h3>
+
+<p>Different analysis, same 50M tokens. Take the outer residual stream at each effective layer, push it
+straight through the language-model head, and look at what comes out. Three curves: cross-entropy,
+entropy, and greedy-decoding accuracy.</p>
+
+<p>Result: both looped models line up with the vocabulary much earlier than a plain transformer, with
+alignment peaking at the end of each loop. Hyperloop lines up <em>most</em>. The paper reads this as
+hyper-connections adding a regularizing pull toward vocabulary space.</p>
+
+<div class="callout"><b>The practical hint:</b> if the answer is already readable halfway through, you can
+stop early. The paper flags early-exit inference as the obvious follow-up — that would turn a
+memory-efficiency result into a compute-efficiency one. Not attempted here.</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section" style="background:#fff6f7;border-left:5px solid #F06B7F;">
+<h2 style="color:#b23a4c;">⚠ How much to trust it</h2>
+<ul>
+  <li><b>Scale — the paper's own stated limitation.</b> Largest model is 990M looped / 2B depth-matched, on
+  academic compute. Whether "half the parameters" survives at frontier scale is untested.</li>
+  <li><b>"50% fewer parameters" is not "50% cheaper."</b> Hyperloop executes the same unrolled depth as the
+  baseline it beats, so FLOPs per token are roughly matched. The saving is memory, full stop. The paper is
+  upfront about this — it is the premise, not a hidden claim — but the abstract reads better than the
+  compute story.</li>
+  <li><b>Figure 3 and Table 8 are correlational.</b> The paper says "suggestive evidence" and "supporting
+  our hypothesis," never that lower similarity <em>causes</em> lower perplexity. It could be a side effect
+  of a model that is simply fitting better.</li>
+  <li><b>The small model shows nothing.</b> 0.743 vs 0.738 at 136M is noise. The similarity story only
+  appears at 579M and up — on 2 data points.</li>
+  <li><b>The mHC speed comparison is not apples-to-apples,</b> and the paper says so. mHC's 514K tok/s is a
+  naive PyTorch implementation; Xie et al. report only 6.7% overhead with a custom kernel, which is not
+  public. The honest version of the claim is "no sophisticated systems engineering required," not "mHC is
+  slow."</li>
+  <li><b>More streams barely helps.</b> Table 4: n=2 → 14.43, n=4 → 14.40, n=10 → 14.35. Almost flat, for
+  2.5× the hyper-connection parameters. So <code>n</code> is not a scaling axis, and the reason the method
+  works probably is not "more capacity in the residual."</li>
+  <li><b>Two shape inconsistencies in the writing.</b> Page 3 states all three H matrices are
+  <code>n × n</code>, which does not typecheck against §2.2's own equation (they must be 1×n, n×1, n×n for
+  the dimensions to work). And Table 3's first Hyperloop row reads <code>3L → 4L (×3) → 2L</code> where
+  Table 1 has <code>→ 3L</code>. Both look like typos, neither affects the results.</li>
+</ul>
+<p>Verdict: the engineering result is solid and cheap to reproduce — three edits, 200K parameters, and the
+ablations honestly report that the cheapest variant won. The <em>explanation</em> (Figure 3) is the weakest
+part and is presented as such.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section" style="background:#f4f1fa;border-left:5px solid #9B72CF;">
+<h2 style="color:#6b4ba1;">🔗 Hooks to the rest of this category</h2>
+<ul>
+  <li><b>Ouro.</b> Ouro found looping adds knowledge <em>manipulation</em> but not knowledge
+  <em>capacity</em>, and that performance peaks at the trained depth (4) and falls apart by 8. Figure 2
+  here is the matching curve from the other side — Hyperloop keeps improving from 2 to 6 loops but with
+  clear diminishing returns. Both papers are describing the same ceiling. Ouro's early-exit gate is also
+  the natural partner for the logit-lens finding in Step 11.</li>
+  <li><b>LayerNorm as implicit gain control.</b> That paper's loop is
+  <code>h_next = A·h + f(h,e)</code> with <code>A</code> a per-channel carry in (0,1). Hyperloop's
+  <code>H_res = diag(sigmoid(...))</code> is <em>exactly that</em> — a per-stream gate in (0,1) — except
+  input-dependent instead of static. So the stability analysis should carry over, including the warning
+  that the dangerous direction is activations shrinking, not growing.</li>
+  <li><b>Mixture-of-Recursions.</b> MoR varies depth per token. Hyperloop varies the <em>connection</em>
+  per token while depth stays fixed. They are orthogonal and nobody has combined them.</li>
+  <li><b>The boosted-loop framing.</b> Hyperloop is loop-specific <code>{W, b, α, e}</code> — a
+  step-conditioned adapter by another name. Table 7 is the important data point: LoRA-per-loop gets you
+  0.08 and Hyperloop gets 0.45, which says the gain is <em>not</em> coming from letting weights vary
+  across steps. Any claim that a per-step adapter is the mechanism has to explain that gap.</li>
+</ul>
+</section>
+
+</body>
+</html>
