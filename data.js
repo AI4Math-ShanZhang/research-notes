@@ -140,6 +140,14 @@ const BLOG = {
       blurb: "Diffusion language models — architecture, sampling, self-conditioning, and interpretability. (The complexity-theory side lives in Loop Transformer.)",
       notes: [
         {
+          title:   "d-OPSD — Learning from the Self-future",
+          file:    "posts/d-opsd-self-future-distillation.html",
+          date:    "2026-09-11",
+          paper:   "Luo, Chen, Wang, Hu, Zhang, Sha &amp; Liu · arXiv:2606.18195",
+          tags:    ["text diffusion", "self-distillation", "on-policy", "post-training", "RLVR", "reasoning"],
+          summary: "Q&amp;A note. On-policy self-distillation gives a teacher privileged context and trains the student on its own visited states; the AR version hands that context over as a left-to-right prefix with token-level loss, which does not fit a model that decodes in arbitrary order. d-OPSD lets the student finish one rollout, then goes back to each saved masked state and pastes in hint tokens taken from the student's own completed answer — the self-future — at their original positions, and supervises per denoising step. Eight questions worked through: the OPD/OPSD split and why &ldquo;self&rdquo; does not mean identical predictions (frozen initial policy vs updating student); why student generations are safe as states when the teacher supplies the targets, plus the correctness filter (resample up to 8 times, loss only on accepted responses) that means an external signal is still in the loop; the Figure 2 walkthrough of what the teacher's input actually looks like; the two independent selections — random 25% of masked positions for hints, teacher-confidence top-k positions for the loss — and why top-k means positions, not vocabulary; why the teacher is ahead in information but its state need not be the student's real next state; that one y_0 serves every saved state in a trajectory; two alternatives we costed out (fresh continuation per state at ~T(T+1)/2 steps, or using y_(t−1) directly as teacher context); and the table against standard masked-diffusion training.",
+        },
+        {
           title:   "STAR — routing one image-level reward over denoising time and latent space",
           file:    "posts/star-spatiotemporal-reward-allocation.html",
           date:    "2026-09-02",
@@ -165,6 +173,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "Learning from the Self-future: On-policy Self-distillation for dLLMs",
+          link:    "https://arxiv.org/abs/2606.18195",
+          summary: "Luo, Chen, Wang, Hu, Zhang, Sha &amp; Liu — on-policy self-distillation was built for autoregressive models, where the teacher gets privileged info as a left-to-right prefix and supervision is token-level; that shape fights the arbitrary-order generation of a diffusion LM. d-OPSD flips the conditioning: the teacher is the same model shown the student's own sampled answer as a suffix, so the privileged hint is the self-future rather than the past, and supervision moves from token-level to step-level to match the denoising loop. Beats RLVR and SFT on four reasoning benchmarks at roughly 10% of RLVR's optimization steps; code at github.com/xingzhejun/d-OPSD.",
+        },
         {
           name:    "STAR: SpatioTemporal Adaptive Reward Allocation for Text-to-Image RL Post-Training",
           link:    "https://arxiv.org/abs/2606.17979",
