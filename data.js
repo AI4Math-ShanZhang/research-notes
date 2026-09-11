@@ -190,6 +190,11 @@ const BLOG = {
           link:    "https://arxiv.org/abs/2510.01384",
           summary: "Kim, Kim, Lee, Pan, Kim, Kakade & Chen — a plug-in remasking head that learns per-token quality without RL or a verifier. Target is g*(y) = p(x^i = y^i | y ⊕ m^i): how likely the token sitting at position i would be if you couldn't see it. The trick is the label — fill a masked slot with the model's own sample y^i, then supervise with the free binary check 1[x^i = y^i]; since BCE's minimizer is the conditional mean, that single bit recovers the exact probability. g is one coordinate of the unmasking posterior f already models, just readable from an input where the slot is FILLED rather than masked — which is what turns L extra forward passes into zero. Shares the backbone with a second head, regularized by the ordinary MDM loss to prevent forgetting f. Sudoku, 170M text, and LLaDA-8B code.",
         },
+        {
+          name:    "MDPO — Overcoming the Training-Inference Divide of Masked Diffusion Language Models",
+          link:    "https://arxiv.org/abs/2508.13148",
+          summary: "He, Renz, Cao &amp; Geiger (autonomousvision) — a masked diffusion model predicts every masked position at once, so each denoising step already yields a complete decodable sequence that a verifier can score; MDPO uses that to run GRPO-style RL over the trajectory instead of the final answer alone. A step's score is its immediate reward gain over the previous noisier step plus the mean reward of all later, cleaner steps in the same rollout, then normalized across a group of G rollouts at the same step index — which marks the exact step that refined a correct intermediate answer into a wrong one (the paper's \"over-denoising\"). Also ships RCR (Running Confidence Remasking), a training-free sampler change that scores each position by its running maximum confidence so an early wrong commit stays revisable; LLaDA-8B, 60× fewer gradient updates than the previous state of the art, +9.6% MATH500 and +54.2% Countdown at equal budget.",
+        },
       ],
     },
 
