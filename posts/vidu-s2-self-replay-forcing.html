@@ -73,6 +73,9 @@ inference stack from <a href="https://arxiv.org/abs/2512.16093">TurboDiffusion</
 <section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
 <h2 style="color:#1f7a5e;">✅ Conclusion</h2>
 <ul>
+  <li><b>SRF is step 4 of a 7-step recipe.</b> Section 1 walks the whole thing. Segment-wise captions (step 2)
+  and event-boundary chunking (step 1) are the paper's own stated cause of the instruction-following gain, and
+  mid-stream reference swapping is a VLM prompt loop (step 7), not a model capability.</li>
   <li><b>The charge against Self Forcing:</b> its self-generated history comes back <b>clean</b> and
   <b>detached</b>. Both are literally in its Algorithm 1 — line 13 caches at timestep <b>0</b>, and the paper
   says it restricts gradient flow into the KV embeddings.</li>
@@ -149,7 +152,82 @@ and what the KV cache actually holds.</p>
 </table>
 
 <!-- ---------------------------------------------------------- -->
-<h3>1. What a computation graph is, and what detach costs</h3>
+<h3>1. The whole training recipe, in order</h3>
+
+<p>SRF is <b>step 4 of 7</b>. Worth seeing where it sits before zooming in, because a few of the other steps
+are doing quiet work that SRF gets credit for.</p>
+
+<p><b>Step 1 — Build the data.</b> Sources inherited from Vidu S1 (talking heads, film and TV) plus two
+additions chosen to teach large body motion: <b>solo dance</b> and 2D/3D animation. Three operators matter:</p>
+<ul>
+  <li><b>Cut detection with a VLM second pass.</b> Vlogs hide their edits — an unboxing video keeps the start
+  and end of opening a package and drops the middle. Raising shot-detection sensitivity floods you with false
+  positives, so they extract frames around each candidate cut and ask a VLM to judge. False rejection stays
+  <b>under 2%</b>.</li>
+  <li><b>High-clarity selection.</b> A heavily compressed 1080p clip still looks blurry, so resolution alone
+  is not a filter. Hard thresholds on resolution and frame rate first, then the interdependencies among codec,
+  pixel format, bit depth and bitrate, then expert models scoring texture detail, edge sharpness and
+  compression artifacts — aggregated into one weighted score with a threshold.</li>
+  <li><b>Background stabilization.</b> Dance videos have moving cameras, and moving backgrounds teach the
+  model to drift. Rather than discard them: mask the foreground subject, estimate the camera transform from
+  the remaining background by feature matching, apply geometric correction and crop, then a second filter pass
+  to confirm the subject is still in frame. Clips with large or complex camera motion are excluded outright;
+  the trick only works because dance-video parallax is small.</li>
+</ul>
+<p>Captions change shape too. Vidu S1 used structured fields (subject / environment / camera). S2 uses
+<b>time-ordered dense captions</b> — "0–2.8 s: the camera holds a static eye-level medium close-up… she raises
+her right hand beside her face, then waves toward the lens." Chunk-level captions are then split
+<b>at event boundaries</b> rather than at fixed speech-aligned intervals, which is what lets the model react
+on a natural boundary instead of waiting out a slot.</p>
+
+<p><b>Step 2 — Train a bidirectional teacher.</b> An audio-visual joint DiT predicting clean video+audio
+latents for N segments at once:</p>
+<pre class="diag">x̂_0^{1:N} = f_bi( x_t^{1:N}, t, r, c^{1:N} )</pre>
+<p>Two things to note. It trains <b>I2V and R2V jointly in one model</b> — for I2V, <code>r</code> is just the
+first frame of the target; for R2V, <code>r</code> is a separate reference image. And each segment gets its
+own condition <code>c_i</code> instead of one prompt for the whole sequence; the paper credits this
+segment-wise supervision for most of the instruction-following gain, not the architecture. Then
+<b>diffusion DPO</b> at this stage for visual fidelity, facial expressiveness, motion naturalness and
+audio–visual sync. A better teacher makes a better student, and everything after this is distillation.</p>
+
+<p><b>Step 3 — Make it causal.</b> Replace bidirectional temporal attention with a <b>block-wise causal
+mask</b>. Segment <code>i</code> now sees only the reference, its own condition, and valid history:</p>
+<pre class="diag">x̂_0^i = f_causal( x_{t_i}^i, t_i, r, c_i, x_{tau_i}^{&lt;i}, tau_i )</pre>
+<p>Training mixes Teacher Forcing and Diffusion Forcing, sampled with a fixed probability. This is the crude
+version — it gets streaming working and buys some robustness to imperfect history, but the history is still
+<em>real data</em>, so exposure bias is untouched.</p>
+
+<p><b>Step 4 — Self-Replay Forcing</b>, then <b>Streaming NFT</b> on top: the same detached-rollout,
+gradient-enabled-replay pattern, but with a reward signal instead of DMD. Sections 2–4 below are all about
+this step.</p>
+
+<p><b>Step 5 — 720p without paying for it.</b> Running the backbone at 720p would kill the frame rate, so
+the backbone stays low-res and a <b>one-step Refiner</b> upsamples in latent space and denoises once:</p>
+<pre class="diag">z = (1 - t_r) * Upsample(x̂_0_lowres) + t_r * noise     (t_r fixed for every chunk)</pre>
+<p>The clever part is the <b>asymmetric cache noise</b> covered in section 3: the backbone reads a high-noise
+history cache <code>tau_B</code> and owns <em>time</em>; the Refiner reads a low-noise high-resolution cache
+<code>tau_R</code> and owns <em>space</em>. 540p → 720p, still 25–42 FPS.</p>
+
+<p><b>Step 6 — The inference stack</b> — TurboDiffusion [6] and TurboServe [7], described in the summary
+above. Layer-wise hybrid attention, per-block W8A8 GEMM, kernel fusion with CUDA Graphs, Ulysses context
+parallelism with quantized collectives, and one shared GPU timeline across the four modules.</p>
+
+<p><b>Step 7 — The agentic layer.</b> The model itself does not understand "pick up the cup, then smile", so a
+<b>VLM agent</b> sits in front of it. It writes the per-chunk prompt, splitting identity, expression, gaze,
+pose and held objects. It <b>carries state forward</b> — after the cup is picked up, every later prompt still
+says "continues holding the cup", or the cup vanishes. It <b>watches the output frames</b> and judges the
+action finished / partly done / wrong, revising the next prompt accordingly, and an inconclusive judgment does
+not count as success. For a new reference image it first classifies it as a handheld object, a background or
+clothing, then writes the matching prompt. This is what "swap the reference at any moment" actually is —
+prompt engineering in a loop, not a model capability.</p>
+
+<div class="callout"><b>Where the credit sits.</b> Steps 1, 2 and 7 are doing a lot of unglamorous work.
+Segment-wise captions (step 2) and event-boundary chunking (step 1) are the stated cause of the
+instruction-following gain; the agentic loop (step 7) is what makes mid-stream references reliable. SRF is the
+novel piece, but the paper never separates its contribution from these — see section 5.</div>
+
+<!-- ---------------------------------------------------------- -->
+<h3>2. What a computation graph is, and what detach costs</h3>
 
 <p>When you write <code>y = theta * 3</code>, the framework does not only store <code>y</code>. It also writes
 a note: <em>"y came from multiplying theta by 3."</em> Stack a million notes and you get the <b>graph</b>.
@@ -204,7 +282,7 @@ training by restricting gradient flow into KV cache embeddings.</em>" That is th
 is that the backward pass sees seven islands with no arrows between them.</p>
 
 <!-- ---------------------------------------------------------- -->
-<h3>2. The output is clean. The cache is a separate object.</h3>
+<h3>3. The output is clean. The cache is a separate object.</h3>
 
 <p>This is where I went wrong first. The video handed to the user is always fully denoised — never in
 question. But the KV cache is not the video; it is the internal attention memory, and the two can sit at
@@ -252,7 +330,7 @@ not only a shortcut. <em>(Mapping the objection onto TwinCache is mine; the pape
 </div>
 
 <!-- ---------------------------------------------------------- -->
-<h3>3. Self-Replay Forcing — roll out without the graph, replay with it</h3>
+<h3>4. Self-Replay Forcing — roll out without the graph, replay with it</h3>
 
 <p>Four recipes, one question: <b>what do you show the model as history during training?</b></p>
 
@@ -332,7 +410,7 @@ with a DMD loss, Streaming NFT with a reward loss, and S2-Editing, which the pap
 hybrid forcing and Self-Replay Forcing framework".</p>
 
 <!-- ---------------------------------------------------------- -->
-<h3>4. What I'd want before believing it</h3>
+<h3>5. What I'd want before believing it</h3>
 <div class="callout warn">
 <ol>
   <li><b>No SRF ablation.</b> This is the headline contribution and there is no table isolating it against
