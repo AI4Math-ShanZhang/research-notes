@@ -83,7 +83,8 @@ inference stack from <a href="https://arxiv.org/abs/2512.16093">TurboDiffusion</
   <em>input</em> — the clean x̂<sub>0</sub> is an <em>output</em>. At 25–42 FPS Vidu will not pay that 25% tax,
   so it keeps pass 4's KV and lives with tau &gt; 0.</li>
   <li><b>Detaching deletes one specific term</b> — the one saying "the problem started earlier". In a toy
-  three-chunk chain the gradient drops <b>8.25 → 5.25</b>, and the missing 36% is entirely cross-chunk.</li>
+  three-chunk chain the gradient drops <b>8.25 → 5.25</b>. But the DMD loss is video-level, so the real cut is
+  narrower than that — see the correction in section 2.</li>
   <li><b>SRF = roll out with the graph off, replay a short window with it on.</b> Memory scales with the
   <b>window</b> you pick, not with stream length. Roll out 100 chunks, replay 6.</li>
   <li><b>The catch:</b> no SRF ablation and no latency table, in a paper whose whole claim is real-time. The
@@ -271,15 +272,35 @@ target = 1.0   loss = (1.75-1.0)^2 = 0.5625   dL/dy3 = 1.5</pre>
 </div>
 
 <div class="callout"><b>The point is not that 5.25 &lt; 8.25.</b> Detaching deletes one <em>specific</em> piece
-of information — "the problem started earlier". The model can only ever learn "fix the last chunk", never
-"stop setting yourself up to fail". Over a 5-minute stream, that is the missing piece you wanted.</div>
+of information — "the problem started earlier". Read the widget as an illustration of what a cut chain does,
+not as Self Forcing's actual gradient; the next callout corrects that.</div>
 
 <p>Worth separating the two truncations in Self Forcing's Algorithm 1, because only one of them is at issue.
 The <b>stochastic</b> one — keep gradient at a single randomly drawn denoising step <code>s</code> per chunk —
 is a pure memory measure and SRF keeps the same spirit. The <b>second</b> one is the KV detach, stated
 outright: "<em>we additionally detach the gradients of the previous frames from the current frame during
-training by restricting gradient flow into KV cache embeddings.</em>" That is the one SRF reworks. Its effect
-is that the backward pass sees seven islands with no arrows between them.</p>
+training by restricting gradient flow into KV cache embeddings.</em>" That is the one SRF reworks.</p>
+
+<div class="callout warn"><b>Careful — the loss is still video-level, so the cut is narrower than it looks.</b>
+Self Forcing's §3.3 matches "<em>the holistic distribution of the entire video sequence</em>", so the DMD
+critic sees all frames at once. Split the gradient into two factors:
+<pre class="diag">dL/dtheta = sum over i of  [ dL/dx̂_0^i ]  x  [ dx̂_0^i/dtheta ]
+                            ^^^^^^^^^^^^      ^^^^^^^^^^^^^^^^
+                            cross-frame       this is what
+                            aware (survives)  gets cut</pre>
+The first factor <b>survives</b> and is cross-frame aware — chunk 7 looking bad does change the gradient
+landing on chunk 3's output. Only the second is truncated. So the precise missing thing is narrower than
+"chunk 7 cannot teach chunk 3": the model can still learn <em>"chunk 3 was part of a bad video, improve it"</em>,
+just not <em>"generate chunk 3 differently so chunk 7 comes out better"</em>. Redo the toy with a holistic loss
+on all three chunks (weight 1.5 each) and the gap is <b>17.25 vs 12.75 — 26%, not 36%</b>. Every chunk still
+gets a direct gradient; only the cross-terms vanish. Vidu's framing, and my first pass at it, oversell this.
+</div>
+
+<p>One more thing Self Forcing does have, which is easy to confuse with a gradient window: an <b>attention</b>
+window. §3.4 blocks attention to the first chunk when denoising the final chunk, because the first latent
+frame is encoded as a single image with no temporal compression and the model would otherwise never cope once
+the rolling cache scrolls past it. That is flicker control, not gradient. There is <b>no</b> gradient window in
+Self Forcing — every KV entry is detached, full stop.</p>
 
 <!-- ---------------------------------------------------------- -->
 <h3>3. The output is clean. The cache is a separate object.</h3>
@@ -331,6 +352,18 @@ not only a shortcut. <em>(Mapping the objection onto TwinCache is mine; the pape
 
 <!-- ---------------------------------------------------------- -->
 <h3>4. Self-Replay Forcing — roll out without the graph, replay with it</h3>
+
+<div class="callout" style="border-left-color:#2EAF8E;background:#f2faf6;">
+<p style="margin:.4rem 0"><b>Why SRF does it.</b> At inference the model must build each chunk on its own
+past mistakes, so training has to show it that same situation. Self Forcing already did this, but fed the
+self-made history back <em>clean</em> — which costs an extra forward pass per chunk and mismatches Vidu's
+noisy cache — and <em>detached</em>, so a later chunk's loss could never reach back into how the earlier
+chunks were computed.</p>
+<p style="margin:.4rem 0"><b>What it solves.</b> SRF rolls out with the graph off so the data is realistic and
+cheap, re-noises it so the history matches the real cache, then replays a short window with the graph on so
+gradient crosses chunk boundaries — fixing drift that compounds across chunks, while memory scales with the
+window you pick rather than with stream length.</p>
+</div>
 
 <p>Four recipes, one question: <b>what do you show the model as history during training?</b></p>
 
@@ -442,7 +475,7 @@ const KEEP = { val:"8.25", cls:"big g", strike:false,
   cap:"Full gradient = 8.25. Every chunk that contributed to the mistake gets corrected.",
   lesson:"“Chunk 3 came out too high — <b>and</b> chunks 1 and 2 set it up badly. Fix all three.”" };
 const CUT  = { val:"5.25", cls:"big d", strike:true,
-  cap:"Detached = 5.25. The 2.25 and 0.75 terms are gone — 36% of the signal, and exactly the part about earlier chunks.",
+  cap:"Detached = 5.25. The 2.25 and 0.75 terms are gone — the cross-chunk part. With a video-level loss on all three chunks the real gap is 17.25 vs 12.75; see the callout below.",
   lesson:"“Chunk 3 came out too high. Fix chunk 3.”<br><br>It has <b>no idea</b> the trouble started two chunks ago." };
 
 const gval=document.getElementById('gval'), wcap=document.getElementById('wcap'),
