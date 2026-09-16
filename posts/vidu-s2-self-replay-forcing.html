@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Note on Vidu S2's Self-Replay Forcing: why Self Forcing's clean KV cache and detached history leak, and how rolling out without the computation graph and replaying a short window with it closes both.">
+<title>Self-Replay Forcing — Rolling Out on Your Own Frames — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .callout.warn{ border-left-color:#F06B7F; }
+  .win{ color:#2EAF8E; font-weight:600; }
+  .lose{ color:#F06B7F; font-weight:600; }
+  pre.diag{ font-family:ui-monospace,Menlo,Consolas,monospace; background:#f4f7fa;
+            border:1px solid #e0e5ea; border-radius:6px; padding:.8rem 1rem; font-size:.88rem;
+            overflow-x:auto; line-height:1.55; }
+  pre.diag b{ color:#1e8355; }
+
+  dl.deps{ margin:.9rem 0 .8rem; }
+  dl.deps dt{ font-weight:bold; margin:.7rem 0 .15rem; }
+  dl.deps dt a{ color:#2c5b8f; }
+  dl.deps dd{ margin:0 0 0 1.2rem; }
+
+  .legend{ display:flex; flex-wrap:wrap; gap:.9rem; font-family:-apple-system,system-ui,sans-serif;
+           font-size:.78rem; color:var(--muted); margin:.6rem 0 1rem; }
+  .legend span{ display:flex; align-items:center; gap:.35rem; }
+  .sw{ width:12px; height:12px; border-radius:3px; display:inline-block; }
+  .chunkrow{ display:flex; align-items:center; margin:.5rem 0; font-family:-apple-system,system-ui,sans-serif; }
+  .rowlab{ min-width:104px; font-size:.75rem; color:var(--muted); font-weight:600; flex-shrink:0; }
+  .ch{ width:70px; height:46px; border-radius:6px; display:flex; flex-direction:column;
+       align-items:center; justify-content:center; font-size:.72rem; font-weight:600; color:#fff;
+       margin-right:7px; flex-shrink:0; line-height:1.2; text-align:center; }
+  .ch small{ font-weight:400; font-size:.62rem; opacity:.92; }
+  .ch.noisy{ background:#F79A38; } .ch.dead{ background:#b0b6bd; }
+  .ch.grad { background:#3DBD79; } .ch.real{ background:#5b6570; }
+  .ch.both { background:linear-gradient(135deg,#F79A38 0%,#F79A38 58%,#3DBD79 58%); }
+
+  .widget{ background:#f4f7fa; border:1px solid #e0e5ea; border-radius:8px; padding:1rem 1.1rem; margin:1.2rem 0; }
+  .btnrow{ display:flex; gap:.6rem; flex-wrap:wrap; margin-bottom:.9rem;
+           font-family:-apple-system,system-ui,sans-serif; }
+  .btnrow button{ font:inherit; font-size:.85rem; font-weight:600; padding:.45rem .9rem; cursor:pointer;
+                  border:2px solid var(--ink); background:#fff; color:var(--ink); border-radius:6px; }
+  .btnrow button.on{ background:var(--ink); color:#fff; }
+  .wgrid{ display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  @media(max-width:640px){ .wgrid{ grid-template-columns:1fr; } }
+  .wbox{ background:#fff; border:1px solid #e0e5ea; border-radius:6px; padding:.7rem .9rem; }
+  .wbox h4{ margin:0 0 .4rem; font-family:-apple-system,system-ui,sans-serif; font-size:.72rem;
+            letter-spacing:.05em; text-transform:uppercase; color:var(--muted); }
+  .wbox .big{ font-size:1.8rem; font-weight:bold; font-family:-apple-system,system-ui,sans-serif; }
+  .wbox .big.g{ color:#1e8355; } .wbox .big.d{ color:#8a9199; }
+  .wbox ul{ margin:.5rem 0 0; padding-left:1.1rem; font-family:ui-monospace,Menlo,Consolas,monospace;
+            font-size:.76rem; line-height:1.8; color:var(--muted); }
+  .wbox li.hi{ color:var(--ink); font-weight:bold; }
+  .wbox li.gone{ text-decoration:line-through; opacity:.45; }
+  .wcap{ font-family:-apple-system,system-ui,sans-serif; font-size:.8rem; color:var(--muted);
+         margin:.8rem 0 0; padding-top:.6rem; border-top:1px solid #e0e5ea; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Self-Replay Forcing — Rolling Out on Your Own Frames</h1>
+<p class="paper-meta">Paper: <em>Vidu S2: Real-Time Interactive, Editable, and Spatial Video Generation</em> —
+Jintao Zhang et al. (Tsinghua University · Shengshu Technology),
+<a href="https://arxiv.org/abs/2609.11638">arXiv:2609.11638</a> ·
+<a href="https://vidu.com/vidu-stream">demo</a>.
+Defined against <a href="https://arxiv.org/abs/2506.08009">Self Forcing</a> (Huang et al., NeurIPS 2025);
+inference stack from <a href="https://arxiv.org/abs/2512.16093">TurboDiffusion</a> and
+<a href="https://arxiv.org/abs/2606.19271">TurboServe</a>.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>The charge against Self Forcing:</b> its self-generated history comes back <b>clean</b> and
+  <b>detached</b>. Both are literally in its Algorithm 1 — line 13 caches at timestep <b>0</b>, and the paper
+  says it restricts gradient flow into the KV embeddings.</li>
+  <li><b>A clean cache costs a fifth forward pass per chunk.</b> None of the 4 denoising passes ever had clean
+  <em>input</em> — the clean x̂<sub>0</sub> is an <em>output</em>. At 25–42 FPS Vidu will not pay that 25% tax,
+  so it keeps pass 4's KV and lives with tau &gt; 0.</li>
+  <li><b>Detaching deletes one specific term</b> — the one saying "the problem started earlier". In a toy
+  three-chunk chain the gradient drops <b>8.25 → 5.25</b>, and the missing 36% is entirely cross-chunk.</li>
+  <li><b>SRF = roll out with the graph off, replay a short window with it on.</b> Memory scales with the
+  <b>window</b> you pick, not with stream length. Roll out 100 chunks, replay 6.</li>
+  <li><b>The catch:</b> no SRF ablation and no latency table, in a paper whose whole claim is real-time. The
+  human-preference percentages are all multiples of 1/7 — that is <b>7 comparisons</b> per cell.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+<p>Vidu S2 is a real-time streaming video system in two halves — S2-Avatar, an interactive digital character
+at 720p and 25–42 FPS whose reference image can be swapped mid-stream, and S2-Editing, which edits an
+incoming video stream on the fly for style, clothing, subject and background via frame-aligned attention,
+where each target frame reads only the source frame at the same time step. Its training contribution is
+<b>Self-Replay Forcing</b>: the student rolls out on its own output with the computation graph switched off,
+a short window of that trajectory is re-noised, and only that window is replayed in one gradient-enabled
+causal pass — so the history is self-generated <em>and</em> noisy <em>and</em> connected, closing the two
+places Self Forcing's training history diverges from what the model meets at inference. Speed comes from two
+earlier systems by the same group, which Vidu S2 cites as [6] and [7] and adopts selectively:</p>
+
+<dl class="deps">
+  <dt><a href="https://arxiv.org/abs/2512.16093">TurboDiffusion</a> [6]</dt>
+  <dd>A <b>model-level</b> accelerator for video diffusion, reporting 100–200× end-to-end speedup: step
+  distillation (rCM) cuts ~50 denoising steps to a handful, on top of low-bit attention (SageAttention),
+  Sparse-Linear Attention, and W8A8 quantization on INT8 tensor cores. Vidu S2 takes the kernels but applies
+  them <em>layer-wise</em> — aggressive approximation on tolerant layers, accurate attention on sensitive
+  ones — plus per-block W8A8 GEMM, kernel fusion and CUDA Graphs.</dd>
+
+  <dt><a href="https://arxiv.org/abs/2606.19271">TurboServe</a> [7]</dt>
+  <dd>The <b>serving-level</b> counterpart. Streaming sessions are long-lived and stateful — the KV cache must
+  survive idle periods — so it frames serving as online scheduling: migration-aware placement across GPUs plus
+  load-driven autoscaling, reporting 37.5% lower worst-case per-chunk latency and 37.2% lower GPU cost. Vidu S2
+  borrows the scheduling idea at a smaller scale, sharing one GPU timeline across the VAE encoder, backbone,
+  Refiner and decoder instead of pinning GPUs per module.</dd>
+</dl>
+
+<p style="margin-bottom:.4rem">In short: TurboDiffusion makes one stream fast on one GPU, TurboServe decides
+which GPU each session lives on, and Vidu S2 is the model that runs on top of both.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<p>I got stuck on one sentence in §2.2 — that Self Forcing feeds self-generated history back <em>clean</em>
+and <em>detached</em>. Untangling it needed two things I had been conflating: what a computation graph is,
+and what the KV cache actually holds.</p>
+
+<div class="legend">
+  <span><i class="sw" style="background:#F79A38"></i> noisy (noise tau)</span>
+  <span><i class="sw" style="background:#3DBD79"></i> gradient flows</span>
+  <span><i class="sw" style="background:#b0b6bd"></i> detached</span>
+  <span><i class="sw" style="background:#5b6570"></i> real data</span>
+</div>
+
+<h3>Notation</h3>
+<table>
+<tr><th>Symbol</th><th>Meaning</th></tr>
+<tr><td><code>x_i</code></td><td>chunk <code>i</code>. A stream is built chunk by chunk</td></tr>
+<tr><td><code>x̂_0</code></td><td>the model's guess at the <b>clean</b> chunk. Hat = predicted, 0 = noise level zero</td></tr>
+<tr><td><code>t</code></td><td>noise level of the chunk being denoised now. 1000 = static, 0 = clean</td></tr>
+<tr><td><code>tau</code></td><td>noise level of the <b>history in the cache</b>. A different number from <code>t</code> — this is the whole of Leak 1</td></tr>
+<tr><td><code>tau_B</code>, <code>tau_R</code></td><td>cache noise for the Backbone vs the Refiner, with <code>tau_B &gt; tau_R</code></td></tr>
+<tr><td><code>M</code>, <code>W</code>, <code>T</code></td><td>rollout length, replay window length, denoising steps per chunk</td></tr>
+<tr><td>detach</td><td>"keep the number, forget how you computed it"</td></tr>
+</table>
+
+<!-- ---------------------------------------------------------- -->
+<h3>1. What a computation graph is, and what detach costs</h3>
+
+<p>When you write <code>y = theta * 3</code>, the framework does not only store <code>y</code>. It also writes
+a note: <em>"y came from multiplying theta by 3."</em> Stack a million notes and you get the <b>graph</b>.
+Backprop is walking it backwards to ask "if I nudge theta, how much does the loss move?"</p>
+
+<p>Two facts that pull against each other: the graph <b>costs memory</b>, because every intermediate value must
+stay alive; and <b>no graph means no learning through it</b>. <code>detach()</code> is the scissors — keep the
+number, drop the notes. So "no gradient" and "no graph" are the same event seen from two sides. Cutting the
+graph is <em>how</em> you stop the gradient.</p>
+
+<p>Three chunks, each taking its own noise input plus the previous chunk's output, one weight
+<code>theta = 0.5</code>, noise input 2 each time:</p>
+
+<pre class="diag">y1 = 0.5 * 2       = 1.0
+y2 = 0.5 * (2+1.0) = 1.5
+y3 = 0.5 * (2+1.5) = <b>1.75</b>
+
+target = 1.0   loss = (1.75-1.0)^2 = 0.5625   dL/dy3 = 1.5</pre>
+
+<div class="widget">
+  <div class="btnrow">
+    <button id="bKeep" class="on">Keep the graph</button>
+    <button id="bCut">Detach the history (what Self Forcing does)</button>
+  </div>
+  <div class="wgrid">
+    <div class="wbox">
+      <h4>Gradient on theta</h4>
+      <div class="big g" id="gval">8.25</div>
+      <ul id="gterms">
+        <li class="hi">chunk 3 itself&nbsp; 1.5 x 3.5 = 5.25</li>
+        <li class="hi">through chunk 2&nbsp; 1.5 x 1.5 = 2.25</li>
+        <li class="hi">through chunk 1&nbsp; 1.5 x 0.5 = 0.75</li>
+      </ul>
+    </div>
+    <div class="wbox">
+      <h4>What the model learns</h4>
+      <p id="lesson" style="margin:0; font-size:.95rem">“Chunk 3 came out too high — <b>and</b> chunks 1 and 2 set it up badly. Fix all three.”</p>
+    </div>
+  </div>
+  <p class="wcap" id="wcap">Full gradient = 8.25. Every chunk that contributed to the mistake gets corrected.</p>
+</div>
+
+<div class="callout"><b>The point is not that 5.25 &lt; 8.25.</b> Detaching deletes one <em>specific</em> piece
+of information — "the problem started earlier". The model can only ever learn "fix the last chunk", never
+"stop setting yourself up to fail". Over a 5-minute stream, that is the missing piece you wanted.</div>
+
+<p>Worth separating the two truncations in Self Forcing's Algorithm 1, because only one of them is at issue.
+The <b>stochastic</b> one — keep gradient at a single randomly drawn denoising step <code>s</code> per chunk —
+is a pure memory measure and SRF keeps the same spirit. The <b>second</b> one is the KV detach, stated
+outright: "<em>we additionally detach the gradients of the previous frames from the current frame during
+training by restricting gradient flow into KV cache embeddings.</em>" That is the one SRF reworks. Its effect
+is that the backward pass sees seven islands with no arrows between them.</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>2. The output is clean. The cache is a separate object.</h3>
+
+<p>This is where I went wrong first. The video handed to the user is always fully denoised — never in
+question. But the KV cache is not the video; it is the internal attention memory, and the two can sit at
+different noise levels. Count the forward passes for one chunk with a 4-step denoiser:</p>
+
+<pre class="diag">pass 1:  x_t4 (pure noise) --model--&gt; x̂_0 --renoise--&gt; x_t3
+pass 2:  x_t3             --model--&gt; x̂_0 --renoise--&gt; x_t2
+pass 3:  x_t2             --model--&gt; x̂_0 --renoise--&gt; x_t1
+pass 4:  x_t1             --model--&gt; x̂_0   <b>&lt;-- clean, shown to user</b></pre>
+
+<p><b>Not one of those four passes had clean input.</b> Pass 4's <em>input</em> was <code>x_t1</code>, still
+slightly noisy; the clean <code>x̂_0</code> is its <em>output</em>. So a clean cache needs a <b>fifth pass</b> —
+feed <code>x̂_0</code> back in at timestep 0 purely to harvest its keys and values. Self Forcing does exactly
+that, in a call separate from the denoising call (Algorithm 1 line 13, Algorithm 2 line 9):</p>
+
+<pre class="diag">line 6:   x̂_0  &lt;- G(x_tj ; tj, KV)      # denoising loop
+line 9:   kv_i &lt;- G_KV(x̂_0 ; <b>0</b>, KV)     # separate call, timestep 0</pre>
+
+<p>A 25% tax on a 4-step model. Vidu runs at 25–42 FPS and declines to pay it: keep pass 4's KV, live with
+<code>tau &gt; 0</code>. Only <b>one</b> entry per chunk is stored, not four — the four passes are successive
+refinements of the same content, and keeping all of them would quadruple both cache memory and attention
+cost, and attention is already the stated bottleneck.</p>
+
+<p>Because the kept KV comes from the <em>lowest nonzero</em> noise level, the cache is "almost clean". That
+makes the leak subtle rather than dramatic — but it is systematic and always in the same direction, and a
+5-minute stream is hundreds of chunks. Small consistent bias plus compounding is how drift happens.</p>
+
+<div class="callout warn"><b>The usual case against noisy caches does not apply here — it is not the same
+"noisy".</b> The standard objection targets a cache whose entries are <em>provisional</em>: a frame sits at
+noise 500 and keeps getting cleaner as the window moves. Vidu's chunk is <b>final</b> — fully denoised, shown,
+never revisited; only the cached K/V happen to come from a pass whose input was slightly noisy. So:
+<ol style="margin:.5rem 0 0">
+  <li><b>Entry must be final</b> — it is. Never recomputed, so no O(L²) rebuild.</li>
+  <li><b>Cache grows a timestep dimension</b> — it does not. One entry per chunk, at one tau.</li>
+  <li><b>Latency</b> — fine. The clean x̂<sub>0</sub> is displayed immediately.</li>
+  <li><b>Temporal consistency</b> — <em>this one lands.</em> Blurred detail in the cache cannot be copied
+  forward, so fine texture drifts.</li>
+</ol>
+And objection 4 is what Vidu's TwinCache answers: the backbone reads a <b>high</b>-noise cache
+<code>tau_B</code> to carry coarse motion undisturbed by high-frequency artifacts, while the Refiner reads a
+<b>low</b>-noise high-resolution cache <code>tau_R</code> that, in the paper's words, "preserves local
+appearance and identity cues". Motion and detail get separate caches. A clean cache would force
+<code>tau_B = 0</code> and collapse that split — so for Vidu the noisy cache is load-bearing architecture,
+not only a shortcut. <em>(Mapping the objection onto TwinCache is mine; the paper does not draw the line.)</em>
+</div>
+
+<!-- ---------------------------------------------------------- -->
+<h3>3. Self-Replay Forcing — roll out without the graph, replay with it</h3>
+
+<p>Four recipes, one question: <b>what do you show the model as history during training?</b></p>
+
+<p><b>(a) Teacher Forcing</b> — real dataset frames. At test time there is no real history, only the model's
+own worse output, which it has never practised recovering from. That is exposure bias.</p>
+<div class="chunkrow"><span class="rowlab">history</span>
+  <div class="ch real">real 1</div><div class="ch real">real 2</div><div class="ch real">real 3</div>
+  <div class="ch noisy">chunk 4<small>denoise</small></div></div>
+
+<p><b>(b) Diffusion Forcing</b> — real frames plus random noise. Levels now match a noisy cache, but Gaussian
+static is not what model error looks like. Drift is a face slowly changing; that is nothing like static.</p>
+<div class="chunkrow"><span class="rowlab">history</span>
+  <div class="ch noisy">real 1<small>+noise</small></div><div class="ch noisy">real 2<small>+noise</small></div>
+  <div class="ch noisy">real 3<small>+noise</small></div><div class="ch noisy">chunk 4<small>denoise</small></div></div>
+
+<p><b>(c) Self Forcing</b> — the model's own output. Right idea, and it works. But clean (Leak 1) and
+detached (Leak 2).</p>
+<div class="chunkrow"><span class="rowlab">history</span>
+  <div class="ch dead">self 1<small>clean, cut</small></div><div class="ch dead">self 2<small>clean, cut</small></div>
+  <div class="ch dead">self 3<small>clean, cut</small></div><div class="ch grad">chunk 4<small>grad ON</small></div></div>
+
+<p><b>(d) Self-Replay Forcing</b> — self-generated <em>and</em> noisy <em>and</em> connected.</p>
+<div class="chunkrow"><span class="rowlab">history</span>
+  <div class="ch both">self 1</div><div class="ch both">self 2</div>
+  <div class="ch both">self 3</div><div class="ch both">chunk 4</div></div>
+
+<p>My first worry was that a graph over all history must be ruinous. It would be — a rollout is
+<code>M x T</code> forward passes, and at M=100, T=4 that is 400 passes of activations. SRF's answer is that
+the graph covers a <b>window</b>, not the stream. The paper samples a segment to replay <em>"while the
+external history inherited from the detached rollout remains fixed."</em> Three zones:</p>
+
+<pre class="diag">rollout:  [1][2][3] ... [94][95] | [96][97][98][99][100]
+           detached, frozen context    <b>replay window, graph ON</b></pre>
+
+<p><b>Phase 1 — rollout, graph off.</b> Generate exactly as at inference, then detach the chunks and their KV
+caches. You lose nothing: you only wanted the pictures. "No graph" is the feature here, not a limitation.</p>
+<div class="chunkrow"><span class="rowlab">rollout</span>
+  <div class="ch dead">self 1</div><div class="ch dead">self 2</div><div class="ch dead">self 3</div>
+  <div class="ch dead">self 4</div><div class="ch dead">self 5</div><div class="ch dead">self 6</div></div>
+
+<p><b>Phase 2 — re-noise.</b> Fresh noise on every chunk, each at its own independently sampled level,
+Diffusion Forcing style. History is now self-made <em>and</em> noisy. <b>Leak 1 closed.</b></p>
+<div class="chunkrow"><span class="rowlab">re-noised</span>
+  <div class="ch noisy">self 1<small>t=340</small></div><div class="ch noisy">self 2<small>t=120</small></div>
+  <div class="ch noisy">self 3<small>t=780</small></div><div class="ch noisy">self 4<small>t=200</small></div>
+  <div class="ch noisy">self 5<small>t=560</small></div><div class="ch noisy">self 6<small>t=410</small></div></div>
+
+<p><b>Phase 3 — replay, graph on and connected.</b> One causal pass over the window. Inside it, chunk 6
+attends to K/V for chunks 3–5 <b>computed in this same pass, from theta</b>, so the derivative chain runs
+straight through them. DMD loss on every chunk in the segment. <b>Leak 2 closed</b> — across the window,
+which is where compounding error lives.</p>
+<div class="chunkrow"><span class="rowlab">replay</span>
+  <div class="ch dead">self 1<small>frozen</small></div><div class="ch dead">self 2<small>frozen</small></div>
+  <div class="ch grad">self 3<small>grad ON</small></div><div class="ch grad">self 4<small>grad ON</small></div>
+  <div class="ch grad">self 5<small>grad ON</small></div><div class="ch grad">self 6<small>grad ON</small></div></div>
+
+<table>
+  <tr><th></th><th>Naive "graph the rollout"</th><th>Self Forcing</th><th>Self-Replay Forcing</th></tr>
+  <tr><td><b>Passes in the graph</b></td><td class="lose">M x T ≈ 400</td><td>M — one per chunk, at step <code>s</code></td><td class="win"><b>W</b> chunks in one pass ≈ 6</td></tr>
+  <tr><td><b>Memory</b></td><td class="lose">out of memory</td><td>scales with stream length M</td><td class="win">scales with <b>W</b>, which you pick</td></tr>
+  <tr><td><b>Graph shape</b></td><td>one chain</td><td class="lose">M <b>disconnected</b> islands</td><td class="win">one <b>connected</b> chain of length W</td></tr>
+  <tr><td><b>Cache noise</b></td><td>—</td><td><code>tau = 0</code>, needs the fifth pass</td><td><code>tau &gt; 0</code>, free</td></tr>
+</table>
+
+<p>So memory is a dial you turn, decoupled from stream length. The loss is
+<code>L_SRF = L_DMD(...) + L_perc(...)</code>, where the perceptual term (carried from Vidu S1) exists to stop
+mode collapse — DMD alone will happily settle on the same safe average face every time, because that scores
+well and risks nothing. "On-policy" just means the trajectory came from the <em>current</em> student under its
+<em>real</em> inference procedure.</p>
+
+<p>The honest extra cost: SRF's backward now runs through cross-chunk attention inside the window, which the
+disconnected version skips entirely. That is real compute, roughly proportional to W, and the paper gives no
+number for it.</p>
+
+<p>Once you see the pattern — detached rollout, gradient-enabled replay — it appears three times: SRF itself
+with a DMD loss, Streaming NFT with a reward loss, and S2-Editing, which the paper says "follows the same
+hybrid forcing and Self-Replay Forcing framework".</p>
+
+<!-- ---------------------------------------------------------- -->
+<h3>4. What I'd want before believing it</h3>
+<div class="callout warn">
+<ol>
+  <li><b>No SRF ablation.</b> This is the headline contribution and there is no table isolating it against
+  plain Self Forcing. Both leaks are real and verifiable in Algorithm 1 — but "real problem" and "fixing it
+  measurably helps" are different claims, and only the first is established.</li>
+  <li><b>Leak 1 is partly Vidu's own doing.</b> Self Forcing is internally consistent: it trains clean and
+  runs clean, having budgeted for that fifth pass deliberately. It only becomes a mismatch because Vidu chose
+  a noisy cache for speed and for the Refiner split.</li>
+  <li><b>Leak 2 was a known trade-off, not an oversight</b> — Self Forcing says outright that it detaches to
+  bound memory. SRF found a wiring that avoids the price, which is good engineering on a stated trade-off,
+  not a discovered bug.</li>
+  <li><b>W is never specified</b>, nor how <code>tau</code> is sampled per chunk, nor whether it matches the
+  inference cache level, nor the M:W ratio. You could not reimplement this from the paper. My three-zone
+  diagram is read between the lines of one sentence, not stated.</li>
+  <li><b>No latency table anywhere</b>, in a paper whose whole claim is real-time. "25~42 FPS" appears once,
+  in the intro, GPU unnamed — and the paper itself writes that "product-page claims about frame rate or
+  latency do not replace measured results".</li>
+  <li><b>The human study is tiny.</b> Every percentage in the avatar GSB figure is a multiple of 1/7, so
+  "100% preferred" means 7 out of 7.</li>
+  <li><b>Spatial video is a demo, not a result</b> — no benchmark, no metric, no baseline, and the paper
+  says so itself.</li>
+</ol>
+</div>
+
+</section>
+
+<script>
+const KEEP = { val:"8.25", cls:"big g", strike:false,
+  cap:"Full gradient = 8.25. Every chunk that contributed to the mistake gets corrected.",
+  lesson:"“Chunk 3 came out too high — <b>and</b> chunks 1 and 2 set it up badly. Fix all three.”" };
+const CUT  = { val:"5.25", cls:"big d", strike:true,
+  cap:"Detached = 5.25. The 2.25 and 0.75 terms are gone — 36% of the signal, and exactly the part about earlier chunks.",
+  lesson:"“Chunk 3 came out too high. Fix chunk 3.”<br><br>It has <b>no idea</b> the trouble started two chunks ago." };
+
+const gval=document.getElementById('gval'), wcap=document.getElementById('wcap'),
+      les=document.getElementById('lesson'), terms=document.getElementById('gterms').children,
+      bK=document.getElementById('bKeep'), bC=document.getElementById('bCut');
+
+function render(s,on,off){
+  gval.textContent=s.val; gval.className=s.cls;
+  wcap.textContent=s.cap; les.innerHTML=s.lesson;
+  terms[1].className=s.strike?'gone':'hi';
+  terms[2].className=s.strike?'gone':'hi';
+  on.classList.add('on'); off.classList.remove('on');
+}
+bK.onclick=()=>render(KEEP,bK,bC);
+bC.onclick=()=>render(CUT,bC,bK);
+</script>
+</body>
+</html>
