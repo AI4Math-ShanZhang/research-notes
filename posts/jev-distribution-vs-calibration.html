@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jev vs the AR Model — Everyone Predicts a Distribution — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .analogy{ background:#fff; border:1px solid #f0d9b5; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .ok  { color:#2EAF8E; font-weight:600; }
+  .bad { color:#F06B7F; font-weight:600; }
+  .num { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Jev vs the AR Model — Everyone Predicts a Distribution</h1>
+<p class="paper-meta">Discussion note. Subject: <em>Jev</em>, TypeSafe AI's non-autoregressive "System One" model
+(Sept 2026) —
+<a href="https://www.marktechpost.com/2026/09/19/typesafe-ai-releases-jev/">announcement coverage</a>,
+<a href="https://explainx.ai/blog/how-does-jev-work-rlcd-system-one-model-explained-2026">RLCD explainer</a>,
+<a href="https://medium.com/@mbonsign/what-jev-probably-is-and-why-you-already-have-one-8bff04081b80">the skeptical read</a>.
+No paper, no architecture disclosure, no model size.</p>
+
+<!-- ===== Conclusion ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ Conclusion</h2>
+<ul>
+  <li><b>The pitch is wrong as stated.</b> "LLMs predict tokens, we predict distributions" is false. An AR LLM
+  trained with cross-entropy produces a full softmax distribution over the vocabulary at <em>every</em> step.
+  It is readable from the logprobs without decoding anything.</li>
+  <li><b>The real difference is not the distribution, it is what the number means.</b> Cross-entropy calibrates
+  to <em>text frequency</em>, not to <em>correctness</em> — and RLHF then degrades calibration further
+  (GPT-4 tech report: MMLU ECE ≈ 0.007 pre-RLHF → ≈ 0.074 post-RLHF).</li>
+  <li><b>Calibration ≠ accuracy.</b> Two models can score identically and one number can still be useless.
+  Accuracy reads one column; calibration reads the relationship between two.</li>
+  <li><b>Not overfitting.</b> The post-RLHF model generalizes fine and more data makes confidence <em>worse</em>.
+  This is Goodhart, not memorization.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 The claim, and why it does not hold</h2>
+
+<p>Jev returns a typed decision — a choice, a score, or a probability — instead of text. It runs prefill only
+and never enters the decode loop, which is where the speed claims come from (70–500 ms, 20–200× faster,
+output tokens free because there are none). The framing around it is that LLMs predict tokens whereas Jev
+predicts distributions.</p>
+
+<p>That framing does not survive contact with how an AR model actually works:</p>
+
+<div class="mermaid">
+flowchart LR
+  A[context] --> B[h_final]
+  B -->|W_unembed| C[logits]
+  C -->|softmax| D["distribution over ~100k tokens"]
+  D -->|sample ONE| E[token]
+</div>
+
+<p>The distribution at step D is what cross-entropy training optimizes. It exists, it is complete, and several
+APIs will hand you the top-<em>k</em> logprobs directly. Stopping at D instead of E is not a new capability —
+it is declining to call <code>sample()</code>. That is the same move the
+<a href="https://arxiv.org/abs/2510.01237">confidence-routing paper</a> in this category makes, and the same
+move zero-shot label scoring has made for years.</p>
+
+<h3>So what <em>is</em> different? Three candidates</h3>
+
+<table>
+  <tr><th>Candidate</th><th>Real?</th><th>Depth</th></tr>
+  <tr><td>The chat API returns text, not a distribution</td><td>yes</td><td>packaging — ask for logprobs</td></tr>
+  <tr><td>A vocabulary is not your label set</td><td>yes</td><td>tokenization plumbing</td></tr>
+  <tr><td><b>The number is not calibrated to correctness</b></td><td><b>yes</b></td><td><b>the actual argument</b></td></tr>
+</table>
+
+<h3>Candidate 2, with numbers</h3>
+<p>Ask a yes/no question, read the first-token distribution:</p>
+<pre class="num">"Yes"   0.55      "No"    0.20
+" Yes"  0.12      "Sure"  0.03
+"yes"   0.04      "It"    0.02</pre>
+<p>Score only <code>Yes</code> vs <code>No</code> → 0.55 / (0.55 + 0.20) = <b>0.733</b>.<br>
+Count every yes-variant → 0.71 / (0.71 + 0.20) = <b>0.780</b>.</p>
+<p>Two answers to the same question, depending on which tokens you decided to count. One concept's probability
+mass is smeared across several spellings, and more leaks into words that are neither label. A softmax over a
+vocabulary is genuinely not a distribution over your four options. Real problem — but plumbing, not principle.</p>
+
+<h3>Candidate 3 — the one that matters</h3>
+<div class="callout">Cross-entropy on tokens trains <b>p(next token | context)</b> — how often that token follows
+this context <em>in text</em>. It does not train <b>p(my answer is correct)</b>. Different targets.</div>
+
+<p>If enough of the corpus says "the capital of Australia is Sydney," the model puts high mass on Sydney. The
+distribution is perfectly calibrated to the corpus and wrong about the world. Cross-entropy did its job; the
+job was the wrong job.</p>
+
+<p>The defensible version of Jev's pitch, then, is not "LLMs don't do distributions." It is: <em>an LLM's
+distribution is over tokens, calibrated to text frequency, then damaged by RLHF — we train directly on decision
+correctness, so the number means what you think it means.</em> That is a legitimate claim. The marketing version
+is not.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>What calibration actually means — the two-column view</h3>
+<p>The thing that kept not landing: calibration is not about being right. A model right only 30% of the time is
+<span class="ok">perfectly calibrated</span> if it says 30%. A forecaster who says "30% rain" and gets rain on
+30% of those days is doing a perfect job.</p>
+
+<div class="analogy"><b>The friend test.</b> A friend says "I'll be there in 10 minutes."
+Friend A arrives in 10 — the number is trustworthy. Friend B always takes 30 — you learn to ignore the number
+and add 20. Friend B is not lying, their number just does not match reality. Now Friend B starts saying
+<em>"5 minutes!"</em> while still taking 30. More confident, <span class="bad">worse</span>.</div>
+
+<p>The model emits two things per question: an <b>answer</b> (right or wrong) and a <b>number</b>. Accuracy reads
+the answer column only. Calibration reads the relationship between the two columns. Same ten questions, same
+answers, only the number column differs:</p>
+
+<table>
+  <tr><th>Q</th><th>Right?</th><th>Honest model says</th><th>Overconfident model says</th></tr>
+  <tr><td>1 Paris</td>  <td class="ok">✓</td><td class="num">0.95</td><td class="num">0.95</td></tr>
+  <tr><td>2 Tokyo</td>  <td class="ok">✓</td><td class="num">0.95</td><td class="num">0.95</td></tr>
+  <tr><td>3 Rome</td>   <td class="ok">✓</td><td class="num">0.90</td><td class="num">0.94</td></tr>
+  <tr><td>4 Madrid</td> <td class="ok">✓</td><td class="num">0.88</td><td class="num">0.93</td></tr>
+  <tr><td>5 Lisbon</td> <td class="ok">✓</td><td class="num">0.85</td><td class="num">0.93</td></tr>
+  <tr><td>6 Oslo</td>   <td class="ok">✓</td><td class="num">0.80</td><td class="num">0.92</td></tr>
+  <tr><td>7 Bern</td>   <td class="ok">✓</td><td class="num">0.75</td><td class="num">0.91</td></tr>
+  <tr><td>8 Sydney</td> <td class="bad">✗</td><td class="num"><b>0.40</b></td><td class="num"><b>0.93</b></td></tr>
+  <tr><td>9 Almaty</td> <td class="bad">✗</td><td class="num"><b>0.30</b></td><td class="num"><b>0.91</b></td></tr>
+  <tr><td>10 Abidjan</td><td class="bad">✗</td><td class="num"><b>0.25</b></td><td class="num"><b>0.90</b></td></tr>
+  <tr><td><b>Accuracy</b></td><td colspan="3"><b>7/10 = 70% — identical, because the answers never changed</b></td></tr>
+</table>
+
+<div class="callout"><b>The test:</b> cover the Right? column and look only at the number. Can you guess whether
+the answer is right? Honest model — yes (0.30 → go check it). Overconfident model — no, everything says ~0.9.
+RLHF did not destroy the answers. It destroyed the <em>sorting power of the number</em>.</div>
+
+<p>Practical version: you have 10 answers and time to check 3. Honest model — check the three lowest
+(0.25, 0.30, 0.40) and you catch <b>all three errors</b>. Overconfident model — the three lowest are
+0.90, 0.91, 0.91, which lands on Abidjan ✗, Bern ✓, Almaty ✗: <b>two of three</b>, one check wasted.</p>
+
+<h3>Why RLHF breaks it — and why perfect labels would not save you</h3>
+<p>The easy story is label noise: raters cannot verify who won the 1997 Nobel Prize in Physics, so they pick
+the confident-sounding answer. True, and it does push in the bad direction. But it is the shallow reason.</p>
+
+<p>Assume <em>perfect</em> raters who know every fact and never err. One question, model's honest belief:</p>
+<pre class="num">Paris 0.60   Lyon 0.25   Marseille 0.15</pre>
+<p>Truth is Paris, so the perfect rater picks the Paris answer — correct, no noise. RLHF nudges Paris up.
+Repeat thousands of times:</p>
+<pre class="num">Paris 0.98   Lyon 0.01   Marseille 0.01</pre>
+<p>Still right on this question. But it was 60% sure and now claims 98%. Nothing was noisy; the pushing itself
+did it. Across 30 questions the model still gets 21 right — knowledge unchanged — while stated confidence
+climbs from an honest spread to a flat 0.9.</p>
+
+<div class="warn"><b>The deeper reason:</b> a preference comparison answers "which answer is better?" It never
+says "your 80% should have been 60%." The reward signal contains <em>no information about calibration at all</em>,
+and you cannot learn something the reward never mentions. Perfect grading of the wrong quantity still teaches
+nothing about the right one.</div>
+
+<table>
+  <tr><th></th><th>What it optimizes</th><th>Effect on the spread</th></tr>
+  <tr><td>Pretraining (CE)</td><td>match the full distribution of text</td><td><b>keeps</b> it — mass-covering</td></tr>
+  <tr><td>RLHF</td><td>make the preferred answer more likely</td><td><b>collapses</b> it — mode-seeking</td></tr>
+</table>
+
+<h3>This is not overfitting</h3>
+<p>The diagnostic: overfitting is cured by more data. Here more RLHF makes confidence <em>worse</em>. And the
+post-RLHF model generalizes — on fresh unseen questions humans really do prefer its answers. That is successful
+learning of a transferable skill; it is just a skill nobody meant to trade calibration for. Goodhart's law:
+when a measure becomes a target it stops being a good measure.</p>
+
+<p>Worth separating from a real overfitting problem that <em>does</em> live inside RLHF —
+<b>reward-model over-optimization</b>, where RM score keeps climbing while true human preference falls, which is
+why the KL penalty gets capped. That one is genuine overfitting, and fixing it completely would still leave
+calibration broken.</p>
+
+<h3>How you would actually fix it</h3>
+<p>Stop asking humans, score the number against the outcome. Squared error, outcome 1 for right and 0 for wrong:</p>
+<table>
+  <tr><th>Said</th><th>Outcome</th><th>Loss</th></tr>
+  <tr><td class="num">0.80</td><td class="ok">right</td><td class="num">(0.8−1)² = 0.04</td></tr>
+  <tr><td class="num">0.80</td><td class="bad">wrong</td><td class="num">(0.8−0)² = 0.64</td></tr>
+  <tr><td class="num">0.99</td><td class="ok">right</td><td class="num">0.0001 — big prize</td></tr>
+  <tr><td class="num">0.99</td><td class="bad">wrong</td><td class="num">0.98 — big punishment</td></tr>
+</table>
+
+<p>The property that makes this work: suppose the model is truly right 70% of the time on some class of question.
+What should it report?</p>
+<table>
+  <tr><th>Strategy</th><th>Average loss</th></tr>
+  <tr><td>always say 0.95 (bluff high)</td><td class="num">0.7×0.05² + 0.3×0.95² = 0.2725</td></tr>
+  <tr><td>always say 0.50 (play safe)</td><td class="num">0.7×0.5² + 0.3×0.5² = 0.2500</td></tr>
+  <tr><td><b>always say 0.70 (the truth)</b></td><td class="num"><b>0.7×0.3² + 0.3×0.7² = 0.2100</b> ← lowest</td></tr>
+</table>
+<p>Telling the truth wins. Bluffing high gets crushed by the 30% of times you are wrong; playing safe wastes the
+70% you are right. There is no way to game it — the only route to lower loss is reporting your real belief. That
+is what a <em>proper scoring rule</em> means, and it is the exact opposite of RLHF, where bluffing pays.</p>
+
+<h3>The honest part</h3>
+<ul>
+  <li><b>RLCD is undisclosed.</b> No paper, no architecture, no model size. The scoring-rule mechanism above is
+  the standard way calibration training works and the only way their claim could hold — it is not a quote from
+  them. Treat the calibration claim as unverified.</li>
+  <li><b>The trick itself is old.</b> Score each label, normalize, read a distribution over options invented
+  seconds ago. That is zero-shot classification, and you can do it today with any open model by grabbing the
+  step-1 logits and not decoding. Hence "why you already have one."</li>
+  <li><b>Benchmarks are self-reported</b>, on workflows TypeSafe's own team wrote, with reference answers
+  averaged from competing models.</li>
+  <li><b>"Cannot hallucinate" means cannot emit an invalid schema.</b> It can still classify wrong — the same
+  limit as a confidence probe, which catches "I don't know" but not "I'm sure and I'm wrong."</li>
+</ul>
+
+<div class="callout"><b>Where it connects:</b> the
+<a href="https://arxiv.org/abs/2510.01237">confidence-routing paper</a> runs the identical prefill-only trick,
+but asks a <em>meta-level</em> question ("will I hallucinate?") rather than an object-level one ("is this
+fraudulent?"). It also thresholds at 0.75 / 0.55 / 0.35 while never measuring calibration once — which, given
+everything above, is the one thing those thresholds depend on.</div>
+</section>
+
+</body>
+</html>

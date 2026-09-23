@@ -489,6 +489,14 @@ const BLOG = {
       blurb: "Models that listen and act while they are still responding — full-duplex interaction, interruption handling, latency, and how to measure them.",
       notes: [
         {
+          title:   "Jev vs the AR Model — Everyone Predicts a Distribution",
+          file:    "posts/jev-distribution-vs-calibration.html",
+          date:    "2026-09-23",
+          paper:   "Discussion note · Jev, TypeSafe AI (Sept 2026) — no paper, no architecture disclosure",
+          tags:    ["calibration", "RLHF", "prefill-only", "non-autoregressive", "proper scoring rule", "Goodhart", "logprobs"],
+          summary: "\"LLMs predict tokens, we predict distributions\" is false — an AR model trained with cross-entropy produces a full softmax over the vocabulary at every step, readable from the logprobs, and stopping before sample() is declining to call a function rather than a new capability. Three candidates for a real difference: the chat API hides it (packaging), a vocabulary is not your label set (reading Yes/No alone gives 0.733 where counting every yes-variant gives 0.780 — plumbing), and the one that holds — cross-entropy calibrates to <em>text frequency</em>, not correctness, and RLHF then degrades it further (GPT-4 report: MMLU ECE 0.007 → 0.074). Works through what calibration actually is, since it kept not landing: a model right 30% of the time is perfectly calibrated if it says 30%, and the ten-question table shows two models with identical 7/10 accuracy where only one lets you find the three errors — accuracy reads the answer column, calibration reads the relationship between two columns, so RLHF destroyed the sorting power of the number rather than the answers. Perfect raters would not save it: nudging an honest 0.60 toward 0.98 needs no label noise, and a preference comparison carries no information about whether a number was well-chosen. Not overfitting either — the post-RLHF model generalizes and more data makes it worse, which is Goodhart, kept separate from reward-model over-optimization which is genuine overfitting. Ends on the proper scoring rule that fixes it (truthful 0.70 scores 0.2100 against 0.2725 for bluffing and 0.2500 for playing safe) and on what stays unverified: RLCD is undisclosed, the trick is zero-shot label scoring, and \"cannot hallucinate\" only means cannot emit an invalid schema.",
+        },
+        {
           title:   "Self-Replay Forcing — Rolling Out on Your Own Frames",
           file:    "posts/vidu-s2-self-replay-forcing.html",
           date:    "2026-09-16",
