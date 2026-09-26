@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMWM — Feature Collapse and Low-Dimensional Latents — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>SMWM — Feature Collapse and Low-Dimensional Latents</h1>
+<p class="paper-meta">Paper: <em>Sensorimotor World Models: Perception for Action via Inverse Dynamics</em> —
+Petr Ivashkov, Randall Balestriero &amp; Bernhard Schölkopf (MPI-IS Tübingen · Brown · ELLIS · ETH), June 2026,
+<a href="https://arxiv.org/abs/2606.20104">arXiv:2606.20104</a>.
+Read together with <a href="https://arxiv.org/abs/2609.23881">MotionJEPA (arXiv:2609.23881)</a>, which uses SMWM as a baseline.
+This note focuses on two questions: what "collapse" means and why it happens, and whether the encoder's
+embedding must be low-dimensional.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>Notation</h3>
+<table>
+  <tr><th>Symbol</th><th>Meaning</th></tr>
+  <tr><td><code>o_t</code></td><td>image at time t</td></tr>
+  <tr><td><code>a_t</code></td><td>action taken between <code>o_t</code> and <code>o_(t+1)</code></td></tr>
+  <tr><td><code>f</code> (encoder)</td><td><code>z_t = f(o_t)</code></td></tr>
+  <tr><td><code>g</code> (forward model)</td><td><code>ẑ_(t+1) = g(z_t, a_t)</code> — guess the next latent</td></tr>
+  <tr><td><code>h</code> (inverse model)</td><td><code>â_t = h(z_t, z_(t+1))</code> — guess the action from two latents</td></tr>
+  <tr><td><code>λ</code></td><td>weight of the inverse loss (the only new hyperparameter)</td></tr>
+</table>
+
+<h3>The method in one line</h3>
+<pre class="calc">L = || ẑ_(t+1) − z_(t+1) ||²   +   λ · || â_t − a_t ||²
+       forward loss                   inverse loss (anti-collapse)</pre>
+<p>Both losses send gradients into the encoder. There is no SIGReg, no EMA target, no frozen encoder.
+The only thing added to LeWM's architecture is a 2-layer MLP (width 256) for <code>h</code>.</p>
+
+<div class="callout"><b>Why the inverse loss blocks collapse.</b> If every <code>z</code> were the same,
+<code>h</code> would always get the same input and could only output the average action. Example: actions
+Δx uniform in [−1, 1] → average 0 → best collapsed error ≈ 0.33. To beat that, <code>(z_t, z_(t+1))</code> must
+contain real information about the move.</div>
+
+<h3>Dot world (Figs. 2–4)</h3>
+<ul>
+  <li>64×64 white image, one colored disc (radius 2 px), action = (Δx, Δy) in whole pixels from −16 to +16.</li>
+  <li>Small CNN encoder, 64-d latent with tanh; <code>g</code>, <code>h</code> = 2-layer MLPs; 250k transitions, λ = 10.</li>
+  <li><b>Fig. 2:</b> encode a uniform grid of dot positions, run PCA. Only 2 of 64 directions carry variance, and
+      (PC1, PC2) gives back a near-square grid (only rotated).</li>
+  <li><b>Fig. 3:</b> encode <code>o_1</code>, roll <code>g</code> forward 5 steps with the real actions, and compare with the
+      encoded real frames. They match, and actions act as fixed shifts: <code>g(z, a) ≈ z + ρ(a)</code>.</li>
+  <li><b>Fig. 4:</b> four separately trained worlds. The number of tall PCA bars equals the controllable dimension:
+      Independent 4, Coupled 2, <b>Distractor 2</b> (the randomly moving dot is ignored), Combined 6.</li>
+</ul>
+
+<h3>Planning (Fig. 5) — ViT-Tiny, 192-d latent, CEM + MPC, 50-step budget, goal 25 steps away</h3>
+<table>
+  <tr><th>Task</th><th>SMWM</th><th>LeWM (SIGReg)</th><th>Forward-only</th><th>Random</th></tr>
+  <tr><td>TwoRoom</td><td>99</td><td>94</td><td>30</td><td>37</td></tr>
+  <tr><td>Reacher</td><td>66</td><td>67</td><td>14</td><td>11</td></tr>
+  <tr><td>Push-T</td><td>87</td><td>83</td><td>3</td><td>2</td></tr>
+  <tr><td><b>Cube (3D)</b></td><td><b>84</b></td><td><b>59</b></td><td>43</td><td>44</td></tr>
+</table>
+<ul>
+  <li><b>Forward-only</b> = the same model with λ = 0 (no anti-collapse term). It collapses.</li>
+  <li><b>Random</b> = no model at all, random actions. It is the "pure luck" floor.
+      (Careful: in MotionJEPA, "Random" means a <em>randomly initialized, untrained encoder</em>.)</li>
+  <li><b>LeWM</b> is <em>not</em> forward-only: it is forward loss + SIGReg.</li>
+</ul>
+
+<h3>Latent geometry (Fig. 6)</h3>
+<p>Encode held-out frames, run PCA, and color by the true state. TwoRoom: (PC1, PC2) looks like the x–y map, with an
+empty band where the wall is. Reacher: two joint angles become a torus, which looks like a cylinder in every 3-D PC view.
+Cube: gripper position in (PC1, PC3). The same plot for SIGReg (Fig. 10) has a <b>flat</b> spectrum, with no sharp drop.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="qa">
+<div class="q">Q1. What is "feature collapse", and why does it happen?</div>
+
+<p><b>Collapse = the encoder stops putting useful information into <code>z</code>.</b> There are three levels:</p>
+<table>
+  <tr><th>Level</th><th>What happens</th><th>Example</th></tr>
+  <tr><td>Full collapse</td><td>every image gives the same <code>z</code></td>
+      <td>ball-left and ball-right both → <code>[0.3, 0.3, …]</code>; SMWM's Forward-only (Fig. 11)</td></tr>
+  <tr><td>Dimensional collapse</td><td><code>z</code> varies along only a few directions</td>
+      <td>not always bad: 2 directions for a 2-D dot is correct</td></tr>
+  <tr><td>Feature collapse</td><td>some features kept, others dropped</td>
+      <td>MotionJEPA, Pong, LeWM: score kept (probe error 0.003), ball lost (0.999), bats lost (1.002)</td></tr>
+</table>
+<p>Feature collapse is the hardest one to see: <code>z</code> is not constant, so the <b>training loss looks fine</b>.
+You only find it by probing.</p>
+
+<p><b>Why it happens: the forward loss rewards "easy to predict", not "informative".</b>
+The encoder makes both the prediction and the target, so it can make the task easier by encoding less.</p>
+<table>
+  <tr><th>What the encoder keeps in z (Pong)</th><th>How hard is next z to predict?</th><th>Forward loss (illustrative)</th></tr>
+  <tr><td>ball + bats + score</td><td>ball bounces — hard</td><td>0.20</td></tr>
+  <tr><td>score only</td><td>almost never changes — easy</td><td>0.01</td></tr>
+  <tr><td>nothing (constant)</td><td>trivial</td><td><b>0.00</b></td></tr>
+</table>
+<p>Gradient descent goes downhill, so it throws away the <b>fast, hard</b> features first (ball, cactus, obstacles) and keeps
+the <b>slow, easy</b> ones (score, sky, background). MotionJEPA shows this directly: an <em>untrained</em> random encoder still
+holds the ball (error 0.143), and training makes it worse.</p>
+
+<p><b>How each method pushes back</b> — each adds a term that gets worse when information is missing:</p>
+<table>
+  <tr><th>Method</th><th>Extra term</th><th>Forces z to keep</th><th>Can still lose</th></tr>
+  <tr><td>Forward-only</td><td>none</td><td>nothing</td><td>everything</td></tr>
+  <tr><td>LeWM</td><td>SIGReg: z looks like a spread-out Gaussian</td><td>some spread, of any kind</td><td>fast features (it can use score/sky for spread)</td></tr>
+  <tr><td>SMWM</td><td>guess the action from (z_t, z_(t+1))</td><td>what the agent controls</td><td>uncontrolled movers (Pong ball: 1.001, Golf obstacles)</td></tr>
+  <tr><td>MotionJEPA</td><td>guess DiffEnc(o_(t+1) − o_t) + SIGReg</td><td>everything that moves + static things</td><td>least in their tests</td></tr>
+</table>
+<div class="keypt">MotionJEPA is SMWM with one change: the inverse head's target is the <b>embedding of the frame difference</b>
+instead of the <b>action</b>. The action only covers what the agent controls. The frame difference covers everything that moved.</div>
+</div>
+
+<div class="qa">
+<div class="q">Q2. Does Fig. 6 mean the encoder's embedding should be low-dimensional?</div>
+
+<p><b>Not exactly.</b> The encoder output is still <b>192 numbers</b>, and nothing is made smaller. The points just
+<b>use only a few directions</b> inside those 192.</p>
+<ul>
+  <li><b>Ambient dimension</b> = how many numbers <code>z</code> has → always 192.</li>
+  <li><b>Effective (intrinsic) dimension</b> = how many directions the points actually spread along → about 2 for TwoRoom, about 4 for Reacher.</li>
+</ul>
+<pre class="calc">3-d toy example:
+  z = (1.0,  2.0, 0.01)
+      (3.0, −1.0, 0.00)
+      (−2.0, 0.5, 0.02)
+  3rd number is always ≈ 0  →  all points lie on a flat sheet
+  PCA: 2 tall bars, 1 bar ≈ 0  →  ambient 3, effective 2</pre>
+
+<p><b>Is it forced?</b> No. No loss term asks for low dimension. It happens by itself:
+the inverse loss keeps what the action needs, the forward loss drops what is hard to predict
+(like random distractors), and the remaining directions are unused, so their variance is about 0.</p>
+
+<p><b>Is it required for a good world model?</b> No — it is nice to have:</p>
+<ul>
+  <li>Good: easy to read (x–y in PC1/PC2, the torus in Reacher).</li>
+  <li>SIGReg spreads variance over all 192 directions (flat spectrum) and still plans about as well on the 2D tasks
+      (94/67/83 vs 99/66/87). It only clearly loses on Cube (59 vs 84).</li>
+  <li>Risk: "only what I control" also drops uncontrolled things you may need (the Pong ball).</li>
+</ul>
+<div class="warn">Low effective dimension here means <b>"only the dimensions that matter for control"</b>.
+That is good if the task only needs controlled things, and bad if you also need moving objects you do not control.</div>
+</div>
+
+<div class="qa">
+<div class="q">Weak points</div>
+<ul>
+  <li>It assumes the action is visible between two frames; if two actions give the same image change, <code>h</code> cannot tell them apart.</li>
+  <li>Single-frame encoder → no velocity in <code>z</code>.</li>
+  <li>Small-scale evidence: toy dots plus four simulated tasks. Push-T block orientation is weaker than SIGReg (linear probe 0.664 vs 0.931).</li>
+  <li>Inverse dynamics itself is not new (Pathak's curiosity work 2017, PLDM); the new part is using it as the <em>only</em> anti-collapse term.</li>
+</ul>
+</div>
+
+<div class="callout"><b>Summary.</b> SMWM stops JEPA collapse with one extra head that guesses the action from two consecutive
+latents, so <code>z</code> keeps what the agent controls and drops the rest. Collapse happens because the encoder makes its own
+prediction target, so encoding less lowers the forward loss, and fast things are dropped first. SMWM's embedding is still
+192-d, but it lives on a small subspace; this is not forced and not required, just a readable side effect.</div>
+</section>
+
+</body>
+</html>
