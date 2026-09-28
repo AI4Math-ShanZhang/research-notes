@@ -302,6 +302,266 @@ never get to pay off, and the VLA is just a slow way to do something small.</p>
 (A.3), 10 objects never seen in training, 10 trials each = 100 trials; plus <b>CAP-EgoGym</b> with
 procedurally generated textures. Those are the only places where new stuff appears.</p>
 
+
+<!-- ============ Added 2026-09-28: follow-up discussion ============ -->
+
+<h3>7. How many tokens go into the policy? All of them — only 5 come out</h3>
+
+<p>Easy to misread: "the action is read at the last token of each frame" does <b>not</b> mean only 5
+tokens enter the transformer. Push-T, 1 camera, window T = 5, DINOv2 ViT-S/14:</p>
+
+<pre class="calc">INPUT to the policy transformer (all patches go in):
+frame 1: 256 patch tokens ─┐
+frame 2: 256 patch tokens  │
+frame 3: 256 patch tokens  ├─ 1280 tokens IN
+frame 4: 256 patch tokens  │
+frame 5: 256 patch tokens ─┘
+            │
+   8 layers, block-causal attention
+            │
+OUTPUT: 1280 tokens come out
+   keep only 5: token #256, #512, #768, #1024, #1280   (other 1275 are thrown away)
+            │
+   action head → one action chunk per kept token</pre>
+
+<p>Token #256 has attended to all 256 patches of frame 1; token #1280 to all patches of frames 1–5.
+After 8 layers, each kept token carries what it read. The "patch" in Patch Policy is on the
+<b>input</b> side.</p>
+
+<table>
+<tr><th></th><th>Tokens into the transformer</th><th>Tokens used for actions</th></tr>
+<tr><td>CLS policy (baseline)</td><td>5 (1 per frame, squeezed by the frozen ViT)</td><td>5</td></tr>
+<tr><td><b>Patch Policy</b></td><td><b>1280</b> (all patches)</td><td>5</td></tr>
+</table>
+
+<h3>8. Don't VLAs already feed patch tokens into an action head?</h3>
+
+<p>Yes — and the paper says so in its abstract ("policies that do operate on dense patch features like
+large VLAs … tend to be heavy and slow"). The idea "patches → action head" is not new. What changes is
+the size of the thing in the middle.</p>
+
+<pre class="calc">VLA (OpenVLA-OFT):   image → ViT → patches ─┐
+                     text ──────────────────┴→ 7B LLM → action head      (7.6B, 61.7 ms)
+
+Patch Policy:        image → frozen ViT → patches → small transformer → action head
+                                                     (~10-30M, ~11 ms, no text)
+
+Small policies       image → encoder → 1 vector/frame → small transformer → action head
+(VQ-BeT, DP, DynaMo)         (patches squeezed away)</pre>
+
+<table>
+<tr><th></th><th>Uses patches?</th><th>Size</th><th>Speed</th></tr>
+<tr><td>VLA</td><td>yes</td><td>billions</td><td>slow</td></tr>
+<tr><td>Small policies</td><td>no — 1 vector per frame</td><td>small</td><td>fast</td></tr>
+<tr><td><b>Patch Policy</b></td><td><b>yes</b></td><td>small</td><td>fast</td></tr>
+</table>
+
+<p>It fills the empty cell "patches + small". ACT is a small policy that also uses patch features, but
+from a ResNet-18 trained from scratch, not a large pretrained frozen ViT.</p>
+
+<div class="warn">
+<b>No language means no language understanding.</b> Without an LLM the model cannot read a sentence. On
+LIBERO Goal (10 tasks, one scene) the task must come in through the <b>goal input</b>, glued onto every
+token as [obs patch | goal patch]. The paper does <b>not</b> say which goal it uses for LIBERO (goal image
+or goal vector; if an image, which frame). A likely guess is the last frame of the demo, as in the
+VQ-BeT/DynaMo code they build on — but that is a guess. A finished-scene photo is a much stronger hint than
+"put the bowl on the plate", and it cannot handle an instruction never seen in training. So LIBERO 0.98 is
+not a language result. (OpenVLA-OFT's LIBERO number is copied from its own paper, not re-run.)
+</div>
+
+<h3>9. The training loss — what VQ-BeT and Diffusion Policy actually minimise</h3>
+
+<p>The paper writes <b>no loss formula of its own</b>: "compute a loss between the predicted and
+ground-truth actions for each frame". The loss is whatever the plugged-in head uses. Both heads exist for
+the same reason — demos disagree:</p>
+
+<pre class="calc">block in front:  demo A goes LEFT  → action −1
+                 demo B goes RIGHT → action +1
+plain MSE regression → average 0 → drives straight INTO the block</pre>
+
+<p><b>VQ-BeT</b> (toy: 2-number action, true a = [0.6, 0.2]; real codes live in a 512-d latent).</p>
+<pre class="calc">Stage 1 (before policy training): residual VQ-VAE on action chunks only
+  [0.6, 0.2] → nearest group-1 code #7 = [0.5, 0.3]  → leftover [0.1, −0.1]
+             → nearest group-2 code #3 = [0.1, −0.08]  → written as (7, 3)
+  loss: reconstruction + commitment
+
+Stage 2 (policy): each readout token predicts
+  group-1 code   p(7) = 0.7   → focal CE ≈ −ln 0.7 = 0.36
+  group-2 code   p(3) = 0.5   → focal CE ≈ −ln 0.5 = 0.69
+  offset         [0.0, −0.02] → decode(7,3) + offset = [0.6, 0.20] → L1 vs [0.6, 0.2] = 0
+  total = code loss (both groups) + β · offset L1</pre>
+<p>Classification can say "LEFT 50%, RIGHT 50%" and pick one. One forward pass → ~11 ms.</p>
+
+<p><b>Diffusion Policy</b> (same toy, a = [0.6, 0.2]).</p>
+<pre class="calc">noise ε = [1.0, −0.5], "half-noise" level (keep 0.71 of each):
+  noisy = 0.71·[0.6, 0.2] + 0.71·[1.0, −0.5] = [1.13, −0.21]
+network gets (noisy action, noise level, readout token) → guesses ε = [0.8, −0.4]
+loss = MSE(guess, ε) = ((0.2)² + (0.1)²) / 2 = 0.025</pre>
+<p>At test time start from pure noise and denoise many times → ~450 ms. Different starting noise lands in
+different modes, so it does not average them.</p>
+
+<table>
+<tr><th></th><th>VQ-BeT</th><th>Diffusion Policy</th></tr>
+<tr><td>Loss</td><td>code classification (focal CE) + offset L1; plus stage-1 VQ-VAE</td><td>MSE on predicted noise</td></tr>
+<tr><td>Where the loss is applied</td><td>last patch token of each frame</td><td>every decoder position</td></tr>
+<tr><td>Speed</td><td>~11 ms</td><td>~450 ms</td></tr>
+<tr><td>Cube, CLS → patches</td><td>0.23 → 1.68</td><td>0.21 → 1.73</td></tr>
+</table>
+
+<p>The "where the loss is applied" row explains the mask ablation (Table 12): under a naive token-causal
+mask, VQ-BeT is nearly unchanged (its readout already sees the whole frame), but Diffusion Policy on Cube
+drops from 1.24 to 0.11 because early positions only see part of the first frame.</p>
+
+<h3>10. How LIBERO Goal and Cube are trained</h3>
+
+<p>Same recipe for both — plain behaviour cloning, no reward, no RL: cut a window of frames from a demo →
+frozen ViT (cacheable) → policy transformer → action at each frame's last token → VQ-BeT loss against the
+expert's action. Numbers from A.2 and Table 9 (VQ-BeT variant):</p>
+
+<table>
+<tr><th></th><th>LIBERO Goal</th><th>Cube</th></tr>
+<tr><td>Task</td><td>10 tasks, one kitchen scene, Franka</td><td>UR5e stacks 2 cubes at a <b>fixed</b> target</td></tr>
+<tr><td>Data</td><td>50 × 10 = <b>500</b> expert demos, <b>one model</b> for all 10</td><td><b>550</b> successful demos from an expert with temporally correlated noise</td></tr>
+<tr><td>Cameras</td><td>2 (third-person + wrist)</td><td>1</td></tr>
+<tr><td>Window</td><td>10 frames → 10 × 512 = <b>5120</b> tokens</td><td>5 frames → 5 × 256 = <b>1280</b> tokens</td></tr>
+<tr><td>Actions per readout</td><td>1 action</td><td>chunk of 5</td></tr>
+<tr><td>Transformer</td><td>6 layers, width <b>120</b></td><td>8 layers, width 512</td></tr>
+<tr><td>Batch</td><td>32</td><td>128</td></tr>
+</table>
+
+<h3>11. "The CLS already attended to every patch inside the ViT — why do attention again?"</h3>
+
+<p>Three reasons.</p>
+<ol>
+  <li><b>Frozen CLS was trained for a different job.</b> DINO-style training says two crops of the same
+  image must give the same CLS — cube on the left of the crop or on the right, same vector. So the CLS
+  learns <em>what</em> is there and learns to ignore <em>where</em>. Control needs <em>where</em>.</li>
+  <li><b>It does not fit.</b> CLS = 384 numbers; all patches = 256 × 384 = 98,304. What the CLS dropped
+  is gone for good.</li>
+  <li><b>The need changes over time.</b> Approaching → cube patches; grasping → gripper tip and cube edge;
+  stacking → top of the lower cube. The CLS is one fixed summary; the policy's attention is trained by the
+  action loss and can look at different patches at different moments.</li>
+</ol>
+
+<table>
+<tr><th>VQ-BeT, Table 1</th><th>CLS</th><th>Avg pool</th><th>Patches</th></tr>
+<tr><td>Cube (max 2.0)</td><td>0.23</td><td>0.25</td><td><b>1.68</b></td></tr>
+<tr><td>BlockPush (max 2.0)</td><td>0.77</td><td>0.84</td><td><b>1.68</b></td></tr>
+<tr><td>LIBERO Goal</td><td>0.95</td><td>0.97</td><td>0.94</td></tr>
+<tr><td>Push-T</td><td>0.59</td><td>0.54</td><td>0.68</td></tr>
+</table>
+<p>CLS is fine when the task is coarse (LIBERO) and fails when it needs exact positions (Cube, BlockPush).
+Table 4 goes further: even a <b>trained</b> conv squeezer on top of the frozen patches loses on Push-T —
+256 patches 0.69, 64 → 0.52, 16 → 0.53, 4 → 0.51, 1 → 0.48.</p>
+
+<div class="qa">
+<div class="q">"But Patch Policy also ends with one token per frame."</div>
+True. The difference is <b>what that token must hold</b>. The CLS is made before the task is known, so it
+must summarise the whole image. Patch Policy's last token only needs the <b>answer</b> — the next action,
+2–7 numbers — and it is written <em>after</em> 8 trained layers have read all patches, the goal, and the
+past frames. One is a vague description you still have to reason from; the other is the computed answer.
+</div>
+
+<h3>12. Compared with LeWorldModel (arXiv:2603.19312)</h3>
+
+<p>Same group, opposite choices. LeWM predicts the future, not the action (see the
+<a href="leworldmodel-adaln-sigreg.html">LeWM note</a>).</p>
+
+<pre class="calc">PATCH POLICY
+image → frozen ViT → 256 patches ─→ predictor sees 1280 tokens → keeps 5 → ACTION
+
+LeWM
+image → ViT-Tiny (trained) → keep CLS → MLP+BN → 1 token (192 numbers)
+        (patches dropped inside the encoder)
+        predictor sees 3 tokens + action via AdaLN → NEXT EMBEDDING</pre>
+
+<table>
+<tr><th></th><th>Patch Policy</th><th>LeWM</th></tr>
+<tr><td>Learns</td><td>policy: images → actions</td><td>world model: (z, action) → next z</td></tr>
+<tr><td>Encoder</td><td>frozen DINOv2 / WebSSL</td><td>ViT-Tiny, trained end-to-end</td></tr>
+<tr><td>Tokens per frame</td><td>256 patches</td><td>1 CLS (192-d)</td></tr>
+<tr><td>Action</td><td><b>output</b></td><td><b>input</b> (AdaLN, zero-init)</td></tr>
+<tr><td>Goal</td><td>input, glued to every token</td><td>only at test time, in the planning cost</td></tr>
+<tr><td>Loss</td><td>VQ-BeT or DP vs expert actions</td><td>‖ẑ<sub>t+1</sub> − z<sub>t+1</sub>‖² + 0.1 · SIGReg</td></tr>
+<tr><td>Data</td><td>expert demos</td><td>any trajectories, no reward, no task</td></tr>
+<tr><td>Acting</td><td>one forward pass, ~11 ms</td><td>CEM 300 samples × 10–30 iters, ~0.98 s</td></tr>
+</table>
+
+<p>Does LeWM contradict Patch Policy's "one vector is not enough"? Not directly. Patch Policy's CLS is
+<b>frozen and generic</b>; LeWM's is <b>trained</b>, so it can keep "where". LeWM's linear probes on
+Push-T read agent location r = 0.974, block location 0.986, block angle 0.902 from the 192-d CLS. The
+trained squeezer fixes reason 1 in §11 — but LeWM itself reports Cube rollouts that keep the layout and
+lose fine detail.</p>
+
+<h3>13. Adding an action loss to the single token: SMWM and INTACT</h3>
+
+<p>Inverse dynamics asks the question LeWM never learns: "now + next (or goal) → which action?" Put that
+loss on the trained encoder and the one token becomes <b>action-shaped</b>.</p>
+
+<p><b>SMWM</b> (arXiv:2606.20104, <a href="smwm-inverse-dynamics-collapse.html">note</a>):
+L = ‖ẑ<sub>t+1</sub> − z<sub>t+1</sub>‖² + λ · ‖h(z<sub>t</sub>, z<sub>t+1</sub>) − a<sub>t</sub>‖².
+The inverse loss replaces SIGReg as the anti-collapse term and shapes the encoder, but acting still uses
+CEM search.</p>
+
+<p><b>INTACT</b> (arXiv:2607.26056) keeps LeWM's encoder, predictor and SIGReg, and adds one shared
+action head called twice:</p>
+<pre class="calc">total = LeWM loss   (next-z MSE + SIGReg)
+      + λ_inv  · NLL( a_t | z_t,  z_t+1 − z_t,        a_t−1 )   ← local inverse dynamics
+      + λ_goal · NLL( a_t | z_t,  sg(z_goal) − z_t,   a_t−1 )   ← goal "intent"
+all gradients flow into the encoder
+
+acting, no search:  m = z_goal − z  →  head gives ā  →  predictor moves z  →  repeat 5×
+                    execute first block, replan</pre>
+
+<table>
+<tr><th>OGBench Cube (single cube), success %</th><th>Encoder</th><th>Acting</th><th>Cube</th></tr>
+<tr><td>LeWM</td><td>trained, no action loss</td><td>CEM, 9k sequences</td><td>74.0</td></tr>
+<tr><td>GC-IDM</td><td>frozen LeWM + action head</td><td>direct</td><td>99.3</td></tr>
+<tr><td>INTACT</td><td>trained <b>with</b> action loss</td><td>direct</td><td><b>99.89</b></td></tr>
+</table>
+
+<p>So one trained 192-d token plus an action loss can be enough. The problem in Patch Policy's baseline is
+a <b>frozen, generic</b> CLS, not "one token" by itself. INTACT's goal branch is essentially
+goal-conditioned behaviour cloning on one trained token; Patch Policy is goal-conditioned behaviour cloning
+on 256 frozen patches.</p>
+
+<table>
+<tr><th></th><th>Frozen ViT + all patches</th><th>Trained ViT + 1 token</th></tr>
+<tr><td>World model</td><td>DINO-WM (planning 47 s)</td><td>LeWM (0.98 s); + SMWM / INTACT action losses</td></tr>
+<tr><td>Policy</td><td><b>Patch Policy</b></td><td><em>not tested by Patch Policy</em></td></tr>
+</table>
+
+<p>Why each side picks what it picks:</p>
+<ul>
+  <li><b>Token count costs differently.</b> A planner runs the predictor thousands of times per decision,
+  so 1 token per frame is a necessity. A policy runs once, so 256 tokens (~11 ms) is affordable.</li>
+  <li><b>Data.</b> Training a ViT needs a lot of in-domain data from one environment. Patch Policy's real
+  tasks have ~50 demos (18 minutes) — too little to train a ViT, so it keeps a frozen one and all its
+  patches.</li>
+  <li><b>What the token holds.</b> LeWM's token must hold the whole controllable state (it never sees the
+  goal in training); INTACT's is pushed toward what distinguishes actions.</li>
+</ul>
+
+<div class="warn">
+<b>Do not compare the numbers across papers.</b> LeWM/INTACT "Cube" is OGBench single-cube, success rate;
+Patch Policy "Cube" is two-cube stacking, blocks placed out of 2.0. INTACT's own matched re-run of GC-IDM on
+its LeWM encoder fell to 9.33 (Push-T) and 69.33 (Cube) — the single-token result depends a lot on the
+encoder. INTACT direct on Push-T is 77.67, below its own CEM (89.67); Push-T needs a precise block angle,
+which may be where one small token struggles (my guess, not the paper's).
+<br><br>
+<b>Missing experiment:</b> Patch Policy never tests "fine-tune the ViT and use its CLS", and nobody has
+run "1 trained token + action loss" against "256 frozen patches" on the same task.
+</div>
+
+<div class="keypt">
+<b>Summary.</b> Patch Policy feeds all patch tokens from a frozen ViT into a small block-causal
+transformer and trains with an off-the-shelf action loss (VQ-BeT: code classification + offset L1;
+Diffusion Policy: noise MSE). VLAs already use patches; the point is doing it without the 7B LLM. A frozen
+CLS fails on precise tasks because it was trained to ignore position, but a <em>trained</em> single token
+— LeWM's, and especially INTACT's with an inverse-dynamics action loss — can recover most of that. The
+open question is the head-to-head neither side has run.
+</div>
+
 </section>
 
 </body>
