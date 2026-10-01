@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KV-Lingo — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .step{ border-top:2px solid #e3e8ef; padding-top:.3rem; margin-top:1.8rem; }
+  pre.code{ background:#1f2933; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+       font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.45; }
+  pre.code b{ color:#F79A38; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>KV-Lingo — Translating One Model's KV Cache into Another's</h1>
+<p class="paper-meta">Paper: <em>KV-Lingo: Learning KV-Cache Translators with Distillation</em> —
+Valérie Castin, Keitaro Sakamoto, Anastasiia Filippova, João Monteiro, Marco Cuturi &amp; Pierre Ablin,
+<a href="https://arxiv.org/abs/2609.32610">arXiv:2609.32610</a>.</p>
+
+<!-- ===== Section 1: objective summary ===== -->
+<section class="section paper-summary">
+  <h2>📄 Paper Summary</h2>
+  <p>Different language models write different KV caches. So when you switch from one model to another
+  in the middle of a shared context, the new model normally has to read the whole context again (re-prefill).
+  KV-Lingo learns a set of <b>linear maps, usually one per layer of the target model</b>, that turn the
+  source model's KV cache into the target model's format. The maps are trained by distillation: the
+  target model's next-word predictions from the translated cache should match its predictions from its own real cache.</p>
+  <ul>
+    <li><b>9.6× faster</b> time-to-first-token after a model switch on 64-token prompts (Qwen models, Apple M3 Ultra).</li>
+    <li><b>Up to 29× faster</b> at 32k context on an H100.</li>
+    <li>Downstream quality stays strong in both directions, small → large and large → small.</li>
+    <li>The translators are trained on a generic text corpus, and they make it possible to route between models without re-prefilling the shared prefix.</li>
+  </ul>
+</section>
+
+<!-- ===== Section 2: step-by-step flow ===== -->
+<section class="section key-notes">
+  <h2>🖊 My Key Notes — the flow, step by step</h2>
+  <p>This walkthrough uses the paper's own example from Figure 1: a document about the James Webb telescope,
+  then the question <em>"Where is the JWST located?"</em>.</p>
+
+  <h3 class="step">Step 1: the small model S reads the document (once)</h3>
+<pre class="code">
+ document tokens:   "The"  "JWST"  "was"  "launched"  ...  "Where" "is" "JWST" "located" "?"
+                      │      │       │        │                │      │     │       │
+                      ▼      ▼       ▼        ▼                ▼      ▼     ▼       ▼
+ ┌─────────────────────────── <b>SMALL MODEL S  (prefill)</b> ───────────────────────────────┐
+ │  layer 1  ──► writes K¹,V¹ for every token                                         │
+ │  layer 2  ──► writes K²,V² for every token                                         │
+ │    ...                                                                             │
+ │  layer N  ──► writes Kᴺ,Vᴺ for every token                                         │
+ └────────────────────────────────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+          S's KV cache  =  a table of notes:
+
+                 token1  token2  token3  ...  token n
+          layer1 [K,V]   [K,V]   [K,V]   ...  [K,V]
+          layer2 [K,V]   [K,V]   [K,V]   ...  [K,V]
+           ...
+          layerN [K,V]   [K,V]   [K,V]   ...  [K,V]
+
+          (written in S's "private language")
+</pre>
+
+  <h3 class="step">Step 2: the translator converts the notes (this is KV-Lingo)</h3>
+<pre class="code">
+          S's cache                    <b>TRANSLATOR</b>                 L's-format cache
+                                  (only trained part,
+                                   frozen models around it)
+
+  layer 1  K¹,V¹  ──────►  K̂ = T_K¹ · K     V̂ = T_V¹ · V  ──────►  layer 1  K̂¹,V̂¹
+  layer 2  K²,V²  ──────►  K̂ = T_K² · K     V̂ = T_V² · V  ──────►  layer 2  K̂²,V̂²
+   ...                          ...                                  ...
+  layer N  Kᴺ,Vᴺ  ──────►  K̂ = T_Kᴺ · K     V̂ = T_Vᴺ · V  ──────►  layer M  K̂ᴹ,V̂ᴹ
+</pre>
+  <ul>
+    <li>One key matrix and one value matrix per layer of L.</li>
+    <li>Applied to each token separately (token 1, token 2, … one by one).</li>
+    <li>If L has more layers than S, each L layer reads a few nearby S layers.</li>
+  </ul>
+  <div class="callout">No text is involved here. It is just numbers → matrix multiply → numbers.</div>
+
+  <h3 class="step">Step 3: the big model L uses the translated notes and answers</h3>
+<pre class="code">
+ ┌──────────────────────────── <b>BIG MODEL L</b> ────────────────────────────┐
+ │                                                                     │
+ │   translated cache (K̂,V̂) for tokens 1 … n-1   ◄── from Step 2      │
+ │                    ▲                                                │
+ │                    │ attention (looks up the notes)                 │
+ │                    │                                                │
+ │   last token "?" ──┴──► ONE forward pass through L's layers         │
+ │                                 │                                   │
+ │                                 ▼                                   │
+ │                     first answer word: "The"                        │
+ │                                 │                                   │
+ │                                 ▼                                   │
+ │          keeps generating normally: "JWST is located at L2 ..."     │
+ │          (each new word adds L's own real K,V to the cache)         │
+ └─────────────────────────────────────────────────────────────────────┘
+</pre>
+  <div class="callout">L never reads "The JWST was launched ..." itself. It only reads the notes S made,
+  translated into its own format.</div>
+
+  <h3 class="step">The whole picture</h3>
+<pre class="code">
+                    reads text                 translate              answers
+ document ──► [ SMALL MODEL S ] ──► S-cache ──► [ T ] ──► L-cache ──► [ BIG MODEL L ] ──► answer
+                (slow part,                  (cheap,                (1 step, then
+                 done once)                  linear)                 normal generation)
+
+ <b>WITHOUT KV-Lingo:</b>
+ document ──► [ SMALL MODEL S ] ──► S-cache        (thrown away)
+ document ──► [ BIG MODEL L ] ──► L-cache ──► answer           ← L re-reads everything (slow)
+</pre>
+
+  <h3 class="step">How the translator T is trained</h3>
+<pre class="code">
+ same text ──► S ──► S-cache ──► T ──► translated cache ──► L ──► next-word probs  P₁
+ same text ──► L ──────────────────► L's real cache ──────► L ──► next-word probs  P₂
+
+ <b>Stage 1:</b>  make translated cache ≈ real cache          (least squares, closed form)
+ <b>Stage 2:</b>  make P₁ ≈ P₂   (minimise KL)                 ← the stage that really matters
+           only T changes; S and L stay frozen
+</pre>
+
+  <h3 class="step">Summary</h3>
+  <p>The small model reads the document once and leaves a table of K/V notes, one entry per layer per token.
+  KV-Lingo runs every note through a per-layer matrix to rewrite it in the big model's format. The big model
+  then puts those notes straight into its cache and starts answering with a single step, without ever reading
+  the document itself.</p>
+</section>
+
+</body>
+</html>

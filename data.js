@@ -47,6 +47,14 @@ const BLOG = {
       ],
       notes: [
         {
+          title:   "KV-Lingo — Translating One Model's KV Cache into Another's",
+          file:    "posts/kv-lingo-kv-cache-translators.html",
+          date:    "2026-10-01",
+          paper:   "Castin, Sakamoto, Filippova, Monteiro, Cuturi &amp; Ablin · arXiv:2609.32610",
+          tags:    ["KV cache", "model switching", "distillation", "linear maps", "prefill"],
+          summary: "Step-by-step flow using the paper's JWST example. A small model S reads the document once and leaves a KV table (one K/V per layer per token). KV-Lingo runs each entry through a per-layer linear map to rewrite it in the big model L's format, and L then answers from that translated cache in one forward step without ever reading the document. The translator is the only trained part: stage 1 fits the cache by least squares, stage 2 (the one that matters) minimises the KL between L's next-word predictions from the translated cache and from its own real cache.",
+        },
+        {
           title:   "Hyperloop Transformers — hyper-connections at the loop boundary",
           file:    "posts/hyperloop-transformers.html",
           date:    "2026-09-11",
@@ -104,6 +112,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "KV-Lingo — Learning KV-Cache Translators with Distillation",
+          link:    "https://arxiv.org/abs/2609.32610",
+          summary: "Castin, Sakamoto, Filippova, Monteiro, Cuturi &amp; Ablin. Different LLMs write incompatible KV caches, so switching models mid-context usually means re-reading the whole context. KV-Lingo learns linear maps (about one per target layer) that translate one model's KV cache into another's, trained by distillation so the target's predictions match those from its own cache. 9.6× faster time-to-first-token after a switch on 64-token prompts (Qwen, M3 Ultra) and up to 29× at 32k context on H100, with strong quality in both small→large and large→small directions.",
+        },
         {
           name:    "Hyperloop Transformers",
           link:    "https://arxiv.org/abs/2604.21254",
