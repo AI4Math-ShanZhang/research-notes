@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InternW0-Δ — Causal Imprint and the Data Behind It — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>InternW0-Δ — Causal Imprint and the Data Behind It</h1>
+<p class="paper-meta">Paper: <em>InternW0-∆: A World Action Model Bridging Predictive Dynamics and Actions with
+20K+ Hours of Open Data</em> — Physical Intelligence Team, Shanghai AI Laboratory, Sep 2026,
+<a href="https://arxiv.org/abs/2609.31394">arXiv:2609.31394</a> ·
+<a href="https://internrobotics.github.io/InternW0-Delta/">project page</a> ·
+<a href="https://github.com/InternRobotics/InternW0-Delta">code</a>.
+This note covers the model step by step, then the data questions I had to work out: what UMI,
+teleoperation and Ego2Robot data actually are, and what the Δz target really is.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The idea in one line</h3>
+<pre class="calc">action chunk = ActionExpert( what you see now  +  Δ tokens  +  VLM scene features )
+
+Δ is trained to predict how the future video will change — but no future video is made at test time.</pre>
+
+<h3>Notation</h3>
+<table>
+  <tr><th>Symbol</th><th>Meaning</th></tr>
+  <tr><td><code>x_t</code></td><td>camera images at time t, packed into one 384×256 picture</td></tr>
+  <tr><td><code>z_t</code></td><td><code>x_t</code> compressed by the frozen Wan VAE — a grid of cells (≈24×16), one patch of the picture per cell. <b>It is the image, not the robot state.</b></td></tr>
+  <tr><td>A / R / C</td><td>Anchor (first frame of the episode) / Recent (32 action steps ago) / Current frame</td></tr>
+  <tr><td>F</td><td>future frames — <b>training only</b></td></tr>
+  <tr><td>Δ</td><td>"Causal Imprint" tokens: learnable tokens inside the video model, one per cell of the current latent grid</td></tr>
+  <tr><td><code>Δz</code></td><td>change between neighbouring future latents: <code>z(t+i) − z(t+i−1)</code>, per cell</td></tr>
+  <tr><td><code>s_t</code></td><td>robot state (joints, gripper/hand, end-effector pose) in a shared 80-slot format</td></tr>
+  <tr><td><code>A_t</code></td><td>action chunk: 32 steps × 80 dims</td></tr>
+  <tr><td>Video expert</td><td>Wan2.2-TI2V-5B (pretrained video generator)</td></tr>
+  <tr><td>Action expert</td><td>ActionDiT, trained from scratch with flow matching</td></tr>
+  <tr><td>VLM</td><td>RynnBrain1.1-2B, frozen; reads the current images + instruction</td></tr>
+</table>
+
+<h3>Step by step</h3>
+<ol>
+  <li><b>One format for every robot.</b> All datasets are mapped into one 80-slot vector (arm joints, end-effector,
+      gripper, hand, ×2 arms; plus torso, head, base). Unused slots are masked.</li>
+  <li><b>23,072 hours of data.</b>
+    <table>
+      <tr><th>Source</th><th>Hours</th><th>Share of samples</th><th>Action-loss weight</th></tr>
+      <tr><td>Robot (15 datasets, mostly teleop)</td><td>11,302</td><td>80%</td><td>1.0</td></tr>
+      <tr><td>Ego2Robot</td><td>5,634*</td><td>10%</td><td>0.1</td></tr>
+      <tr><td>Ego (raw human video)</td><td>4,061</td><td>2%</td><td>0.1</td></tr>
+      <tr><td>UMI</td><td>2,075</td><td>8%</td><td>0.5</td></tr>
+    </table>
+    * only 1,101 real hours of human video converted; the number grows because each clip is counted once per
+    robot type and slowed down 2×.</li>
+  <li><b>Inputs.</b> Video expert sees A, R, C latents + T5 text. Action expert sees VLM features + state.
+      They are joined in 30 shared Mixture-of-Transformers blocks (own weights, one shared attention).</li>
+  <li><b>Attention mask — the key trick.</b>
+<pre class="calc">F   sees {A, R, C, F}          → learns to predict the future
+Δ   sees {R, C, Δ}             → cannot see F
+Act sees {A, R, C, Δ, Act}     → cannot see F</pre>
+      The future is only a training target; nothing leaks into the action path.</li>
+  <li><b>Two losses on Δ.</b>
+    <ul>
+      <li><code>L_Δ</code>: final-layer Δ must output the clean latent changes <code>Δz</code>.</li>
+      <li><code>L_align</code>: Δ features at block 8 must match (cosine) the video expert's features of the
+          <i>last future frame</i> at block 20 (stop-gradient).</li>
+    </ul></li>
+  <li><b>4D distillation (training only).</b> Frozen Track4World gives a 1430-d clip descriptor
+      (geometry 1024, 2D motion 128, 3D motion 256, camera 18, visibility 4); a 16-query decoder on layer 15
+      must match it with MSE. Only the last 10K of 245K steps, on 1 of 16 samples.</li>
+  <li><b>Total loss.</b> <code>0.5·video + action + 0.5·L_Δ + 0.1·L_align + 0.1·L_4D</code>, on 256 A800s, batch 4,096.</li>
+  <li><b>Inference.</b> Run the video expert <b>once</b> over A, R, C, Δ (no F) and cache K/V; then N flow steps on
+      the action expert only. 152.8 ms round trip on one RTX 5090 (780.5 ms before, 5.11×), LIBERO-Plus 92.78 → 92.23.</li>
+</ol>
+
+<h3>Which part gives how much (Table 14, LIBERO-Plus, each row trained from scratch)</h3>
+<table>
+  <tr><th>Added</th><th>Success %</th><th>Gain</th></tr>
+  <tr><td>Baseline</td><td>49.59</td><td>–</td></tr>
+  <tr><td>+ sparse memory (A, R)</td><td>53.47</td><td>+3.9</td></tr>
+  <tr><td>+ VLM (Qwen3.5-2B)</td><td>60.37</td><td>+6.9</td></tr>
+  <tr><td>↳ swap to RynnBrain-2B</td><td>69.08</td><td>+8.7</td></tr>
+  <tr><td>+ Δ with <code>L_Δ</code> only</td><td>70.80</td><td><b>+1.7</b></td></tr>
+  <tr><td>+ <code>L_align</code></td><td>76.45</td><td>+5.7</td></tr>
+  <tr><td>+ 4D distillation</td><td>78.37</td><td>+1.9</td></tr>
+</table>
+<p>VLM total: 6.9 + 8.7 = <b>15.6</b>. Δ total: 1.7 + 5.7 = 7.4. The VLM matters about twice as much as the named
+idea, and inside Δ most of the gain is the alignment to the video expert's own future features.</p>
+
+<h3>Data-source ablation (pretrain on one source only)</h3>
+<table>
+  <tr><th>Pretraining data</th><th>LIBERO-Plus</th><th>RoboTwin Clean2Random</th></tr>
+  <tr><td>None</td><td>78.59</td><td>4.38 (joint) / 2.80 (EEF)</td></tr>
+  <tr><td>Robot</td><td>83.73</td><td><b>32.34</b></td></tr>
+  <tr><td>Ego (raw)</td><td>80.45</td><td>3.13 (+0.3)</td></tr>
+  <tr><td>Ego2Robot</td><td>81.86</td><td>6.66 (+2.3)</td></tr>
+  <tr><td>UMI</td><td>83.24</td><td>13.90 (+11.1)</td></tr>
+</table>
+
+<h3>Headline results</h3>
+<ul>
+  <li>LIBERO-Plus 92.8 (vs 91.4 Qwen-RobotManip-Context, 84.4 π0.5).</li>
+  <li>RoboTwin 2.0 Clean2Random 71.9 (vs 69.4); EBench score 66.0 (vs 64.7); RoboDojo avg SR 23.9 (vs 22.5 GPT-6 Astra, 11.9 OpenWAM-α).</li>
+  <li>Real robot, with vs without pretraining: toast bread 4/20 → 19/20, Luminol reaction 0/20 → 19/20.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="keypt"><b>At test time this is a VLA with a video-pretrained backbone.</b> The "world model" shapes
+the features in training, then the future branch is switched off — the same bet as Fast-WAM.</div>
+
+<h3>Q&amp;A — the data types</h3>
+
+<div class="qa"><div class="q">What is UMI data?</div>
+<p>UMI = Universal Manipulation Interface (Chi et al., 2024). A person holds a 3D-printed tool shaped like a robot's
+two-finger gripper, with a GoPro on it looking at the fingers, and does the task by hand. Each frame gives: wrist
+camera image, gripper 3D position + rotation, gripper width, text. The robot later carries <b>the same gripper and
+camera</b>, so the images look like what the robot sees and the action is already in robot form (end-effector
+pose + width). The paper uses Hy-UMI-10K (2,162 h, adds a head camera).</p></div>
+
+<div class="qa"><div class="q">How is that different from teleoperation?</div>
+<p>In teleoperation a <b>real robot moves</b>: a person drives it with VR, a joystick or a leader arm, and the robot
+records its own joints and cameras exactly. In UMI <b>there is no robot</b>: the person pretends to be the robot by
+holding its "hand".</p>
+<table>
+  <tr><th></th><th>Teleop</th><th>UMI</th><th>Raw ego video</th></tr>
+  <tr><td>Who touches the object</td><td>robot gripper</td><td>handheld tool</td><td>human hand</td></tr>
+  <tr><td>Robot needed</td><td>yes</td><td>no</td><td>no</td></tr>
+  <tr><td>Joint angles</td><td>exact</td><td>none</td><td>none</td></tr>
+  <tr><td>Gripper pose</td><td>measured</td><td>estimated (SLAM)</td><td>guessed from hand</td></tr>
+  <tr><td>Robot can surely do it</td><td>yes</td><td>not always</td><td>not always</td></tr>
+  <tr><td>Cost</td><td>high</td><td>low</td><td>very low</td></tr>
+</table></div>
+
+<div class="qa"><div class="q">If I hold the tool, isn't it the gripper? Why must its position be estimated?</div>
+<p>The tool is plastic + a camera — no motors, no sensors. A robot knows its gripper position because every joint
+measures its angle and the base is bolted down; then simple math gives the position:</p>
+<pre class="calc">part 1: 0.5 m, angle 0°  (flat)
+part 2: 0.3 m, angle 90° (up)
+gripper = (0.5, 0) + (0, 0.3) = (0.5, 0.3) m      ← measured, exact, every tick</pre>
+<p>The handheld tool floats in a human hand that has no sensors. So UMI uses <b>SLAM</b>: the camera sees the room
+move ("table edge moved 2 cm left → I moved 2 cm right") plus the motion sensor (IMU) for fast moves. Finger width
+comes from markers on the fingers seen by the camera. SLAM can fail (fast shaking, plain walls), which is why the
+paper drops UMI segments with broken quaternions, both-hands-static segments, and sudden jumps.</p></div>
+
+<div class="qa"><div class="q">What is Ego2Robot?</div>
+<p>Turn a human first-person video into a fake robot video. Source: EgoDex (772 h, Apple Vision Pro) and EgoVerse
+(3,289 h), which come with tracked 3D hand joints.</p>
+<ol>
+  <li><b>Action alignment</b> — wrist → end-effector; finger pinch → gripper opening:
+      d = thumb tip to midpoint of index &amp; middle tips; 5 cm → 0 (closed), 7 cm → 1 (open), 6 cm → 0.5. Slowed 2×.</li>
+  <li><b>Kinematic alignment</b> — put a virtual robot in MuJoCo and solve inverse kinematics (position → joint
+      angles, the reverse of the example above). If it can't follow (reach, joint limits, jumps, arm collision),
+      move the base and retry; if nothing works, drop the clip.</li>
+  <li><b>Visual alignment</b> — SAM3 finds the human, ProPainter erases it, the robot is rendered from the same camera
+      and pasted in with depth so objects in front still cover it.</li>
+</ol>
+<p>Only <b>27%</b> of human video converts (4,061 → 1,101 h). It helps more than raw ego (+2.3 vs +0.3 on RoboTwin)
+but far less than real teleop (+28): the motion is still a human motion, and the rendered robot never touched anything.</p></div>
+
+<div class="callout"><b>The pattern:</b> the closer the data looks <i>and</i> acts like a robot, the more it helps —
+teleop (+28) &gt; UMI (+11.1) &gt; Ego2Robot (+2.3) &gt; raw ego (+0.3). Raw human video is still an open gap; the
+authors say so in their limitations.</div>
+
+<h3>Q&amp;A — what Δz really is</h3>
+<div class="qa"><div class="q">Is z the visual tokens, not the robot state?</div>
+<p>Yes. <code>z</code> is the VAE-compressed <b>camera image</b> — a grid, one cell per patch. <code>Δz</code> is the
+change <b>per cell</b>: "how did this patch of the picture change?" Toy 3×3 grid, gripper (5) moving to a cup (3):</p>
+<pre class="calc">z_t            z_t+1          z_t+2
+0  0  0        0  0  0        0  0  0
+5  0  3        0  5  3        0  0  8      (8 = gripper on cup)
+0  0  0        0  0  0        0  0  0
+
+Δz_1 = z_t+1 − z_t     Δz_2 = z_t+2 − z_t+1
+ 0  0  0                0  0  0
+-5 +5  0                0 -5 +5
+ 0  0  0                0  0  0</pre>
+<p>Zero almost everywhere except where things move — that's why it's called "change-oriented". There is one Δ token
+per cell, each guessing how its own patch will change. The robot arm is in the picture, so Δz covers robot
+<i>and</i> object motion, but as appearance change, not as "joint 3 rotated 10°". The action expert turns
+"what will change where" into joint and gripper numbers.</p></div>
+
+<h3>Honesty section</h3>
+<div class="warn">
+<ul>
+  <li>Ablations are single runs, no error bars — the +1.7 (L_Δ) and +1.9 (4D) could be noise.</li>
+  <li>Ablation model reaches 78%, headline is 92.8%; no table isolates "full 20K-hour mix vs robot-only".</li>
+  <li>All baseline numbers are copied from other papers, not re-run.</li>
+  <li>Real-robot: only "ours with vs without pretraining", 2 tasks × 20 trials; no π0.5-style real baseline.</li>
+  <li>§5.1 lists four loss weights for three losses, and Table 4 gives a different Causal Imprint weight.</li>
+  <li>The +36 with GPT-6 Astra is on 5 tasks picked because the model was weak there.</li>
+</ul>
+</div>
+
+<h3>What to remember</h3>
+<ol>
+  <li>Future video is a training signal only; inference = one video prefill + action-only denoising.</li>
+  <li>The VLM choice (+15.6) and the future-feature alignment (+5.7) do most of the work; the named Δz prediction alone adds +1.7.</li>
+  <li>Data value follows robot-likeness: teleop &gt; UMI &gt; Ego2Robot &gt; raw ego.</li>
+</ol>
+</section>
+
+</body>
+</html>
