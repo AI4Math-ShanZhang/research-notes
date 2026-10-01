@@ -200,24 +200,6 @@ per cell, each guessing how its own patch will change. The robot arm is in the p
 <i>and</i> object motion, but as appearance change, not as "joint 3 rotated 10°". The action expert turns
 "what will change where" into joint and gripper numbers.</p></div>
 
-<h3>Honesty section</h3>
-<div class="warn">
-<ul>
-  <li>Ablations are single runs, no error bars — the +1.7 (L_Δ) and +1.9 (4D) could be noise.</li>
-  <li>Ablation model reaches 78%, headline is 92.8%; no table isolates "full 20K-hour mix vs robot-only".</li>
-  <li>All baseline numbers are copied from other papers, not re-run.</li>
-  <li>Real-robot: only "ours with vs without pretraining", 2 tasks × 20 trials; no π0.5-style real baseline.</li>
-  <li>§5.1 lists four loss weights for three losses, and Table 4 gives a different Causal Imprint weight.</li>
-  <li>The +36 with GPT-6 Astra is on 5 tasks picked because the model was weak there.</li>
-</ul>
-</div>
-
-<h3>What to remember</h3>
-<ol>
-  <li>Future video is a training signal only; inference = one video prefill + action-only denoising.</li>
-  <li>The VLM choice (+15.6) and the future-feature alignment (+5.7) do most of the work; the named Δz prediction alone adds +1.7.</li>
-  <li>Data value follows robot-likeness: teleop &gt; UMI &gt; Ego2Robot &gt; raw ego.</li>
-</ol>
 </section>
 
 </body>
