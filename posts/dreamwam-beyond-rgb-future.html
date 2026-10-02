@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DreamWAM — Motion, Depth and DINO as Training-Only Future Targets — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>DreamWAM — Motion, Depth and DINO as Training-Only Future Targets</h1>
+<p class="paper-meta">Paper: <em>DreamWAM: Beyond RGB Future Prediction for World Action Models</em> —
+Yuan, Zhao, Shi, Jiang, Guo, Liu, Liu, Sui &amp; Wang (HUST · D-Robotics · Wuhan U · Horizon Robotics), Aug 2026,
+<a href="https://arxiv.org/abs/2608.04996">arXiv:2608.04996</a> ·
+<a href="https://github.com/hustvl/DreamWAM">code</a>.
+This note walks through the model step by step with tensor shapes, then the questions I had to work out:
+why flow can be denoised like RGB but depth and DINO cannot, what each teacher outputs, the losses, and the
+train/test gap.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The idea in one line</h3>
+<pre class="calc">train:  VideoDiT predicts future  RGB + optical flow (denoised)  + depth + DINO (gated residual heads)
+        ActionDiT shares attention with VideoDiT → learns from this richer future
+test:   plain Fast-WAM — RGB only, flow channels = 0, all extra branches and teachers removed</pre>
+
+<h3>Notation</h3>
+<table>
+  <tr><th>Symbol</th><th>Meaning</th></tr>
+  <tr><td>Shapes</td><td>written as channels × time × height × width</td></tr>
+  <tr><td><code>z_rgb</code></td><td>future RGB clip (9 frames) encoded by the frozen Wan2.2 VAE: <b>48 × 3 × 14 × 28</b></td></tr>
+  <tr><td><code>z_mot</code></td><td>RAFT optical flow, drawn as colour pictures, encoded by the same VAE: <b>48 × 3 × 14 × 28</b></td></tr>
+  <tr><td><code>f_geo</code></td><td>Depth Anything V3 depth → log → 14×28 grid → PCA to 8: <b>8 × 3 × 14 × 28</b></td></tr>
+  <tr><td><code>f_sem</code></td><td>DINOv2 ViT-B/14 patch features (768-d) → PCA to 8 → 14×28: <b>8 × 3 × 14 × 28</b></td></tr>
+  <tr><td><code>h̄_ℓ</code></td><td>output of VideoDiT block ℓ before the extra branches</td></tr>
+  <tr><td><code>R_ℓ^j</code>, <code>g_ℓ^j</code></td><td>residual branch and its gate for view j ∈ {geo, sem}</td></tr>
+  <tr><td><code>P_j</code></td><td>prediction head (DPT) that reads the last hidden state and predicts <code>f_j</code></td></tr>
+  <tr><td>VideoDiT / ActionDiT</td><td>Wan2.2-5B video expert / action expert, coupled by shared attention (from Fast-WAM)</td></tr>
+  <tr><td>Action chunk</td><td>32 steps; 10 executed, then replan; 10 denoising steps</td></tr>
+</table>
+
+<h3>Step by step</h3>
+<ol>
+  <li><b>Start from Fast-WAM.</b> Two experts with their own weights. Paired layers put video and action tokens
+      into one attention, so the action expert can read what the video expert is modelling.</li>
+  <li><b>Make three extra future targets offline</b> from every 9-frame training clip (all teachers frozen):
+<pre class="calc">RGB clip                      9 × 3 × H × W        (H×W ≈ 224×448, two views side by side — my inference)
+
+motion:  RAFT on 8 pairs  →   8 × 2 × H × W        (dx, dy per pixel)
+         colour-code      →   8 × 3 × H × W
+         copy first       →   9 × 3 × H × W
+         Wan2.2 VAE       →  48 × 3 × 14 × 28      ← same as RGB latent
+
+depth:   DA3-Base per view → depth map per frame
+         log, 14×28 cells, PCA-8, time 9→3   →   8 × 3 × 14 × 28
+
+DINO:    DINOv2 ViT-B/14 (registers), 768-d patches
+         PCA-8, resize 14×28, time 9→3, norm →   8 × 3 × 14 × 28
+
+time 9→3 = keep frame 1 | mean of frames 2–5 | mean of frames 6–9</pre></li>
+  <li><b>RGB + motion: joint denoising.</b> Same flow-matching time t for both:
+      <code>x = (1−t)·z + t·noise</code>. Stack them on channels → 96 × 3 × 14 × 28 into the VideoDiT.</li>
+  <li><b>Depth + DINO: gated residual branches.</b> In chosen VideoDiT layers:
+<pre class="calc">h̄  = Block(h_prev)
+h  = h̄ + g_geo(h̄, c) ⊙ R_geo(h̄)  +  g_sem(h̄, c) ⊙ R_sem(h̄)
+f̂_j = P_j(h_last)        → compared with the 8 × 3 × 14 × 28 target</pre>
+      The main stream <code>h̄</code> stays intact; the branches only add a small, gated correction.</li>
+  <li><b>Loss.</b>
+<pre class="calc">L = λ_rgb·L_FM(rgb) + λ_mot·L_FM(mot)          ← flow matching on latents
+  + λ_geo·L_pred(geo) + λ_sem·L_pred(sem)        ← feature prediction from P_j
+  + λ_act·L_act                                  ← action flow matching
+  + λ_g·L_gate                                   ← L1 on gate values (keep gates small)</pre>
+      The λ values and the exact form of L_pred (MSE / cosine) are not given.</li>
+  <li><b>Inference.</b> Same interface as Fast-WAM. Flow channels are filled with zeros, so the first layer
+      becomes <code>W_rgb·z_rgb + b</code>. RAFT, DA3, DINOv2, the residual branches and the heads are all removed.
+      Output: the denoised action chunk only.</li>
+</ol>
+
+<h3>Training data</h3>
+<table>
+  <tr><th>Setting</th><th>Data</th><th>Notes</th></tr>
+  <tr><td>LIBERO</td><td>4 suites × 500 demos = <b>2,000 demos</b> (40 tasks)</td><td>8 × H20, bf16, lr 1e-5, batch 16, 2 seeds. No LIBERO-Plus data in training.</td></tr>
+  <tr><td>Real robot (AgileX PiPER)</td><td>4 tasks × 400 = <b>1,600 demos</b></td><td>LeRobot v2.1, pooled multi-task, 5 epochs; 30 trials × 7 settings = 210 rollouts per model</td></tr>
+</table>
+
+<h3>Results</h3>
+<table>
+  <tr><th>Benchmark</th><th>Baseline</th><th>DreamWAM</th></tr>
+  <tr><td>LIBERO, no rollout (Fast-WAM → DreamWAM-uncond)</td><td>97.30</td><td>98.40</td></tr>
+  <tr><td>LIBERO, joint (Fast-WAM-Joint → DreamWAM)</td><td>98.00</td><td>98.90</td></tr>
+  <tr><td>LIBERO-Plus, no rollout</td><td>51.36</td><td><b>63.44</b> (+12.1)</td></tr>
+  <tr><td>LIBERO-Plus, joint</td><td>69.16</td><td>75.47 (+6.3)</td></tr>
+  <tr><td>Real, standard tasks</td><td>90.8</td><td>96.7</td></tr>
+  <tr><td>Real, light / background / distractors</td><td>55.6</td><td><b>74.4</b></td></tr>
+</table>
+<p>Small gains in-distribution and large gains under visual shift: the extra targets mostly buy robustness.</p>
+
+<h3>Routing ablation (Table 3, LIBERO avg, D = denoise, R = gated residual)</h3>
+<table>
+  <tr><th>Variant</th><th>Mot / Geo / Sem</th><th>Avg</th></tr>
+  <tr><td>RGB only</td><td>– / – / –</td><td>98.00</td></tr>
+  <tr><td>Motion only</td><td>D / – / –</td><td>98.50</td></tr>
+  <tr><td>Motion only</td><td>R / – / –</td><td>97.85</td></tr>
+  <tr><td>Geometry only</td><td>– / D / –</td><td><b>96.80</b></td></tr>
+  <tr><td>Geometry only</td><td>– / R / –</td><td>98.15</td></tr>
+  <tr><td>Semantics only</td><td>– / – / D</td><td><b>96.80</b></td></tr>
+  <tr><td>Semantics only</td><td>– / – / R</td><td>98.10</td></tr>
+  <tr><td>w/o motion</td><td>– / R / R</td><td>97.50</td></tr>
+  <tr><td>All denoise</td><td>D / D / D</td><td>97.85</td></tr>
+  <tr><td><b>DreamWAM</b></td><td>D / R / R</td><td><b>98.90</b></td></tr>
+</table>
+<p>Each view has a route that suits it: flow likes denoising, depth and DINO like residuals. Putting depth/DINO into
+denoising drops <i>below</i> the RGB-only baseline. Motion is the most important view: removing it hurts most.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="keypt"><b>At test time this is exactly Fast-WAM.</b> Motion, depth and DINO only shape the shared
+VideoDiT weights during training. Same bet as InternW0-Δ: use the future as a training signal, then switch it off.</div>
+
+<h3>Q&amp;A — why flow goes with RGB, but depth and DINO do not</h3>
+
+<div class="qa"><div class="q">What is the motion input, and why can it be processed the same as RGB?</div>
+<p>Motion is RAFT optical flow between neighbouring frames, <b>drawn as a colour picture</b> (colour = direction,
+brightness = speed). A colour picture is just a normal 3-channel image, so it can go through the same Wan2.2 VAE and
+comes out as <b>48 × 3 × 14 × 28</b> — exactly the RGB latent shape. Same shape → stack on channels → denoise both
+with one VideoDiT at the same noise level.</p></div>
+
+<div class="qa"><div class="q">Does that mean the Wan VAE was trained on flow?</div>
+<p><b>No.</b> The Wan VAE was trained on normal videos/images. It does not need to know the picture is flow — it is a
+general image compressor, and flow pictures are smooth colour patches, easy to compress. The correct claim is
+<i>flow can be put into the same format as RGB</i>, not that the VAE knows flow. Two things the paper does not check:
+how well the VAE reconstructs flow pictures (blur = lost fine motion), and the VideoDiT never saw flow latents in
+pretraining either — it learns them during DreamWAM fine-tuning.</p></div>
+
+<div class="qa"><div class="q">Why can't depth and DINO be denoised the same way?</div>
+<p>They are not pictures, so they can't go through the VAE. They come from other networks with different channel
+counts and value ranges. Stacking them as extra denoising channels forces the whole VideoDiT to model foreign
+statistics, which the authors say damages the pretrained video prior. The ablation backs this: geometry by denoising
+96.80, by residual 98.15; semantics 96.80 vs 98.10; all-denoise 97.85, below the RGB-only 98.00. So technically
+you <i>can</i> denoise them — it just works worse.</p></div>
+
+<h3>Q&amp;A — the teachers</h3>
+
+<div class="qa"><div class="q">What does RAFT take in and give out?</div>
+<pre class="calc">input:   frame t     3 × H × W
+         frame t+1   3 × H × W
+output:  flow        2 × H × W      (dx, dy per pixel, full resolution)
+
+example pixel: dx = 3, dy = −1  →  moves 3 px right, 1 px up</pre>
+<p>Per 9-frame clip: 8 × 2 × H × W raw flow → 8 × 3 × H × W colour pictures → copy first → 9 × 3 × H × W → VAE →
+48 × 3 × 14 × 28. The paper does not give H × W (≈224 × 448 inferred from the 14 × 28 latent and the VAE's 16× spatial
+shrink), and does not say whether RAFT runs per camera view or on the joined image — on the joined image, flow near
+the seam would be wrong.</p></div>
+
+<div class="qa"><div class="q">Is RAFT a neural network or a classical method?</div>
+<p>A <b>deep neural network</b> (Teed &amp; Deng, ECCV 2020), about 5M parameters, trained supervised on flow datasets
+(FlyingChairs, FlyingThings, Sintel, KITTI). Three parts: a CNN encoder (features at 1/8 size), an all-pairs
+correlation volume (every pixel of frame 1 vs every pixel of frame 2), and a GRU that starts from flow = 0 and refines
+it 12–32 times, then upsamples. The classical, non-learned methods are Lucas–Kanade and Horn–Schunck. In DreamWAM
+RAFT is frozen and used offline only.</p></div>
+
+<div class="qa"><div class="q">What does Depth Anything V3 output, and what size is the target?</div>
+<p>DA3-Base outputs <b>one depth map per camera view</b> (one depth value per pixel). Raw resolution is not stated.
+Build steps: split the two views → DA3 on each → join back → log depth → cut into a 14 × 28 grid, each cell one
+local descriptor → PCA to 8 channels (fit on training data only) → time 9 → 3. Final:
+<b>8 × 3 × 14 × 28</b>. DINO follows the same recipe from 768-d patch features, also <b>8 × 3 × 14 × 28</b>.</p>
+<p>Shape check (my own): Wan2.2 VAE shrinks 16× in space and 4× in time → 224 × 448 / 16 = 14 × 28, and
+9 frames → 1 + 8/4 = 3 time steps. Consistent.</p></div>
+
+<h3>Q&amp;A — losses</h3>
+
+<div class="qa"><div class="q">What are the geometry, semantic and gate losses?</div>
+<ul>
+  <li><b>Geometry / semantic:</b> head <code>P_j</code> (a DPT head) reads the last VideoDiT hidden state and
+      predicts the 8 × 3 × 14 × 28 target; the loss compares it with the precomputed DA3 / DINO target. Form not given.</li>
+  <li><b>Gate:</b> L1 penalty on gate values → gates are pushed toward 0, so the branches can only make small
+      corrections and never replace the main video signal.</li>
+  <li>None of the λ weights are reported.</li>
+</ul></div>
+
+<h3>Q&amp;A — the train / test gap</h3>
+
+<div class="qa"><div class="q">The motion input is off and the branches are removed at inference. Does that gap hurt?</div>
+<p><b>Yes, there is a real gap; the net effect is still positive; its cost is never measured.</b></p>
+<p><b>Gap A — zero flow channels.</b> At inference the 48 flow channels are zeros, so the input layer becomes
+<code>W_rgb·z_rgb + b</code>. Training only partly matches: the flow channels of the <i>current</i> frame are zero
+in training too, but the <i>future</i> flow channels are always noisy flow latents, never zeros. In joint mode the
+future tokens see an input they never saw in training.</p>
+<p><b>Gap B — removed residual branches.</b> Training: <code>h = h̄ + g·R</code>. Inference: <code>h = h̄</code>.
+The ActionDiT learned to attend to the version with residuals. The L1 gate penalty is what makes this safe:</p>
+<pre class="calc">|h̄| ≈ 1.0,  |g·R| ≈ 0.02   →  removing the branch shifts the state by ≈ 2%</pre>
+<p>But actual gate values are not reported.</p>
+<p><b>What the evidence says:</b> every reported number is measured <i>with</i> the gap, so the gains (e.g.
+51.36 → 63.44) are what is left after paying for it. Two easy ablations are missing: (1) keep the residual branches
+on at inference — they only need <code>h̄</code>, not DA3 or DINO, so this is free; (2) start the flow channels from
+noise and denoise them with RGB instead of filling with zeros.</p></div>
+
+<div class="callout"><b>Interesting side number:</b> the gap between no-rollout and joint inference shrinks from
+17.80 (Fast-WAM) to 12.02 (DreamWAM) on LIBERO-Plus. Part of what test-time imagination supplied is now baked into
+the weights — training-time future structure and test-time rollout are complementary, not interchangeable.</div>
+
+</section>
+
+</body>
+</html>
