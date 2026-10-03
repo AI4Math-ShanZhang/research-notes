@@ -113,6 +113,11 @@ const BLOG = {
       ],
       papers: [
         {
+          name:    "Looped Diffusion Transformer",
+          link:    "https://arxiv.org/abs/2609.40305",
+          summary: "Chng, Chen, Tong, Diao, Cai, Yang, Liu, Lu, Lin &amp; Huang. Looped-DiT scales text-to-image generation by running the same Transformer blocks several times inside each denoising step, instead of adding parameters or adding more denoising steps; deep supervision on every intermediate loop and self-modulating attention keep the repeated updates stable. A 260M looped model beats a model 6.5× larger on several text-to-image benchmarks at 4.9× lower inference compute, and under a fixed budget more loops help more than more denoising steps — with later loops visibly fixing mistakes made by earlier ones.",
+        },
+        {
           name:    "KV-Lingo — Learning KV-Cache Translators with Distillation",
           link:    "https://arxiv.org/abs/2609.32610",
           summary: "Castin, Sakamoto, Filippova, Monteiro, Cuturi &amp; Ablin. Different LLMs write incompatible KV caches, so switching models mid-context usually means re-reading the whole context. KV-Lingo learns linear maps (about one per target layer) that translate one model's KV cache into another's, trained by distillation so the target's predictions match those from its own cache. 9.6× faster time-to-first-token after a switch on 64-token prompts (Qwen, M3 Ultra) and up to 29× at 32k context on H100, with strong quality in both small→large and large→small directions.",
