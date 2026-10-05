@@ -47,6 +47,14 @@ const BLOG = {
       ],
       notes: [
         {
+          title:   "LOTUS — Supervising Looped Latents with the Gold CoT",
+          file:    "posts/lotus-looped-latent-cot.html",
+          date:    "2026-10-05",
+          paper:   "Fan, Svete &amp; Lee · arXiv:2606.31779",
+          tags:    ["looped TF", "latent CoT", "supervision", "Coconut", "GSM8K"],
+          summary: "A looped padded transformer with 6 blocks × 25 blank latent slots, looped 6 times, where each slot gets a small CE (weight 0.05) against its gold CoT token from GSM8K-Aug (one <<…>> equation per block). The CoT is never written at test time — the answer reads the hidden vectors — and on Llama-3.2-3B it reaches 70.0% on GSM8K vs 71.5% for explicit CoT with a 2.5× faster thinking phase. Covers where the gold CoT comes from, the aux-decoder variant (teacher-forced, block t read at loop t), and a side-by-side of how the thinking is supervised in CoT, looped TF, Ouro, Coconut and LOTUS — in particular why LOTUS's step CE (blank slots, no gold tokens in the input, no argmax) differs from normal per-token CE.",
+        },
+        {
           title:   "KV-Lingo — Translating One Model's KV Cache into Another's",
           file:    "posts/kv-lingo-kv-cache-translators.html",
           date:    "2026-10-01",

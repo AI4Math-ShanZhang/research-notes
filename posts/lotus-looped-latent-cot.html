@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LOTUS — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral' });</script>
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .notation{ background:#f6f8fb; border:1px solid #dde3ee; border-radius:8px; padding:.7rem 1rem; margin:1rem 0; }
+  .notation dt{ font-weight:600; margin-top:.4rem; }
+  .notation dd{ margin:0 0 .2rem 1.2rem; }
+  pre.seq{ background:#f7f7f7; border:1px solid #e3e3e3; border-radius:6px; padding:.6rem .8rem; overflow-x:auto; font-size:.88rem; line-height:1.45; }
+  .hl{ color:#2c6fbe; font-weight:600; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>LOTUS — Supervising Looped Latents with the Gold CoT</h1>
+<p class="paper-meta">Paper: <em>Bridging the Gap Between Latent and Explicit Reasoning with Looped Transformers</em> —
+Ying Fan, Anej Svete &amp; Kangwook Lee, <a href="https://arxiv.org/abs/2606.31779">arXiv:2606.31779</a>.
+Code: <a href="https://github.com/yingfan-bot/lotus">yingfan-bot/lotus</a>.</p>
+
+<!-- ===== Conclusion (top-of-page TL;DR) ===== -->
+<section class="section" style="background:#eef7f1;border-left:5px solid #2EAF8E;">
+<h2 style="color:#1f7a5e;">✅ In one line</h2>
+<p>Keep a looped transformer, give it 6 blocks of blank "latent" slots, loop 6 times, and put a small
+cross-entropy loss on each slot against its <b>gold CoT token</b>. At test time the CoT is never written out —
+the answer reads the hidden vectors directly. On Llama-3.2-3B this reaches 70.0% on GSM8K vs 71.5% for
+explicit CoT, with a 2.5× faster thinking phase.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>Notation</h3>
+<dl class="notation">
+  <dt>Q</dt><dd>the question tokens.</dd>
+  <dt>T<sub>1</sub>, …, T<sub>S</sub></dt><dd>the gold CoT steps (S steps). T<sub>i,j</sub> = token j of step i.</dd>
+  <dt>A</dt><dd>the answer tokens.</dd>
+  <dt>&lt;lat&gt;</dt><dd>one learnable blank token, copied into every latent slot.</dd>
+  <dt>K</dt><dd>number of latent blocks, fixed at 6. Block i is meant to hold step T<sub>i</sub>.</dd>
+  <dt>c</dt><dd>slots per block: 25 on Llama (13 on GPT-2, 50 for the natural-language data). So K·c = 150 slots.</dd>
+  <dt>R</dt><dd>number of loops, 6.</dd>
+  <dt>h<sup>(t)</sup></dt><dd>hidden vectors at the 150 latent slots after loop t. h<sup>(R)</sup> = after the last loop.</dd>
+  <dt>L<sub>step</sub></dt><dd>CE of each slot against its gold CoT token (the "CoT supervision").</dd>
+  <dt>L<sub>ans</sub></dt><dd>ordinary next-token CE on the answer.</dd>
+  <dt>λ</dt><dd>weight of L<sub>step</sub>: 0.05 (0.033 for natural language). Total loss = L<sub>ans</sub> + λ · L<sub>step</sub>.</dd>
+</dl>
+
+<h3>Step 1 — The gold CoT (from an existing dataset)</h3>
+<p>The authors do not build the CoT themselves. They use <b>GSM8K-Aug</b> (Deng et al. 2023). Original GSM8K
+solutions contain calculator tags inside sentences; GSM8K-Aug drops the sentences, keeps only the tags, and grows
+~7.5K training problems to <b>385,620</b> (the growing was done by Deng et al., with GPT-4).</p>
+<pre class="seq">GSM8K:      Janet sells 16 - 3 - 4 = &lt;&lt;16-3-4=9&gt;&gt;9 duck eggs a day.
+            She makes 9 * 2 = $&lt;&lt;9*2=18&gt;&gt;18 every day at the market.  #### 18
+
+GSM8K-Aug:  &lt;&lt;16-3-4=9&gt;&gt;  &lt;&lt;9*2=18&gt;&gt;  #### 18
+            \__ step 1 _/  \_ step 2 _/</pre>
+<p>One <code>&lt;&lt;…&gt;&gt;</code> = one step. 99% of examples have ≤ 6 steps, hence K = 6. A natural-language
+version (Wu et al. 2025, each step a full sentence) is used as a stress test.</p>
+
+<h3>Step 2 — Build the input: blank slots between question and answer</h3>
+<pre class="seq">Q  &lt;BoT&gt;  [lat × 25]  [lat × 25]  [lat × 25]  …  [lat × 25]  &lt;EoT&gt;  A
+           \ block 1 /  \ block 2 /                \ block 6 /
+           target:       target:                   (no step 6 → padding, no loss)
+           &lt;&lt;16-3-4=9&gt;&gt;  &lt;&lt;9*2=18&gt;&gt;</pre>
+<p>Each gold step is tokenized and padded or cut to 25 tokens; padding gets no loss. Steps beyond the 6th get no
+step loss and fall back to autoregressive completion.</p>
+
+<h3>Step 3 — Loop: refine all 150 slots together, 6 times</h3>
+<p>The question is encoded once into a KV cache. Then the same LM runs over the latent slots R = 6 times. Each loop
+gets the blank embeddings plus the previous loop's hidden vectors (input injection):
+h<sup>(0)</sup> = f(E | Q), &nbsp; h<sup>(t)</sup> = f(E + h<sup>(t−1)</sup> | Q). Gradients flow back through all 6 loops.
+All 150 slots are processed <b>in parallel</b> in each loop — 6 sequential passes in total, not 150.</p>
+
+<h3>Step 4 — Step loss: read each slot through the LM head</h3>
+<p>After the last loop, every slot goes through the normal LM head and gets a CE against <em>its own</em> gold token:</p>
+<pre class="seq">block 1:  slot 1 → "&lt;&lt;"   slot 2 → "16"   slot 3 → "-"   slot 4 → "3"  …  slot 8 → "9"
+block 2:  slot 1 → "&lt;&lt;"   slot 2 → "9"    slot 3 → "*"   …</pre>
+<p>All slots are scored at once. No slot sees the earlier gold tokens.</p>
+
+<h3>Step 5 — Answer loss: a second pass that reads the hidden vectors</h3>
+<p>In a separate pass, the post-loop hidden vectors h<sup>(6)</sup> are inserted at the latent positions, and the
+answer "#### 18" is trained with ordinary next-token CE. The latents are <b>never</b> turned into tokens for this —
+the answer reads the vectors. Total loss = L<sub>ans</sub> + 0.05 · L<sub>step</sub>.</p>
+
+<h3>Step 6 — The aux variant (LOTUS-aux)</h3>
+<p>Same loop, same answer loss; only the step loss is routed differently. An <b>auxiliary decoder</b> (a full copy of the
+base LM, trained together with it, used only in training) reads block t at loop t as a 25-vector prefix and predicts
+the gold step token by token with teacher forcing:</p>
+<pre class="seq">aux decoder input:   [25 latents of block 1]  &lt;&lt;   16   -    3   …
+predict:                                  &lt;&lt;   16   -    3    -   …</pre>
+<table>
+  <tr><th></th><th>LOTUS</th><th>LOTUS-aux</th></tr>
+  <tr><td>Who reads the latents</td><td>base LM head, each slot alone</td><td>extra decoder, autoregressive</td></tr>
+  <tr><td>Sees earlier gold tokens?</td><td>no</td><td>yes (teacher forcing)</td></tr>
+  <tr><td>When read</td><td>after the last loop</td><td>block t at loop t</td></tr>
+  <tr><td>Extra model in training</td><td>none</td><td>a full LM copy</td></tr>
+  <tr><td>At inference</td><td colspan="2">identical — loop 6×, decode only the answer</td></tr>
+</table>
+
+<h3>Step 7 — Training recipe</h3>
+<p>Start from an explicit-CoT checkpoint on the same data. Then a Coconut-style curriculum: every epoch, one more written
+step becomes a latent block, and the loop count grows with it (R = number of blocks):</p>
+<pre class="seq">epoch 0:   Q  &lt;&lt;16-3-4=9&gt;&gt;  &lt;&lt;9*2=18&gt;&gt;  18     ← plain CoT
+epoch 1:   Q  [block 1]     &lt;&lt;9*2=18&gt;&gt;  18     (R = 1)
+epoch 2:   Q  [block 1]     [block 2]   18     (R = 2)
+…
+epoch 6+:  Q  [6 blocks]                18     (R = 6, final)</pre>
+<p>30 epochs, batch 128, AdamW, lr 5e-5 on 3B.</p>
+
+<h3>Step 8 — Results (Llama-3.2-3B, GSM8K test)</h3>
+<table>
+  <tr><th>Method</th><th>GSM8K</th><th>OOD avg</th></tr>
+  <tr><td>Explicit CoT</td><td>71.5</td><td>62.1</td></tr>
+  <tr><td>No CoT</td><td>38.3</td><td>50.4</td></tr>
+  <tr><td>CODI + SIM-CoT</td><td>62.3</td><td>62.8</td></tr>
+  <tr><td><b>LOTUS</b></td><td><b>70.0</b></td><td><b>63.9</b></td></tr>
+  <tr><td>LOTUS-aux</td><td>69.9</td><td>63.7</td></tr>
+</table>
+<p>Thinking phase: explicit CoT 338.8 ms → LOTUS 133.0 ms per example (2.5×; whole pipeline 384.2 → 181.2 ms, 2.1×).
+On natural-language CoT: 963.6 → 140.8 ms (6.9×) at equal accuracy (68.4 vs 68.1).
+At small scale the aux variant breaks: GPT-2 gives 35.5 (aux) vs 44.1 (LOTUS).</p>
+
+<p>Supervision ablation (all keep L<sub>ans</sub>):</p>
+<table>
+  <tr><th>Latent supervision</th><th>Acc</th></tr>
+  <tr><td>None (answer CE only)</td><td>63.3</td></tr>
+  <tr><td>CODI only</td><td>64.4</td></tr>
+  <tr><td>LOTUS, LM head, every loop</td><td>68.2</td></tr>
+  <tr><td><b>LOTUS, LM head, after last loop (default)</b></td><td><b>70.0</b></td></tr>
+  <tr><td><b>LOTUS-aux, block t at loop t (default)</b></td><td><b>69.9</b></td></tr>
+  <tr><td>LOTUS-aux, after last loop</td><td>68.4</td></tr>
+</table>
+<p>Loops matter: training with R = 2 / 4 / 6 gives 14.6 / 52.6 / 70.0. Width matters: c = 1 gives 49.7, c = 5 gives 67.5,
+c = 25 gives 70.0. Both losses matter: per-slot gold top-1 is 70.9% with both, 9.1% with step loss only, 9.4% with
+answer loss only.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>The question I kept asking: how is the thinking supervised?</h3>
+<p>Every method below uses plain cross-entropy. What differs is <b>which positions get a label</b> and <b>what the model
+sees as input</b> while learning.</p>
+<table>
+  <tr><th>Method</th><th>Loss on the thinking?</th><th>How the thinking learns</th><th>Writes CoT at test time?</th></tr>
+  <tr><td><b>Explicit CoT</b></td><td>yes — next-token CE on every reasoning token</td><td>directly from labels</td><td>yes</td></tr>
+  <tr><td><b>Looped TF</b> (paper setting)</td><td>no — answer CE only</td><td>gradient back through the loops (up through depth)</td><td>no</td></tr>
+  <tr><td><b>Ouro</b></td><td>yes, if the text has reasoning — next-token CE on every token, each token looped 4×</td><td>labels + extra depth per token</td><td>yes (Thinking version)</td></tr>
+  <tr><td><b>Coconut</b></td><td>no — the ● vectors get no loss; curriculum starts from CoT</td><td>gradient back through the ● chain (sideways along positions)</td><td>no</td></tr>
+  <tr><td><b>LOTUS</b></td><td>yes — CE on each latent slot vs its gold token, weight 0.05</td><td>labels on the latents + loops + answer gradient</td><td>no</td></tr>
+</table>
+<p>So LOTUS fixes exactly the gap of the pure looped TF and Coconut: their thinking had no label at all.</p>
+
+<h3>LOTUS step CE vs normal per-token CE</h3>
+<p>Both put a CE on the gold CoT tokens. The difference is the input and what happens at test time.
+Gold step 1 = <code>&lt;&lt;16-3-4=9&gt;&gt;</code>.</p>
+
+<p><b>Explicit CoT / Ouro</b> (per-token CE, teacher forcing):</p>
+<pre class="seq">input:    Q  &lt;&lt;   16   -    3    -    4    =    9   &gt;&gt;
+predict:     16   -    3    -    4    =    <span class="hl">9</span>    &gt;&gt;  …</pre>
+<p>Each position sees the <b>true earlier tokens</b> and predicts the <b>next</b> one. To predict "9", the input
+already contains <code>&lt;&lt;16-3-4=</code>.</p>
+
+<p><b>LOTUS</b> (CE on latent slots):</p>
+<pre class="seq">input:    Q  [lat] [lat] [lat] [lat] [lat] [lat] [lat] [lat] [lat] …   (blank)
+          → 6 loops over all slots together →
+predict:     &lt;&lt;    16    -     3     -     4     =     <span class="hl">9</span>     &gt;&gt;</pre>
+<p>Every slot starts <b>blank</b>; no gold token is ever in the input. Slot 8 must produce "9" without being given
+<code>&lt;&lt;16-3-4=</code> — it has to work it out from the question, through the loops, jointly with the other slots.</p>
+
+<table>
+  <tr><th></th><th>Per-token CE (CoT / Ouro)</th><th>LOTUS step CE</th></tr>
+  <tr><td>Input during training</td><td>gold tokens (teacher forcing)</td><td>blank learnable slots, no gold tokens</td></tr>
+  <tr><td>Target</td><td>next token (shifted by 1)</td><td>this slot's token (slot j = token j)</td></tr>
+  <tr><td>Order</td><td>left to right, sees the past</td><td>all at once, sees no gold past</td></tr>
+  <tr><td>Where the thinking lives</td><td>written tokens</td><td>hidden vectors refined by 6 loops</td></tr>
+  <tr><td>What reaches the answer</td><td>discrete tokens (argmax bottleneck)</td><td>hidden vectors (no argmax)</td></tr>
+  <tr><td>Weight in total loss</td><td>the main loss</td><td>helper, 0.05 × step CE</td></tr>
+  <tr><td>At test time</td><td>writes every CoT token one by one</td><td><b>never writes the CoT</b>; 6 loops, then answer</td></tr>
+</table>
+
+<div class="callout">
+<p><b>Why the last rows matter.</b></p>
+<ul>
+  <li><b>No argmax:</b> the answer reads the hidden vectors, not decoded tokens, so a slot can hold
+  "maybe 9, maybe 10" and still be useful. The paper's readouts look messy (e.g. "1818", repeated "18") yet the
+  answer is right — the CoT only needs to be roughly there.</li>
+  <li><b>Small weight:</b> in CoT, every reasoning token being exact is the whole job. In LOTUS the step loss only
+  <em>points</em> the latents at the gold steps; the answer loss picks a version that actually works. Hence 70.9% gold
+  top-1 with both losses, ~9% with either alone.</li>
+  <li><b>Not a chain:</b> the step loss treats slots as independent (product of per-slot probabilities, not
+  autoregressive). The dependence between steps is carried by the loops computing all slots jointly, not by the loss.</li>
+</ul>
+</div>
+
+<h3>Where the extra compute goes</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph CoT["Explicit CoT: sideways"]
+    direction LR
+    c1[pass] --> c2[pass] --> c3[pass] --> c4["... N passes"] --> ca[answer]
+  end
+  subgraph LOTUS["LOTUS: upward, 150 slots in parallel"]
+    direction LR
+    l1[loop 1] --> l2[loop 2] --> l3["... loop 6"] --> la[answer]
+  end
+</div>
+<p>CoT pays one sequential pass per thinking token. LOTUS pays 6 sequential passes no matter how many slots, which is why
+widening c from 1 to 50 only moves thinking latency from 111 to 141 ms.</p>
+
+<h3>Things to keep in mind</h3>
+<ul>
+  <li>K, c and R are fixed. Problems with more than 6 steps get no step supervision on the tail.</li>
+  <li>Only math (GSM8K-style) is tested, and the gold steps are short equations; the natural-language run needs c = 50.</li>
+  <li>It still depends on having gold CoT data — the latents are trained to imitate it, not discover new steps
+  (though the readouts do put some mass on valid unseen paths: 64% of unseen-path numbers appear in the top-5).</li>
+</ul>
+
+<p>Related notes: <a href="cot-vs-latent-thought.html">CoT vs Latent Thought</a> ·
+<a href="ouro-looped-language-models.html">Ouro</a> ·
+<a href="diffusion-lm-reasoning.html">Masked Diffusion LMs = padded looped TF</a>.</p>
+</section>
+
+</body>
+</html>
