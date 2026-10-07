@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Causal-JEPA and Slot Attention — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Causal-JEPA and Slot Attention — objects as tokens</h1>
+<p class="paper-meta">Paper: <em>Causal-JEPA: Learning World Models through Object-Level Latent Masking</em>,
+<a href="https://arxiv.org/abs/2602.11389">arXiv:2602.11389</a> (v2, May 2026),
+code at <a href="https://github.com/galilaigroup/cjepa">galilaigroup/cjepa</a>.
+Background paper: <em>Object-Centric Learning with Slot Attention</em> — Locatello et al., NeurIPS 2020,
+<a href="https://arxiv.org/abs/2006.15055">arXiv:2006.15055</a>.
+This note first explains slot attention (and the GRU inside it), then how C-JEPA builds, masks and predicts slot tokens.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>Notation</h3>
+<table>
+  <tr><th>Symbol</th><th>Meaning</th></tr>
+  <tr><td><code>N</code></td><td>number of slots per frame (7 in CLEVRER, 4 in Push-T; one slot is the background)</td></tr>
+  <tr><td><code>z_τ^i</code></td><td>slot of object <i>i</i> at time τ, a 128-d vector from the frozen encoder</td></tr>
+  <tr><td><code>t0</code></td><td>first frame of the history window (the <b>identity anchor</b>)</td></tr>
+  <tr><td><code>M</code></td><td>set of objects chosen for masking (random, 0–4 in CLEVRER, 0–2 in Push-T)</td></tr>
+  <tr><td><code>φ</code></td><td>a linear layer</td></tr>
+  <tr><td><code>e_τ</code></td><td>learned time embedding for step τ</td></tr>
+  <tr><td><code>f</code></td><td>the predictor: a bidirectional ViT-style transformer</td></tr>
+</table>
+
+<h3>Two stages</h3>
+<ol>
+  <li><b>Train the slot encoder, then freeze it.</b> Main choice: VideoSAUR. Frozen DINOv2 ViT-S/14 gives 196 patches
+      (384-d) per frame. They are projected to 128-d and grouped by slot attention (2 rounds) into N slots. Loss: reconstruct
+      the DINOv2 features + a temporal similarity loss. No labels. Trained separately on each dataset (CLEVRER, Push-T),
+      100k steps. A SAVi encoder (CNN, 64×64, pixel reconstruction) is also used, to compare fairly with baselines.</li>
+  <li><b>Train the predictor on the frozen slots.</b> Slots are extracted once for every video and saved.
+      Predictor: 6 layers, 16 heads, MLP 2048, 128-d tokens, 30 epochs, batch 256, one GPU. Actions and proprioception
+      can be added as extra "auxiliary" tokens (small 1-D conv embedders).</li>
+</ol>
+
+<h3>Object-level masking</h3>
+<ul>
+  <li>Every (time, slot) is one token. CLEVRER: 6 history + 10 future frames × 7 slots = 112 tokens.</li>
+  <li>The future slots of <b>all</b> objects are always masked (they are what we predict).</li>
+  <li>The chosen objects in <code>M</code> are also masked over the <b>whole history</b>, except at <code>t0</code>.</li>
+  <li>A masked token is not a blank vector. It carries the object's identity:</li>
+</ul>
+<pre class="calc">masked token  z̃_τ^i  =  φ( z_t0^i )  +  e_τ
+                         "which object"   "which time"</pre>
+<p>The slots have no fixed order and no object position encoding, so without the anchor the model could not tell
+which hole belongs to which object.</p>
+
+<h3>Loss</h3>
+<pre class="calc">L = mean over masked tokens of  || ẑ_τ^i − z_τ^i ||²
+  = history part (fill hidden objects in the past)
+  + future part  (predict all objects in the future)</pre>
+<p>Targets are the frozen encoder's real slots, so there is no EMA target encoder. At test time there is no history
+masking: the full history is given and only the future is predicted.</p>
+
+<h3>Results</h3>
+<table>
+  <tr><th>Setting</th><th>No history masking (OC-JEPA)</th><th>C-JEPA</th></tr>
+  <tr><td>CLEVRER VQA, VideoSAUR, overall (per question)</td><td>82.8</td><td>89.4 (|M| = 4)</td></tr>
+  <tr><td>CLEVRER counterfactual (per question)</td><td>47.7</td><td><b>68.8</b> (+21)</td></tr>
+  <tr><td>Push-T planning success</td><td>OC-DINO-WM 60.7</td><td>88.7 (DINO-WM with patches: 91.3)</td></tr>
+</table>
+<p>The biggest gain is on "what if" questions. On Push-T, C-JEPA nearly matches patch-based DINO-WM with about 1% of the
+input size (6 × 128 vs 196 × 384 per step). With the weaker SAVi encoder, masking too many objects (4) hurts.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="qa">
+<div class="q">Q1. What is slot attention?</div>
+<p>It takes many feature vectors (patches) and groups them into <b>K slots</b>, each meant to be one object.
+No labels; the only training signal is reconstructing the input.</p>
+<ol>
+  <li>Sample K slots from one learned Gaussian. No slot is "the kettle slot" in advance.</li>
+  <li>query = W_q · slot, key = W_k · input, value = W_v · input.</li>
+  <li>score = key · query / sqrt(D) → an N_patches × K table.</li>
+  <li><b>Softmax over the slots, not over the inputs.</b> Each pixel splits itself among the slots, so slots compete.</li>
+  <li>For each slot, weighted mean of the values (divide by the column sum) = the update.</li>
+  <li>slot = GRU(old slot, update), then slot = slot + MLP(LayerNorm(slot)).</li>
+  <li>Repeat 2–6 for 2–3 rounds. Decode each slot to an image + mask, combine, and train on reconstruction.</li>
+</ol>
+<p><b>Small example</b> — 4 pixels, 2 slots; p1, p2 = red ball, p3, p4 = blue background:</p>
+<pre class="calc">        scores (A, B)   softmax over slots
+p1      (2, 0)          A 0.88   B 0.12
+p2      (2, 0)          A 0.88   B 0.12
+p3      (0, 2)          A 0.12   B 0.88
+p4      (0, 1)          A 0.27   B 0.73
+
+slot A column = [0.88, 0.88, 0.12, 0.27], sum 2.15
+mean weights  = [0.41, 0.41, 0.06, 0.13]   → slot A ≈ the ball</pre>
+<div class="warn">Weak points: K is fixed; slots have no order (video versions start each frame from the last frame's
+slots); slots often split or merge objects in cluttered real scenes.</div>
+</div>
+
+<div class="qa">
+<div class="q">Q2. What is GRU(old slot, update)?</div>
+<p>A small learned unit that decides <b>how much to change</b> the slot. <code>h</code> (the GRU's "hidden state")
+<b>is</b> the old slot; <code>x</code> (the GRU's "input") is the attention update. Same vectors, GRU names.</p>
+<pre class="calc">z = sigmoid(Wz·x + Uz·h)          update gate, 0..1
+r = sigmoid(Wr·x + Ur·h)          reset gate, 0..1
+c = tanh(W·x + U·(r * h))         candidate
+new slot = (1 − z) * h + z * c</pre>
+<p>Example: h = 0.5, x = 0.9, z = 0.3, c = 0.8 → new = 0.7 × 0.5 + 0.3 × 0.8 = <b>0.59</b>. The slot moves part of the way.</p>
+<ul>
+  <li><b>Why tanh?</b> It keeps c in −1..+1, so the mix of old and c stays bounded and cannot explode over many steps.
+      It can go negative (sigmoid cannot), so features can move up or down. Sigmoid is kept for the gates.</li>
+  <li><b>r and z do different jobs.</b> r = what the proposal is built from (use old memory or start fresh).
+      z = how much of the final state the proposal replaces.</li>
+  <li><b>Why not just new slot = c?</b> That is a plain RNN, and it works, but it rewrites the slot every round.
+      A slot that is already right drifts: with noisy updates, 0.80 → 0.72 → 0.68 with c only, vs
+      0.80 → 0.79 → 0.78 with z = 0.1. The (1 − z) · h path is a direct copy path (like a ResNet skip), which also
+      keeps gradients from fading through tanh.</li>
+</ul>
+</div>
+
+<div class="qa">
+<div class="q">Q3. How is the 16 × 7 slot grid built?</div>
+<p>Slot attention runs <b>frame by frame</b>, over the 196 patches of one frame. Frames are linked because each frame's
+slots <b>start from the previous frame's slots</b> (through a small transition network).</p>
+<pre class="calc">frame 1: random start → slot attention → slot1 = ball₁, slot2 = bg₁
+frame 2: start from (ball₁, bg₁)        → slot1 = ball₂, slot2 = bg₂
+frame 3: start from (ball₂, bg₂)        → slot1 = ball₃, slot2 = bg₃</pre>
+<p>So slot k keeps tracking the same object. Stack 16 frames → 16 × 7 grid → flatten to 112 tokens, add the time
+embedding, then mask.</p>
+<div class="keypt">Two different "across": slot attention attends across <b>patches inside one frame</b> (to make the
+objects); the C-JEPA transformer attends across <b>all slots in all frames</b> (to learn dynamics).</div>
+</div>
+
+<div class="qa">
+<div class="q">Q4. How does the masking work — cross-attention?</div>
+<p>No. Nothing is erased from the image either. Masking is <b>replacing vectors in the token list</b>, like BERT with
+objects instead of words:</p>
+<pre class="calc">           f1    f2   f3   f4   f5   f6 | f7 ... f16
+cube      real   M    M    M    M    M  | M  ...  M      ← chosen object
+ball      real  real real real real real| M  ...  M
+...(other 5 slots like ball)            | future: all M</pre>
+<p>One bidirectional self-attention transformer reads all 112 tokens at once. A masked cube token at f4 can look at the
+ball at f3–f5. The output is read only at masked positions. Because the cube's own past is hidden, the model cannot just
+copy its motion; it has to use the <b>other objects</b> — this is the "interaction" bias.</p>
+<p>Compare: MAE <em>drops</em> masked patches; I-JEPA / V-JEPA mask <em>patches or blocks</em>; C-JEPA masks
+<em>whole objects</em> and keeps placeholders.</p>
+</div>
+
+<div class="qa">
+<div class="q">Q5. So the vision tokens change from patches × frames to slots × frames?</div>
+<p><b>Yes, that is the main change.</b></p>
+<table>
+  <tr><th></th><th>Patch-based (DINO-WM, V-JEPA)</th><th>C-JEPA</th></tr>
+  <tr><td>tokens per frame</td><td>196 patches, 384-d</td><td>4–7 slots (+ aux), 128-d</td></tr>
+  <tr><td>Push-T size per step</td><td>196 × 384 = 75,264 numbers</td><td>6 × 128 = 768 (~1%)</td></tr>
+  <tr><td>one token means</td><td>a square of the image</td><td>one object</td></tr>
+  <tr><td>masking one token</td><td>hides part of an object, easy to guess from neighbours</td><td>hides the whole object</td></tr>
+</table>
+<ul>
+  <li><b>Gain:</b> much cheaper attention and planning; object masking becomes meaningful.</li>
+  <li><b>Loss:</b> fine detail (Push-T: patches 91.3 vs slots 88.7); errors of the slot encoder pass straight through;
+      N is fixed per dataset (choose max objects + 1).</li>
+  <li>One training sample is still one clip (frames × slots tokens), not one slot. More objects → more slots →
+      cost grows with the square of the token count, but stays far below patches (16 × 196 = 3,136 tokens).</li>
+</ul>
+</div>
+
+<div class="callout"><b>Link to other notes.</b> FIOC-WM (Feng, Lippe &amp; Magliacane, NeurIPS 2025, arXiv:2511.02225)
+also uses slot attention on DINOv2 and models interactions with an explicit graph. C-JEPA gets the interaction bias from
+<b>masking</b> instead of a graph, and cites FIOC-WM as related work.</div>
+</section>
+
+</body>
+</html>
