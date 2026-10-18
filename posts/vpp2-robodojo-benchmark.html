@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VPP2 on RoboDojo — the data, the benchmark, and how real-robot eval works — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>VPP2 on RoboDojo — the data, the benchmark, and how real-robot eval works</h1>
+<p class="paper-meta">Papers: <em>Video Prediction Policy 2: Predict Better, Act Better</em> —
+Guo, Yan, Zhong, Zhang, Yang et al. (RobotEra · Tsinghua · HKUST-GZ · UC Berkeley · SJTU), Oct 2026,
+<a href="https://arxiv.org/abs/2610.10270">arXiv:2610.10270</a> ·
+<a href="https://github.com/roboterax/video-prediction-policy-2">code</a>;
+and <em>RoboDojo: A Unified Sim-and-Real Benchmark for Comprehensive Evaluation of Generalist Robot Manipulation Policies</em> —
+Chen, Chen, Li et al. (HKU MMLab + ~20 institutions), Jul 2026,
+<a href="https://arxiv.org/abs/2607.04434">arXiv:2607.04434</a> ·
+<a href="http://robodojo-benchmark.com/">website</a> ·
+<a href="https://huggingface.co/datasets/RoboDojo-Benchmark/RoboDojo">data</a>.
+This note covers what VPP2 trains on, what RoboDojo actually tests, and the practical questions on running a VLA on
+RoboDojo's real robots.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>VPP2 in one line</h3>
+<pre class="calc">Stage 1: Wan2.1-I2V-14B  →  predict a WHOLE sub-task event (49 frames, detailed caption)
+Stage 2: predict a FIXED future window (8 s robot / 2 s hand), distill to 1-step (~0.12 s)
+Stage 3: add a 0.9B action DiT (MoT), reads the video latents → 2 s action chunk (~0.1 s)
+Test:    VLM splits the task into sub-tasks → VPP2 runs each one         total ≈ 0.22 s / chunk</pre>
+
+<h3>The pretraining data</h3>
+<table>
+  <tr><th>Type</th><th>Embodiment</th><th>Sources</th></tr>
+  <tr><td rowspan="3">Robot</td><td>Single-arm</td><td>OXE, RoboMIND, DROID, RH20T, MolmoAct</td></tr>
+  <tr><td>Dual-arm</td><td>AgiBot World-Beta, RoboCOIN, RDT, GM-100, ABC-130K, <b>own ALOHA data</b></td></tr>
+  <tr><td>Mobile &amp; humanoid</td><td>InternData-A1, Galaxea Open-World, <b>own dexterous-hand data</b></td></tr>
+  <tr><td>Human</td><td>Human hands</td><td>EgoDex, Ego4D, EPIC-KITCHENS, Something-Something V2, VITRA-1M, <b>own egocentric video</b></td></tr>
+  <tr><td>General video</td><td>Human hands</td><td>OpenVid, Panda-70M — filtered (as in LVP) to keep only manipulation clips</td></tr>
+</table>
+<p>More than 20 robot types in total. Two-arm, first-person data (ALOHA-style, humanoid, human) is <b>more than 80%</b>.
+The paper does <b>not</b> give total hours or clip counts.</p>
+
+<h3>How each clip is processed</h3>
+<ol>
+  <li><b>Clean</b> — drop broken videos (camera failure, jumps).</li>
+  <li><b>Cut into events</b> of 1–12 s, one sub-task each. Cut points: hand/gripper slows down, or gripper opens/closes.
+      A VLM then merges or fixes the cuts.</li>
+  <li><b>Detailed caption</b> by template: how the task is done; which hand/gripper moves (must be visible in frame 1);
+      which object, without ambiguity ("the leftmost yellow box"); camera view and motion (too much shake → removed by optical flow).</li>
+  <li><b>T-shape image</b> — main view on the left, two extra views stacked on the right, black if missing.</li>
+  <li><b>One action space</b> — every robot is mapped to a shared world frame and a shared gripper frame,
+      so "move left" means the same numbers in every dataset.</li>
+</ol>
+<div class="keypt"><b>Why detailed caption + whole event:</b> "place the bowl" + a short future clip matches many
+different futures, so the model learns weak short-range shortcuts. A detailed caption + the full event gives almost
+one clear future per instruction.</div>
+
+<h3>Results</h3>
+<ul>
+  <li>Video instruction-following: VPP2-14B 0.80 / 0.90 (human / robot) vs Cosmos3-64B 0.70 / 0.78.</li>
+  <li>Zero-shot real ALOHA, 10 task types: <b>58.5%</b> vs π0.5 40.0% vs Fast-WAM 20.5%.</li>
+  <li>LIBERO-Pro 45.0% (best baseline 11.0%), LIBERO-OOD 63.9%.</li>
+  <li>RoboDojo <b>simulation</b>: 32.26% success / 39.26 score, top of the leaderboard at the time.</li>
+</ul>
+
+<h3>RoboDojo in one table</h3>
+<table>
+  <tr><th></th><th>Simulation</th><th>Real world (RoboDojo-RealEval)</th></tr>
+  <tr><td>Engine / hardware</td><td>Isaac Sim + Isaac Lab, ARX X5 two-arm robot</td><td>ARX X5, Piper, Piper X — two-arm each</td></tr>
+  <tr><td>Tasks</td><td>42, in 5 dimensions</td><td>18 (6 per robot)</td></tr>
+  <tr><td>Training data</td><td>3,500 demos, 20.7 h, 25 Hz (motion planner or VR teleop)</td><td>1,800 teleop demos, 17.9 h, 25 Hz</td></tr>
+  <tr><td>Eval</td><td>50 episodes / task = 2,100; 3 seeds</td><td>10 trials / task, 3 blind human scorers</td></tr>
+  <tr><td>Best policy (paper)</td><td>8.80% (human teleop 76.03%)</td><td>π0.5 12.8% (human teleop 100%)</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="warn"><b>RoboDojo is not a sim-to-real transfer test.</b> The paper says it directly: "we do not construct
+one-to-one aligned task pairs between simulation and the real world." Sim policies train on sim data, real policies
+train on real data. VPP2 reports only the <b>sim</b> part.</div>
+
+<h3>Q&amp;A — the benchmark</h3>
+
+<div class="qa"><div class="q">What does each simulation dimension test, and what are the tasks?</div>
+<table>
+  <tr><th>Dimension</th><th>What it tests</th><th>Tasks</th></tr>
+  <tr><td><b>Generalization</b> (12)</td><td>New backgrounds, lighting, up to 25 clutter objects, new targets. 25 standard + 25 random episodes.</td>
+      <td>stack_blocks, arrange_largest_number, hang_mugs, pack_objects_into_box, make_toast, pour_liquid_into_cup, push_T, sort_nesting_dolls_by_size, fold_clothes, stack_bowls, store_laptop_and_headphones, sweep_blocks</td></tr>
+  <tr><td><b>Memory</b> (6)</td><td>The right action depends on something seen earlier.</td>
+      <td>cover_blocks, imitate_sorting_sequence, swap_T, press_by_number, match_and_pick_from_conveyor, swap_blocks</td></tr>
+  <tr><td><b>Precision</b> (8)</td><td>Exact placement, contact-rich control.</td>
+      <td>build_tower, deposit_coin, fasten_screws, insert_key, insert_tubes, play_Xylophone, plug_in_charger, pour_balls_into_vase</td></tr>
+  <tr><td><b>Long-Horizon</b> (8)</td><td>Many steps in a row, sometimes a hand-over between arms.</td>
+      <td>classify_objects, fill_egg_holder, fill_pen_holder, put_bottles_into_dustbin, make_kong, organize_table, play_stacking_toy, play_tic_tac_toe</td></tr>
+  <tr><td><b>Open</b> (8)</td><td><b>No training data.</b> Reuse learned skills for new language goals.</td>
+      <td>align_blocks, classify_objects_by_language, general_pickup, store_tools_into_toolbox, pick_from_conveyor_by_image, solve_equation, stack_blocks_by_language, pour_by_language</td></tr>
+</table>
+<p>Success rate = full task done. Score = also gives credit for finished steps. The final number is the mean over the
+5 <i>dimensions</i>, not over tasks, so Generalization (12 tasks) does not dominate.</p></div>
+
+<div class="qa"><div class="q">How did VPP2 do per dimension?</div>
+<pre class="calc">success %   Gen std 46.4 | Gen rand 12.6 | Precision 35.2 | Long-Horizon 37.0 | Memory 55.6 | Open 4.1
+avg = (mean(46.4, 12.6) + 35.2 + 37.0 + 55.6 + 4.1) / 5  ≈  32.3</pre>
+<p>Strong on memory (they add frame 0 + 8 past frames, one per second), but <b>Open is only 4%</b> — the dimension with
+no training data. GPT-6-Astra gets 31% there. Adding a VLM sub-task planner on 5 task groups raises them from 27.6% to
+57.6% (tic-tac-toe 0% → 38%).</p></div>
+
+<div class="qa"><div class="q">Do sim and real rankings agree?</div>
+<p>Only partly. π0.5 is best in real (12.8%) and also strong in sim, but some policies drop a lot on real robots.
+Real adds sensor noise, calibration error, actuation delay, contact instability and drift — things sim does not fully model.</p></div>
+
+<h3>Q&amp;A — the real robots</h3>
+
+<div class="qa"><div class="q">What are the 3 real robots and which tasks run on each?</div>
+<table>
+  <tr><th>Robot</th><th>Maker</th><th>Its 6 tasks</th><th>Avg. demo</th></tr>
+  <tr><td><b>ARX X5</b></td><td>ARX (6-DoF arm)</td><td>cover_blocks, make_bread, make_food, pack_and_pour_fruit, store_in_safe, insert_tubes</td><td>44 s</td></tr>
+  <tr><td><b>Piper</b></td><td>AgileX (6-DoF)</td><td>stack_and_cover_blocks, fill_pen_holder, put_objects_into_basket, insert_charger, stack_bowls, stand_up_bottles</td><td>36 s</td></tr>
+  <tr><td><b>Piper X</b></td><td>AgileX (newer Piper)</td><td>classify_objects, disassemble_LEGO, hang_mugs, pack_objects_into_backpack, sweep_blocks, cap_pen</td><td>27 s</td></tr>
+</table>
+<p>Same station for all: one Gemini 335L head camera + two Gemini 305 wrist cameras (640×480), a 1.2 m × 1.2 m table,
+fixed LED light and curtains, 3D-printed mounts. A start-layout image is overlaid on the live camera so staff can
+reset the scene the same way every trial.</p></div>
+
+<div class="qa"><div class="q">To evaluate on these robots, do I need to collect my own data on them?</div>
+<p><b>No.</b> The real training data is public (Apache-2.0, no gate) on
+<a href="https://huggingface.co/datasets/RoboDojo-Benchmark/RoboDojo">Hugging Face</a>:</p>
+<pre class="calc">data/RoboDojo_real/&lt;task&gt;/&lt;robot&gt;/data/episode_0000000.hdf5 ... episode_0000099.hdf5
+   → 100 demos per task × 18 tasks = 1,800 demos
+   → each ≈ 80 MB  →  ≈ 8 GB per task  →  ≈ 140–150 GB for all real data (my estimate)</pre>
+<p>Each demo: joint states, end-effector pose, language instruction, 3 camera videos. Collected with leader-follower
+teleop where the leader arm is the same robot type, so actions are in the robot's own joint space. The same repo has the
+sim data (raw + LeRobot v2.1 / v3.0, joint and end-effector) and baseline checkpoints.</p></div>
+
+<div class="qa"><div class="q">Do I run my VLA as a server, or send them my checkpoint?</div>
+<p><b>Both are allowed</b> (paper App. A.2: "submitting a deployable policy package or by connecting a remote policy server").</p>
+<pre class="calc">Your GPU (your lab)                         RoboDojo lab
+ VLA = policy SERVER   ←── 3 images + robot state ───   real robot = environment CLIENT
+                       ─── action chunk ──────────→     executes, asks again
+              WebSocket + MessagePack (XPolicyLab protocol)</pre>
+<ul>
+  <li><b>A. Your server:</b> weights never leave your machine — good for private testing. Watch the network delay: the
+      paper's own timing used a GPU on the same local network as the robot. Over the internet, use larger action chunks.</li>
+  <li><b>B. Policy package:</b> they run it on their GPU next to the robot — no delay, but you hand over the model.</li>
+</ul>
+<p><b>Official verified leaderboard</b> needs more: all 3 robots, a hidden-layout check, and at publication time you
+must release checkpoint + code + config through XPolicyLab. Otherwise the result goes to a separate, unofficial
+closed-source track. Test the server in sim first — sim uses the same client-server protocol.</p></div>
+
+<h3>Q&amp;A — VPP2's data</h3>
+
+<div class="qa"><div class="q">Is VPP2's "general video" robot data, or just for entertainment-style generation?</div>
+<p><b>Neither.</b> It is web video (OpenVid, Panda-70M, made for text-to-video) <b>filtered to keep only human hands
+manipulating objects</b>. Table 1 lists its embodiment as "Human hands". It is the same kind of content as Ego4D /
+EgoDex, but from random, often third-person web clips.</p>
+<table>
+  <tr><th>Stage</th><th>Uses general video?</th></tr>
+  <tr><td>1 — event-level video pretraining</td><td><b>Yes</b> — more varied hand-object scenes for prediction</td></tr>
+  <tr><td>2 — fixed window + distillation</td><td>Probably (not stated clearly)</td></tr>
+  <tr><td>3 — action model</td><td><b>No</b> — no robot actions; only aligned two-arm robot data</td></tr>
+</table>
+<p>It only teaches the model to <i>predict the future picture</i>; actions are read off that prediction later. The
+paper gives no size and only says the filter is "similar to LVP" (arXiv:2512.15840).</p></div>
+
+</section>
+
+</body>
+</html>
