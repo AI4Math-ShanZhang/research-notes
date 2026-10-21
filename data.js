@@ -47,6 +47,14 @@ const BLOG = {
       ],
       notes: [
         {
+          title:   "MemT-1.0 — Local Memory vs Hyper Memory, and How Training and Inference Use Them",
+          file:    "posts/memt-native-memory.html",
+          date:    "2026-10-21",
+          paper:   "MemTensor Team · arXiv:2610.26825",
+          tags:    ["native memory", "Gated DeltaNet-2", "parametric memory", "KV cache", "distillation", "Q&A"],
+          summary: "Local memory M is a fixed 40 MiB state per user, changed at inference by a forward-pass erase/write/decay rule; hyper memory φ is the 451M trained weights that decide how to write and read, updated by gradients only in training (distilled from the full-context backbone). Also: step t, read-path tensor shapes, how the gates are made (a parameter count that matches Table 6 exactly), and MemT vs text memory, KV cache, and fixed-budget token selection.",
+        },
+        {
           title:   "LOTUS — Supervising Looped Latents with the Gold CoT",
           file:    "posts/lotus-looped-latent-cot.html",
           date:    "2026-10-05",
@@ -120,6 +128,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "MemT-1.0 — Towards Memory-Native Evolution",
+          link:    "https://arxiv.org/abs/2610.26825",
+          summary: "MemTensor Team. Adds a fixed-size memory matrix to some layers of a frozen LLM (Qwen3.6-35B-A3B for Nano, DeepSeek-V4-Flash for Flash): after each 2K-token step the tokens are written in one by one with a stable Gated DeltaNet-2 rule (erase, write, decay), and later tokens read it back with a query, so the past no longer sits in the prompt. Only the memory weights are trained (34B tokens), by distilling the same backbone given the full text history. It is the best parametric memory (avg 50.6 vs 38.1 for Temp-LoRA) and 1.86× faster with 66× less storage than full context at 128K, but still well below text memory (full context 65.0, MemOS 68.6), especially for exact long recall.",
+        },
         {
           name:    "Looped Diffusion Transformer",
           link:    "https://arxiv.org/abs/2609.40305",

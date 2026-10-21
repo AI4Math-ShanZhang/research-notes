@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemT-1.0 — local memory vs hyper memory, and how training and inference use them — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>MemT-1.0 — local memory vs hyper memory, and how training and inference use them</h1>
+<p class="paper-meta">Paper: <em>MemT-1.0: Towards Memory-Native Evolution</em> — MemTensor Team, Oct 2026,
+<a href="https://arxiv.org/abs/2610.26825">arXiv:2610.26825</a> ·
+<a href="https://github.com/MemTensor/MemT-1.0">code</a> ·
+<a href="https://huggingface.co/collections/MemTensor/memt-1">models</a>.
+This note covers the two kinds of memory, how each one changes in training and at inference, the tensor shapes of the
+read path and the gates, and how MemT compares with text memory and with a KV cache.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The idea in one picture</h3>
+<pre class="calc">frozen LLM  +  a memory branch in some layers
+each layer:  output = normal attention (current step only)  +  memory attention (reads M)
+after each step:  write the step's tokens into M, token by token (erase · write · decay)
+M has a FIXED size → the past never has to sit in the prompt</pre>
+
+<h3>Models (Table 6)</h3>
+<table>
+  <tr><th></th><th>MemT-1.0-Nano</th><th>MemT-1.0-Flash</th></tr>
+  <tr><td>Backbone (frozen)</td><td>Qwen3.6-35B-A3B</td><td>DeepSeek-V4-Flash, after their own extra post-training</td></tr>
+  <tr><td>Memory layers</td><td>10 (3, 7, …, 39 — the full-attention layers)</td><td>20 (4, 6, …, 42)</td></tr>
+  <tr><td>Heads × d<sub>k</sub> × d<sub>v</sub></td><td>16 × 256 × 256</td><td>64 × 512 × 512</td></tr>
+  <tr><td>Trainable memory weights</td><td>451M</td><td>3.6B</td></tr>
+  <tr><td>Memory state per user</td><td>40 MiB</td><td>1,280 MiB</td></tr>
+</table>
+
+<h3>Training: 34B tokens, only the memory weights train</h3>
+<ol>
+  <li><b>Continued pre-training</b> (20B tokens, cross-entropy): long text cut into 2K segments; the model sees only the
+      current segment, so earlier segments must come through memory.</li>
+  <li><b>Post-training</b> (14B tokens, distillation): the <b>teacher</b> is the same backbone with the full text history;
+      the <b>student</b> is backbone + memory with no history text. Loss = KL to the teacher's top-64 tokens on the
+      answer tokens.</li>
+</ol>
+
+<h3>Results</h3>
+<table>
+  <tr><th>Memory benchmarks (avg of 11)</th><th>Score</th></tr>
+  <tr><td>MemOS (text)</td><td>68.6</td></tr>
+  <tr><td>Full context (text)</td><td>65.0</td></tr>
+  <tr><td>DenseRAG (text)</td><td>57.3</td></tr>
+  <tr><td><b>MemT-1.0-Flash / Nano</b></td><td><b>50.6 / 47.0</b></td></tr>
+  <tr><td>Temp-LoRA (best other parametric)</td><td>38.1</td></tr>
+</table>
+<ul>
+  <li><b>General ability</b> with noise in memory: Flash 0.0, Nano −0.9 vs backbone.</li>
+  <li><b>Speed (Nano)</b>: 128K history 16.2 s vs 30.1 s full context (1.86×); 256K 3.99×; query TTFT flat at ~104–112 ms.
+      Slower than full context below ~32K.</li>
+  <li><b>Storage</b>: fixed 40 MiB vs ~2.5 GiB KV cache at 128K (~66×).</li>
+  <li><b>Agents</b>: retrieved coding experience written into memory → SWE-bench Verified pass^3 54.0 → 62.8
+      (same experience as text: 61.8).</li>
+</ul>
+
+<h3>Ablations (Nano avg 47.0)</h3>
+<table>
+  <tr><th>Change</th><th>Δ avg</th></tr>
+  <tr><td>No post-training</td><td><b>−10.7</b></td></tr>
+  <tr><td>Turn-level write instead of token-level</td><td><b>−6.0</b></td></tr>
+  <tr><td>No continued pre-training</td><td>−2.1</td></tr>
+  <tr><td>Plain GDN-2 / GDN update rule</td><td>−0.5 / −0.3</td></tr>
+</table>
+<div class="warn">MoS (Mixture-of-Storage) is a headline part of the method, but both released models use <b>1 expert
+per layer</b> (Table 6). MoS is only tested as 2 vs 4 experts in a small scaling run (+2.7 avg).</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>Q&amp;A — the two memories</h3>
+
+<div class="qa"><div class="q">What is the local memory block, and what is the hyper memory?</div>
+<table>
+  <tr><th></th><th><b>Local memory</b> (M)</th><th><b>Hyper memory</b> (φ)</th></tr>
+  <tr><td>What it is</td><td>the memory <b>content</b>: a matrix that holds information</td><td>the <b>weights</b> that decide how to write to M and read from it</td></tr>
+  <tr><td>Size (Nano)</td><td>10 layers × 16 × 256 × 256 = 10.5M numbers = 40 MiB</td><td>Q/K/V projections + 4 gates = 451M parameters</td></tr>
+  <tr><td>Changed by</td><td>the <b>write rule</b>, in a forward pass</td><td><b>gradient descent</b></td></tr>
+  <tr><td>When</td><td>at <b>inference</b>, after each step</td><td><b>only in training</b></td></tr>
+  <tr><td>Copies</td><td>one per user / trajectory, starts at 0</td><td>one for everyone, saved in the model file</td></tr>
+  <tr><td>Analogy</td><td>the notebook page — <i>what</i> is written</td><td>the note-taking skill — <i>how</i> to write and look things up</td></tr>
+</table>
+<p>The backbone (35B) is a third part, frozen all the time.</p></div>
+
+<div class="qa"><div class="q">How does training update them?</div>
+<pre class="calc">FORWARD   (one sample: 64K pack = 32 steps × 2K, then a query)
+  M_1 = 0
+  step 1: read M_1 → write step-1 tokens with φ → M_2
+  step 2: read M_2 → write                      → M_3   ...   → M_33
+  query:  read M_33 → predict answer
+          loss = KL(full-context teacher ‖ student)     ← only on answer tokens
+
+BACKWARD
+  loss → reads of M_33 → back through every write step (32 … 1) → into φ
+  update φ only · backbone frozen · M is thrown away</pre>
+<p>History tokens get no direct loss, but the gradient tells φ which history <i>should have been kept</i> to answer the
+question (paper: "gradients from response predictions propagate through memory readout and earlier storage operations").</p></div>
+
+<div class="qa"><div class="q">How does inference use the memory?</div>
+<pre class="calc">new user → M = 0
+step 1:  read M (empty) → answer → write turn 1 into M      (forward pass only)
+step 2:  read M         → answer → write turn 2 into M
+...
+step 50: M holds 49 turns — still 40 MiB
+user done → reset M (or save the 40 MiB to continue later)</pre>
+<p>No gradients and no weight changes at inference. M changes only because the write rule is part of the forward pass,
+like an RNN hidden state.</p></div>
+
+<div class="qa"><div class="q">Why can memory "update with experience" — during inference or only training?</div>
+<p>Experience updates the <b>local memory M at inference</b>, not the weights. In the agent experiment, experience text
+goes through one forward pass with writing on → M is updated → later actions read M → M is reset at the end of the task.</p>
+<ul>
+  <li>✅ Updates during inference, within one user / task.</li>
+  <li>❌ No learning across tasks: M is reset, and φ never changes from experience.</li>
+  <li>Consolidating local memory into hyper memory is listed as future work (Sec. 8).</li>
+</ul>
+<table>
+  <tr><th>Method</th><th>What changes at inference</th><th>How</th><th>128K cost</th></tr>
+  <tr><td>MemT</td><td>state M</td><td>forward pass</td><td>16 s</td></tr>
+  <tr><td>Temp-LoRA</td><td>LoRA weights</td><td>gradient training</td><td>700 s</td></tr>
+  <tr><td>Full context</td><td>KV cache grows</td><td>forward pass</td><td>30 s</td></tr>
+</table></div>
+
+<div class="qa"><div class="q">So the hyper memory is the important part — it learns how to manage memory?</div>
+<p>Yes. φ is the learned memory manager: W<sub>K</sub>, W<sub>V</sub> decide <i>what</i> to store; erase β, write ω and
+forget λ decide <i>how much</i> to remove, add and fade; W<sub>Q</sub> decides what to ask; the output gate decides how
+much to trust the readout. The ablation backs this up: no post-training −10.7, but a different update formula only
+−0.3 to −0.5.</p>
+<p>Limits: φ is fixed after training (the same manager for every user), its gates see only the current token (it cannot
+decide "this is already stored, skip it"), and memory size, backbone and teacher still cap the result.</p></div>
+
+<h3>Q&amp;A — steps and shapes</h3>
+
+<div class="qa"><div class="q">What is the step t?</div>
+<p>One interaction step: input X<sub>t</sub> + response Y<sub>t</sub>. M<sub>t</sub> = memory before step t (holds steps
+1 … t−1); it stays fixed while step t is read and generated, then the step's tokens are written one by one (index i) to
+give M<sub>t+1</sub>. In practice a step is usually a <b>2,048-token chunk</b>: a 128K history = 64 write steps.</p>
+<table>
+  <tr><th>Index</th><th>Meaning</th></tr>
+  <tr><td>t</td><td>which step / turn</td></tr>
+  <tr><td>i</td><td>which token inside step t, when <b>writing</b></td></tr>
+  <tr><td>k</td><td>which token is being generated, when <b>reading</b></td></tr>
+</table></div>
+
+<div class="qa"><div class="q">Is it for multi-step conversation, not one-step QA?</div>
+<p>Yes. With a single question and no history, M = 0, so the readout q·M = 0 and the model is just the backbone. But
+"multi-step" also covers one long input, since the paper cuts long text into 2K steps. The memory benchmarks write the
+history first (2K per step), then ask short questions that read the final memory. General-ability tests fill memory
+with unrelated noise first, to check that bad memory doesn't hurt.</p></div>
+
+<div class="qa"><div class="q">What are the tensor shapes of MemoryAttention(H̃ ; M<sub>t</sub>)? (Nano, one layer)</div>
+<pre class="calc">H̃  input hidden                                  (L, 2048)
+Q  = L2Norm(H̃ · W̃_Q)      16 heads × (2048→256)   (16, L, 256)
+R  = Q · M / sqrt(256)     M: (16, 256, 256)       (16, L, 256)   ← cost does not depend on history length
+RMSNorm(R) per head                                (16, L, 256)
+G  = H̃ · W_g/d · W_g/u     2048→256→256 per head   (16, L, 256)
+RMSNorm(R) ⊙ SoftCapSiLU(G)   2·tanh(SiLU(G)/2)    (16, L, 256)
+concat heads                                       (L, 4096)
++ backbone gated attention output                  (L, 4096)
+frozen o_proj 4096→2048                            (L, 2048)  → residual</pre>
+<p>4096 = 16 × 256 matches the backbone's query heads, so memory is added before the frozen o_proj. W̃<sub>Q</sub> is
+copied from the backbone's query projection at init. While decoding one token, L = 1.</p></div>
+
+<div class="qa"><div class="q">How are the gates generated — what input, what network?</div>
+<p>Every gate is a linear projection of the <b>current token's pre-norm hidden state H̃ only</b> (no MLP, no input from M).</p>
+<table>
+  <tr><th>Gate</th><th>Used in</th><th>Network</th><th>Function</th><th>Shape</th></tr>
+  <tr><td>β erase</td><td>write</td><td>dense 2048 → 4096</td><td>sigmoid</td><td>(L, 16, 256)</td></tr>
+  <tr><td>ω write</td><td>write</td><td>dense 2048 → 4096</td><td>sigmoid</td><td>(L, 16, 256)</td></tr>
+  <tr><td>λ forget</td><td>write</td><td>2048 → 256 → 4096 + bias</td><td>−exp(s<sub>h</sub>)·Softplus</td><td>(L, 16, 256)</td></tr>
+  <tr><td>G output</td><td>read</td><td>2048 → 256 → 256 per head</td><td>SoftCapSiLU</td><td>(L, 16, 256)</td></tr>
+</table>
+<pre class="calc">write, per token i:   u = sqrt(β) ⊙ k
+                      M ← (I − uᵀu) · Decay · M  +  uᵀ (ω ⊙ v)      Decay = exp(λ)
+
+parameter check per layer:
+  Q,K,V 3×(2048×4096) + β,ω 2×(2048×4096)          = 41,943,040
+  forget 2048×256 + 256×4096 + 4096 + 16           =  1,576,976
+  output 2048×256 + 256×4096                       =  1,572,864
+  memory norm gain                                 =        256
+  = 45,093,136 × 10 layers = 450,931,360           ← Table 6 exactly</pre>
+<div class="keypt"><b>Init matters.</b> The forget projection starts at 0 and its bias gives each key channel a half-life
+drawn from 2,048–32,768 tokens (decay per token 2<sup>−1/τ</sup>), so some channels start with short memory and some with
+long memory. The output gate starts near 0, so memory starts "off" and the model begins as the plain backbone.</div>
+<p>Unlike LSTM gates, which also see the previous hidden state, MemT's gates see only the current token. That keeps the
+write fast and parallel, but the gate cannot react to what is already stored.</p></div>
+
+<h3>Q&amp;A — compared with other memory</h3>
+
+<div class="qa"><div class="q">Parametric memory vs text memory?</div>
+<table>
+  <tr><th></th><th>Text memory (full context, RAG, MemOS)</th><th>Parametric memory (MemT, Temp-LoRA)</th></tr>
+  <tr><td>Saved as</td><td>the original words</td><td>compressed numbers</td></tr>
+  <tr><td>Exact details</td><td>✅ kept</td><td>❌ may blur</td></tr>
+  <tr><td>Prompt / storage</td><td>grows with history</td><td>fixed</td></tr>
+  <tr><td>Readable / editable</td><td>✅</td><td>❌</td></tr>
+  <tr><td>Score here</td><td>57–69</td><td>23–51</td></tr>
+</table>
+<p>Notebook vs what stays in your head. The biggest gap is exact long recall: LongMemEval-S full context 77.8, MemOS
+83.2, MemT-Flash 37.2.</p></div>
+
+<div class="qa"><div class="q">Parametric memory vs KV cache?</div>
+<p>MemT is basically a KV cache folded into one matrix:</p>
+<pre class="calc">KV cache:  keep (k_1,v_1) … (k_N,v_N)        read = Σ softmax(q·k_i) v_i      grows with N
+MemT:      M ≈ Σ k_iᵀ v_i (+ erase, decay)    read = q · M                     fixed size
+
+Nano KV per token = 10 layers × 2 KV heads × 256 × 2 (K,V) × 2 bytes = 20 KB
+128K × 20 KB ≈ 2.5 GiB   vs   40 MiB  → ~63× (paper ~66×)
+256K × 20 KB ≈ 5.0 GiB   (paper Fig. 3: 5.061 GiB ✓)</pre>
+<p>"Full context" in the paper is the KV-cache method: text → (encode once) → KV cache → (compress) → M.</p></div>
+
+<div class="qa"><div class="q">But a KV cache can also be fixed-size, by token selection?</div>
+<p>Yes — KV eviction (StreamingLLM, H2O, SnapKV, counter-causal eviction). Same budget: 40 MiB ÷ 20 KB ≈ <b>2,048 tokens
+kept exactly</b> (1.6% of a 128K history) vs MemT's <b>blurred trace of everything</b>.</p>
+<table>
+  <tr><th></th><th>Token selection</th><th>MemT</th></tr>
+  <tr><td>Kept facts</td><td>exact</td><td>approximate</td></tr>
+  <tr><td>Dropped facts</td><td>gone forever</td><td>weakened, not deleted</td></tr>
+  <tr><td>Fact updates (Sydney → Melbourne)</td><td>both may stay</td><td>erase-then-write built in</td></tr>
+  <tr><td>Training needed</td><td>usually no</td><td>yes (34B tokens)</td></tr>
+</table>
+<p>Both must decide before the question arrives. Their earlier model <b>Metis used token selection</b>; MemT replaced it,
+but the paper shows no Metis vs MemT comparison on memory benchmarks, and on SWE-bench Metis has <b>higher pass^3 in all
+four settings</b> (App. E). Open idea: exact top-B tokens + a compressed M together.</p></div>
+
+</section>
+
+</body>
+</html>
