@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Has GPT-6-Astra Achieved Embodied Intelligence? — harness, ICL and failure recovery — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Has GPT-6-Astra Achieved Embodied Intelligence? — harness, ICL and failure recovery</h1>
+<p class="paper-meta">Paper: <em>Has GPT-6-Astra Achieved Embodied Intelligence?</em> — Joint Research Team (SenseNova),
+Oct 2026, <a href="https://arxiv.org/abs/2610.22471">arXiv:2610.22471</a> ·
+<a href="https://www.sensenova.ai/has-gpt-6-astra-achieved-embodied-intelligence">homepage</a>.
+This note covers the main results, the harness study, how the "in-context learning" really works, and what happens when
+the robot makes a mistake it cannot undo.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>The question and the answer</h3>
+<p>Can a frozen general model (GPT-6-Astra), with no robot fine-tuning, act as the robot policy itself? The paper tests
+it on <b>12 benchmarks</b> (tabletop arms, humanoid, mobile, dexterous hands, navigation) and on <b>8 real robots</b>.
+Their verdict: Astra has "largely crossed the threshold of embodied <i>competence</i>, but not yet that of practical
+embodied <i>intelligence</i>".</p>
+
+<h3>The protocol: two extras on top of the benchmark</h3>
+<ol>
+  <li><b>ICL from training data</b> — Astra studies the same demos that VLAs are trained on, and writes a frozen
+      "knowledge package" for each task (details in the Q&amp;A below).</li>
+  <li><b>Bigger step budget</b> — up to 10× the official step limit, in the same episode (no reset), so it can keep
+      correcting mistakes.</li>
+</ol>
+
+<h3>Results (success %, Table 2)</h3>
+<table>
+  <tr><th>Benchmark</th><th>Old best</th><th>Astra 1×</th><th>Astra up to 10×</th></tr>
+  <tr><td>LIBERO-Long++ / PRO / Ultra-Long</td><td>82.0 / 92.6 / 44.0</td><td>97.5 / 98.3 / 82.2</td><td>100 / 99.3 / 98.9</td></tr>
+  <tr><td>SIMPLE (humanoid)</td><td>92.5</td><td>96.3</td><td>98.8</td></tr>
+  <tr><td>VLN-CE RxR / R2R</td><td>76.5 / 81.3</td><td>82.0 / 80.0</td><td>90.0 / 88.0</td></tr>
+  <tr><td>DexJoCo</td><td>40.3</td><td>78.2</td><td>87.3</td></tr>
+  <tr><td>RoboDojo</td><td>31.4</td><td>27.6</td><td><b>81.9</b></td></tr>
+  <tr><td>RoboLab (no training set)</td><td>42.9</td><td>57.1</td><td>69.2</td></tr>
+  <tr><td>Bench2Dex</td><td>25.5</td><td>25.6</td><td>61.5</td></tr>
+  <tr><td>BEHAVIOR</td><td>14.8</td><td>37.0</td><td>–</td></tr>
+  <tr><td><b>LHPR-VLN</b> (long navigation)</td><td>5.3</td><td>21.1</td><td><b>28.9</b></td></tr>
+</table>
+
+<h3>Five open problems they name</h3>
+<ol>
+  <li>ICL does not transfer beyond the tasks the demos come from.</li>
+  <li>Cost and time: about 1M tokens and almost an hour per LIBERO-Long++ episode, even at 97% success.</li>
+  <li>Checking physical success ("the mug looks hung, but it isn't").</li>
+  <li>Recovery from irreversible failures (spills, dropped parts).</li>
+  <li>Keeping track of progress over long horizons.</li>
+</ol>
+
+<h3>Real robots</h3>
+<p>Good at tabletop grasping and active vision (it moves the camera to see better). Weak on deformable objects, precise
+contact and long tasks. Two gaps compared with sim: real demos for ICL are expensive, and you cannot just "add 10× steps"
+on hardware because of safety, wear and real time.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>Q&amp;A — the harness</h3>
+
+<div class="qa"><div class="q">What does "expose action spaces aligned with the model's reasoning capabilities while
+delegating precise execution to lower-level controllers, with adaptive interaction" mean?</div>
+<p>It is the one-line conclusion of the harness study (Sec. 3, all on RoboDojo). Three parts, each with the paper's numbers:</p>
+<p><b>1. Give the model commands it can "think in".</b></p>
+<table>
+  <tr><th>Command type</th><th>Example</th><th>Success</th></tr>
+  <tr><td>Directional motion</td><td>"move left 5 cm"</td><td><b>18.06%</b></td></tr>
+  <tr><td>Hand (EEF) position — baseline</td><td>"go to x, y, z"</td><td>15.56%</td></tr>
+  <tr><td>Joint angles</td><td>"joint 3 = 0.42 rad"</td><td>9.72%</td></tr>
+</table>
+<p><b>2. Let a trained policy do the fine motion, with Astra checking it.</b></p>
+<table>
+  <tr><th>Setup</th><th>Success</th><th>Tokens / episode</th></tr>
+  <tr><td>π0.5 alone (fine-tuned on RoboDojo)</td><td>6.91%</td><td>–</td></tr>
+  <tr><td>Astra gives sub-goals, π0.5 executes (open-loop)</td><td>5.83%</td><td>0.39M</td></tr>
+  <tr><td>π0.5 proposes, Astra accepts / edits / rejects each move (L = 1)</td><td>23.61%</td><td>7.66M</td></tr>
+  <tr><td>Same, Astra reviews 4 moves per call (L = 4)</td><td>25.83%</td><td>2.80M</td></tr>
+  <tr><td>Closed-loop + ICL</td><td><b>54.17%</b></td><td>19.3M</td></tr>
+</table>
+<p><b>3. Let the model choose how many moves per call.</b></p>
+<table>
+  <tr><th>Chunking</th><th>Success</th><th>Tokens</th></tr>
+  <tr><td>L = 1 (baseline)</td><td>15.56%</td><td>2.56M</td></tr>
+  <tr><td>L = 4 fixed</td><td>11.39%</td><td>0.44M</td></tr>
+  <tr><td>Adaptive, L from 1 to 4</td><td><b>20.00%</b></td><td>1.15M</td></tr>
+</table>
+<div class="keypt">The paper says adaptive chunking costs more than <i>fixed</i> chunking — true. But compared with the
+baseline (L = 1), adaptive is <b>both better and cheaper</b>. The same holds for closed-loop review: L = 4 beats L = 1
+on both success and tokens.</div></div>
+
+<h3>Q&amp;A — navigation</h3>
+
+<div class="qa"><div class="q">NavGPT-3 makes navigation look solved, but Fig. 1 shows LHPR-VLN very low. Which is right?</div>
+<p>Both, for different tasks.</p>
+<ul>
+  <li><b>VLN-CE R2R / RxR</b> = one route, one instruction, succeed within 3 m. Astra 88–90%. This is what NavGPT-3
+      tests (plus ObjectNav and EQA). I checked: LHPR-VLN does not appear anywhere in the NavGPT-3 paper or repo.</li>
+  <li><b>LHPR-VLN</b> = 2–4 goals in a strict order. Every goal must be reached, and a wrong STOP moves to the next
+      stage anyway. Astra 28.9% — the <b>lowest of all 12 benchmarks</b>.</li>
+</ul>
+<pre class="calc">LHPR-VLN (114 episodes)     SR      ISR (single goals)
+Astra + ICL  1×            21.05    54.68
+Astra + ICL 10×            28.95    62.87     ← 10× steps adds only ~8 points
+RoboDojo     1× → 10×      27.6  →  81.9      ← compare: roughly triples</pre>
+<p>Each goal alone works about 60% of the time, but the full chain rarely does. The paper's explanation: the agent gets
+stuck on an intermediate goal, "loses track of its navigation plan, and resorts to aimless exploration". More time does
+not fix losing the plan. Note also that the 88–90% on R2R/RxR uses ICL from training scenes (landmark notes, routes).</p></div>
+
+<h3>Q&amp;A — how the "in-context learning" works</h3>
+
+<div class="qa"><div class="q">What is the pipeline — what goes in, what comes out, who orchestrates?</div>
+<p>It is <b>not</b> classic few-shot prompting. Astra studies the demos offline like a coding agent and writes notes and
+code for itself. Two phases:</p>
+<pre class="calc">PHASE 1 — preparation (once per task, offline)
+  training demos (e.g. 10 per RoboDojo task) or exploration of training scenes (VLN)
+        │ read through a restricted reader
+        ▼
+  GPT-6-Astra with file + Python tools: picks what is useful, writes notes and helpers
+        ▼
+  knowledge package K  →  hashed, frozen, read-only           (~3M tokens, ~30 min per RoboDojo task)
+
+PHASE 2 — each test episode (fresh session, nothing carried between episodes)
+  context = instruction + K + action interface
+  loop:  images + robot state + history  →  Astra reads K, runs a helper .py,
+         adapts a reference motion  →  returns next action / chunk
+         →  controller executes  →  new images + state  →  ...
+  stop:  success / terminal failure / budget used       (~15.6M tokens, ~82 min per RoboDojo episode at 1×)</pre>
+<table>
+  <tr><th>Part of K</th><th>Files</th><th>Content</th></tr>
+  <tr><td>Task guidance</td><td>.md</td><td>goals, stage order, strategy</td></tr>
+  <tr><td>Motion references</td><td>.npz</td><td>demo trajectories, grasps, phase anchors</td></tr>
+  <tr><td>Visual references</td><td>.png</td><td>demo frames, contact crops</td></tr>
+  <tr><td>Executable helpers</td><td>.py</td><td>FK / IK, retrieval, action generation</td></tr>
+  <tr><td>Checks &amp; recovery</td><td>.md .py</td><td>completion tests, failure → fix rules</td></tr>
+  <tr><td>Metadata</td><td>.md .py</td><td>robot specs, conventions, data sources</td></tr>
+</table>
+<table>
+  <tr><th>Benchmark</th><th>Model sees</th><th>Model returns</th><th>Who executes</th></tr>
+  <tr><td>RoboDojo</td><td>3 RGB views, joints, gripper, hand pose</td><td>per arm: xyz + quaternion + gripper, ≤ 5 cm / 0.35 rad per move</td><td>IK, 25 Hz</td></tr>
+  <tr><td>VLN-CE</td><td>1 front RGB, 512×512</td><td>forward 0.25 m / turn / STOP</td><td>simulator</td></tr>
+  <tr><td>LHPR-VLN</td><td>3 RGB views (left / front / right)</td><td>forward 0.25 m / turn 30° / STOP</td><td>simulator</td></tr>
+  <tr><td>SIMPLE</td><td>head RGB, 32-D state, URDF, FK/IK</td><td>chunk of shape (T, 36), T chosen by the model</td><td>official whole-body controller, 50 Hz</td></tr>
+</table>
+<p>Cleanest ICL effect: SIMPLE 4 tasks, 70.8% → 90.8%. The paper does <b>not</b> publish the prompts, the tool list, or
+whether K is loaded all at once or read file by file. Small detail: for LIBERO-PRO, K is another system's (RPent's)
+public exploration memory, reorganized by task.</p></div>
+
+<div class="qa"><div class="q">Does the ICL use video? Could the robot follow a human video instead of language?</div>
+<p>Only <b>robot</b> demo videos (DexJoCo, BEHAVIOR), used <b>offline</b> to build K; K itself keeps frames, not
+videos. The test instruction is always <b>language</b>. Human demonstrations are explicitly listed as "not yet evaluated"
+(Sec. 4.3).</p>
+<p>So "follow a human video to do the navigation task" is an open gap. Hard parts: the human video has no action labels;
+the viewpoint differs (phone at ~1.5 m vs robot camera); the robot must track where it is in the video (the same
+progress problem as LHPR-VLN); and many frames mean many tokens. A natural fit for this pipeline: preparation turns one
+human video into a "route package" (key frames + landmark list + stop rule), then the test loop matches the current view
+with the next key frame. Compare language only / video only / both.</p></div>
+
+<div class="qa"><div class="q">Is ICL only for GPT-6-Astra? Why not the VLA?</div>
+<p>Yes, only Astra. π0.5 gets the same demos by <b>fine-tuning</b> (weights change). Astra is closed, so it gets them
+through context — the paper's fairness argument. In "ICL + VLA closed-loop", K helps Astra (the checker), not π0.5.</p>
+<p>This kind of ICL is an agent skill: read many files, write and run Python, reason in language, hold millions of
+tokens. A VLA (~3B, image + instruction → action, short context, no tools) cannot "study" anything at test time. Some
+VLAs do a lighter ICL (demo trajectory as prompt: ICRT, GEN-1.5, Skild S1), but this paper does not test that.</p></div>
+
+<h3>Q&amp;A — checks, recovery and mistakes</h3>
+
+<div class="qa"><div class="q">Checks &amp; recovery: did the model try the task and fail first, or does it predict failures?</div>
+<table>
+  <tr><th>Benchmarks</th><th>Preparation source</th><th>Recovery rules are…</th></tr>
+  <tr><td>RoboDojo, SIMPLE, DexJoCo, Bench2Dex, BEHAVIOR</td><td>released demos only (mostly successful)</td><td><b>predicted</b> — from demo end states + general knowledge</td></tr>
+  <tr><td>VLN-CE, LHPR-VLN, LIBERO-PRO</td><td>exploration / practice in training scenes</td><td>from <b>real failures</b> in training scenes</td></tr>
+</table>
+<p>At test time recovery is always reactive: act → check → match symptom to a rule → fix. The checks often fail on
+physical details: in Hang mugs the handle <i>looks</i> like it is on the peg, so Astra thinks the mug is hung, but it is
+on the table. The paper has no ablation of this part alone.</p></div>
+
+<div class="qa"><div class="q">How can it run a completion test without the VLA moving the robot?</div>
+<p>In the main experiments (all 12 benchmarks) there is <b>no VLA</b>. Astra sends the motion commands; plain IK /
+controller code executes them. The VLA appears only in the Sec. 3 harness study. The check itself needs no extra motion:</p>
+<ol>
+  <li><b>Look check</b> — compare current images with the reference frames in K.</li>
+  <li><b>State check</b> — read the returned numbers: "gripper closed but width = 3 cm → something is in the hand".</li>
+  <li><b>Probe move</b> (sometimes) — a test lift, or turning the wrist camera to see a hidden part. Still Astra's own
+      command, and it costs steps.</li>
+</ol></div>
+
+<div class="qa"><div class="q">Since it sees the state, does it try actions in the simulator first and read the result?</div>
+<p><b>No.</b> Every command is really executed, and the state comes back only after the move. There are no resets in a
+test episode, and the simulator's object poses, contacts and hidden state are withheld. Before moving it can only do
+<b>robot geometry</b> with FK/IK ("where will my hand be?", "can I reach this?"), not object physics ("will the cup tip?").
+In the closed-loop setup, π0.5's proposals are turned into hand poses by FK — a calculation, not a simulation.</p></div>
+
+<div class="qa"><div class="q">If the liquid is already spilled, can it replan?</div>
+<p>Yes, but from the new, bad state. In Pour liquid, Astra saw the spill, set the cup upright and poured again — but the
+lost liquid was gone, and the episode failed "with most of its budget unused".</p>
+<table>
+  <tr><th>Failure</th><th>Can replanning fix it?</th></tr>
+  <tr><td>Block slips onto the table</td><td>✅ pick it up again</td></tr>
+  <tr><td>Grasp misses by 2 cm</td><td>✅ move and retry</td></tr>
+  <tr><td>Liquid spills</td><td>❌ lost</td></tr>
+  <tr><td>Peg falls to the floor (DexJoCo Assembly)</td><td>❌ out of reach — Astra parks the arms</td></tr>
+  <tr><td>Hard hit on a real robot</td><td>❌ damage, unsafe</td></tr>
+</table>
+<p>The paper's rule: "additional budget helps only when a recovery path still exists". That is why 10× helps RoboDojo a
+lot but not spills. For irreversible steps the model must <b>predict before acting</b>: smaller steps near risky moments
+(adaptive chunking), check part-way (tilt a little, look, tilt more), or a world model that can answer "will this tip?" —
+a tool Astra does not have here.</p></div>
+
+</section>
+
+</body>
+</html>
