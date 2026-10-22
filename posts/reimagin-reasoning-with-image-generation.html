@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReImaGin — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>ReImaGin — What the Model Asks the Image Generator to Draw</h1>
+<p class="paper-meta">Paper: <em>Reasoning with Image Generation</em> — Nishad Singhi, Hector Garcia Rodriguez,
+Aditya Arora, Marcus Rohrbach &amp; Anna Rohrbach (TU Darmstadt · hessian.AI), COLM 2026,
+<a href="https://arxiv.org/abs/2609.16409">arXiv:2609.16409</a>.</p>
+
+<!-- ===== Section 1: objective summary ===== -->
+<section class="section paper-summary">
+  <h2>📄 Paper Summary</h2>
+  <p>ReImaGin gives a multimodal LLM (Gemini-3.1-Pro, GPT-5 or Qwen-3.5-27B) one free-form tool,
+  <code>generate_image(prompt, images)</code>. It calls an image generator (mainly Nano-Banana-Pro) in the middle
+  of its reasoning to draw a helper picture, such as a line, a depth map or a floor plan, and then reads that picture
+  to answer. It is training-free, and across six visual reasoning tasks (including Spatial457 collision prediction
+  and MMSI multi-view spatial reasoning) it beats both text-only reasoning and the fixed-tool baseline Visual Sketchpad,
+  by up to 25 points on path tracing.</p>
+</section>
+
+<!-- ===== Section 2: key notes ===== -->
+<section class="section key-notes">
+  <h2>🖊 My Key Notes</h2>
+  <p>The instruction is not "draw what happens next". It is "draw a helper mark on the current image".
+  The MLLM writes the instruction itself, following a strategy and one worked example in its prompt.</p>
+  <table>
+    <thead>
+      <tr><th>Task</th><th>Instruction sent to the image generator</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Collision (handcrafted)</td><td>"Add a line through the yellow bus, in the direction the bus is currently facing, extending to both the front and the back."</td></tr>
+      <tr><td>Collision (discovered)</td><td>"Draw a bright red arrow starting from the front bumper of the green SUV and extending straight forward along its current heading to show its path."</td></tr>
+      <tr><td>Occlusion counting</td><td>"Remove the black square from the image to complete the pattern of chairs."</td></tr>
+      <tr><td>Path tracing</td><td>"Convert the dashed lines into solid lines."</td></tr>
+      <tr><td>Depth</td><td>"Create a depth map of this image" (discovered: "high-contrast grayscale depth map")</td></tr>
+      <tr><td>Multi-view room</td><td>Step 1: "Combine the two images to create a unified view". Step 2: "Create a top-down blueprint / map of this scene"</td></tr>
+      <tr><td>Puzzle</td><td>"Remove the white space from this image", then subtract the original image to get the missing piece</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</body>
+</html>
