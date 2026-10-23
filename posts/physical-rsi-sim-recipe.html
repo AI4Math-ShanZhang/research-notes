@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toward Recursive Self-Improvement in Physical AI — what AI coding improves, and why it (doesn't) count as RSI — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Toward Recursive Self-Improvement in Physical AI — what AI coding improves, and why it (doesn't) count as RSI</h1>
+<p class="paper-meta">Paper: <em>Toward Recursive Self-Improvement in Physical AI</em> — Meng Luo, Zechen Bai, Shanqing Xu,
+et al. (NUS, HUST, SJTU, NTU, HKBU), Oct 2026, <a href="https://arxiv.org/abs/2610.29677">arXiv:2610.29677</a> ·
+<a href="https://physical2rsi.github.io">project page</a> ·
+<a href="https://github.com/Physical2RSI/Awesome-Physical2RSI">awesome list</a>.
+This note covers what an AI coding agent can change in simulator training (the simulator or the training recipe), and
+why updating weights is not what makes something RSI.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>What kind of paper</h3>
+<p>A <b>survey / position paper</b> (~62 pages + appendix). It proposes no new method and runs no experiments. Its
+only new "method" is the design of a test for recursion (Sec. 4.4), which it leaves to future work.</p>
+
+<h3>Definition</h3>
+<p><b>Recursive self-improvement (RSI)</b> = a system improves not only its behavior but also the process by which it
+improves. The paper splits the system into two roles:</p>
+<ul>
+  <li><b>Learner</b> — the robot's policy / world model / memory. It gets updated.</li>
+  <li><b>Improver</b> — the part that revises the learning procedure (often an LLM coding agent).</li>
+</ul>
+
+<h3>Where a change is stored (Fig. 1)</h3>
+<ol>
+  <li>Policy &nbsp; 2. World model &nbsp; 3. External knowledge (memory, skills, code) → change <i>what the robot does</i></li>
+  <li value="4">Learning procedure (what data to collect, how to judge it, how to update) → changes <i>how it learns</i>.
+      Physical RSI starts here.</li>
+</ol>
+
+<h3>Ladder of claims</h3>
+<table>
+  <tr><th>Claim</th><th>Meaning</th><th>Recursive?</th></tr>
+  <tr><td>Behavioral improvement</td><td>the robot does the task better</td><td>No</td></tr>
+  <tr><td>Later-learning benefit</td><td>the change makes later learning easier</td><td>No</td></tr>
+  <tr><td>Procedure improvement</td><td>the learning recipe itself gets better</td><td>No</td></tr>
+  <tr><td><b>R1</b></td><td>lessons from past repairs make the improver better at the next repair</td><td>Yes</td></tr>
+  <tr><td><b>R2</b></td><td>the improved improver helps produce its own next improvement</td><td>Yes</td></tr>
+</table>
+
+<h3>Four conditions for gains to carry forward</h3>
+<ol>
+  <li>Feedback addresses what the learner still lacks (sensing shows only part of a failure).</li>
+  <li>The receiving component can use the change (on its body).</li>
+  <li>The value survives task or hardware change (wear, drift, gripper swap).</li>
+  <li>Continued practice stays safe and affordable.</li>
+</ol>
+
+<h3>Main finding</h3>
+<p>Existing studies (mostly manipulation) support the first three claims. Some systems change the improver's knowledge
+or tools (HARBOR, AURA, ENPIRE, PhysEvo), but <b>no physical study isolates a gain caused by recursion</b>. That needs a
+comparison against the same improver with its acquired knowledge frozen, on new failure types.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<div class="qa"><div class="q">For AI coding with the simulator, what can the AI improve: the simulator or the training recipe?</div>
+<p>An LLM coding agent writes or edits code around the simulator. The physics engine itself (Isaac, MuJoCo) usually stays
+fixed. The agent changes what goes <i>into</i> it and how training runs:</p>
+<table>
+  <tr><th>What the AI changes</th><th>Example system</th><th>Concretely</th></tr>
+  <tr><td>Reward function</td><td>Eureka, CARD</td><td>writes reward code ("+1 forward speed, −0.1 torque"), reads training stats, rewrites</td></tr>
+  <tr><td>Physics randomization ranges</td><td>DrEureka</td><td>picks "friction 0.3–1.5, mass ±20%" so the policy survives on the real robot</td></tr>
+  <tr><td>Tasks / environments</td><td>GenSim, RoboGen, Eurekaverse</td><td>writes new simulated tasks or terrains, harder each round but still learnable</td></tr>
+  <tr><td>Curriculum</td><td>AURA</td><td>stand → walk → step over obstacles, each stage with its own reward and settings</td></tr>
+  <tr><td>Hyperparameters / RL settings</td><td>HARBOR, AURA</td><td>learning rate, PPO settings, etc.</td></tr>
+  <tr><td>Simulator setup</td><td>HARBOR</td><td>builds the sim scene, then reward, then tuning, through gated sub-agents</td></tr>
+  <tr><td>Digital twin</td><td>D-World</td><td>a frozen LLM edits the twin after each real action; keeps the edit only if prediction error drops (one edit: 22.4 → 1.5 mm)</td></tr>
+  <tr><td>Training code / infrastructure</td><td>ENPIRE</td><td>edits training and policy code, runs real robot trials, keeps or drops each idea; safety / reset / checking code is locked</td></tr>
+  <tr><td>Its own tools</td><td>PhysEvo</td><td>a meta-agent edits the task agent's tools <i>and its own diagnostic tools</i></td></tr>
+</table>
+<div class="keypt">Mostly the <b>training recipe</b> (reward, randomization, curriculum, settings, code). Sometimes the
+<b>simulator content</b> (scenes, tasks, digital twin). Not the physics engine.</div>
+</div>
+
+<div class="qa"><div class="q">Why does this count as RSI — because the model improves or its weights are updated?</div>
+<p><b>Weight updates are not what makes it RSI.</b> There are two different models in the loop:</p>
+<ul>
+  <li><b>Learner</b> = robot policy. Its weights <i>are</i> updated by RL. That is just training.</li>
+  <li><b>Improver</b> = LLM coding agent. Its weights are usually <b>frozen</b>.</li>
+</ul>
+<pre class="calc">Level 1  policy weights updated, recipe fixed           → normal learning          (not RSI)
+Level 2  LLM rewrites the recipe (Eureka: reward v1→v2→v3) → procedure improvement   (not recursive:
+         the LLM is the same every round — "a fixed outer searcher")
+Level 3  the improver itself gets better                → R1 / R2                  (RSI)</pre>
+<p>The paper says the improver's knowledge can live in <b>weights, memory, code, or prompts</b> (Sec. 3.3). Most current
+systems keep the LLM frozen and improve through what it writes and keeps:</p>
+<ul>
+  <li><b>HARBOR</b> — "lessons" from tuning rounds in an experience memory</li>
+  <li><b>AURA</b> — database of past curricula and feedback (without it, runnable curricula drop 99% → 38%)</li>
+  <li><b>ENPIRE</b> — written summary of a pin-insertion search reused for GPU insertion</li>
+  <li><b>PhysEvo</b> — edited tools and skills</li>
+</ul>
+<p><b>Example.</b> HARBOR redesigns the 3-cube-stacking reward in <b>30 min instead of 4 hours</b> after building memory.
+Looks like a better improver, but not proven: same task (could be memorization), and no frozen-memory control. The test
+the paper wants:</p>
+<table>
+  <tr><th></th><th>Improver with its lessons</th><th>Same LLM, memory frozen at round 1</th></tr>
+  <tr><td>New, unseen failure type</td><td>fixed in 1 hour</td><td>fixed in 4 hours</td></tr>
+</table>
+<p>Only a gap on a <b>new</b> failure type against a <b>frozen-knowledge</b> copy counts. The fair control depends on
+where the knowledge lives: old checkpoint for weights, old snapshot for memory, old version for code / prompts.</p>
+</div>
+
+<div class="qa"><div class="q">If the LLM weights are not updated, isn't it just in-context learning?</div>
+<p><b>Yes, mechanically.</b> With a frozen LLM, the improver's "self-improvement" is in-context learning plus a memory
+it writes itself. The paper still calls it (possible) RSI because RSI is defined by <i>what</i> gets better, not
+<i>how</i>. The improver is the whole system:</p>
+<pre class="calc">improver = frozen LLM + memory file + tools + prompts + code
+
+Round 1: fixes a grasp failure, writes "slip → raise friction reward weight first"
+Round 2: new slip failure, reads memory, fixes it in 1 try instead of 5
+         → weights unchanged, but the system improves faster</pre>
+<table>
+  <tr><th></th><th>Plain ICL</th><th>Possible RSI (paper)</th></tr>
+  <tr><td>Knowledge</td><td>examples in one prompt, gone after the episode</td><td>memory kept and growing across rounds</td></tr>
+  <tr><td>Written by</td><td>a human</td><td>the system, from its own trials</td></tr>
+  <tr><td>Recursive?</td><td>no</td><td>only if lessons make the next lessons better (R1) and the improver then improves its own rules / tools (R2)</td></tr>
+</table>
+<div class="warn">This is a <b>weak form</b> of RSI with a ceiling: notes help a frozen LLM use what it already knows,
+but its basic reasoning never grows. Calling it "ICL with a growing memory" is fair, and the paper admits no robot study
+has proven even this yet.</div>
+</div>
+
+</section>
+
+</body>
+</html>
