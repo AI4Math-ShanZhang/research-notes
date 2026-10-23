@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AW-0 Agentic World Action Models — code expert, annotation pipeline, memory and hybrid actions — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .keypt{ background:#fff; border-left:4px solid #3DBD79; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .warn{ background:#fff; border-left:4px solid #F06B7F; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  pre.calc{ background:#0f1b2d; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+            font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86rem; line-height:1.5; }
+  .qa{ border-left:3px solid #E8900D; padding:.1rem 0 .1rem 1rem; margin:1.3rem 0; }
+  .qa > .q{ font-weight:700; color:#b56b00; margin-bottom:.3rem; }
+  table{ border-collapse:collapse; margin:.8rem 0; }
+  th,td{ border:1px solid #d0d7de; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>AW-0 Agentic World Action Models — code expert, annotation pipeline, memory and hybrid actions</h1>
+<p class="paper-meta">Paper: <em>Agentic World Action Models</em> — Zhuoyang Liu, Dantong Niu, Botong Zhang, Boning Shao, et al.
+(UC Berkeley, NVIDIA, UPenn; advised by Yuke Zhu, Guanzhi Wang, Jim Fan, Trevor Darrell), Oct 2026,
+<a href="https://arxiv.org/abs/2610.30136">arXiv:2610.30136</a> ·
+<a href="https://agentic-wam.github.io/">project page</a>.
+This note covers what the code expert outputs and how it guides video and action, the agentic annotation pipeline,
+the memory cache, hybrid (Code-as-Policies) execution, and how training differs from the 4-step inference.</p>
+
+<!-- ============================================================ -->
+<section class="section paper-summary">
+<h2>📄 Paper Summary</h2>
+
+<h3>Idea</h3>
+<p>A World Action Model (WAM) predicts future video and robot actions together, but has no explicit way to plan or
+reuse skills. AW-0 adds a <b>code expert</b>: one model jointly generates three streams — a short <b>skill program</b>
+(code), <b>future video</b>, and an <b>action chunk</b>.</p>
+
+<h3>Architecture (Mixture-of-Transformers, 28 layers each, shared attention)</h3>
+<table>
+  <tr><th>Expert</th><th>Init</th><th>Generates</th><th>How</th></tr>
+  <tr><td>Code</td><td>SDAR-1.7B (frozen FFN/embeddings) + frozen Qwen3-VL ViT</td><td>128-token Python slice</td><td>LLaDA-style masked diffusion</td></tr>
+  <tr><td>Video</td><td>Cosmos-Predict2.5-2B, Wan2.2 VAE</td><td>9 future frames × 3 views</td><td>flow matching</td></tr>
+  <tr><td>Action</td><td>DiT from scratch</td><td>32 steps × 64-D (both arms: EEF pose + 22 hand joints + gripper)</td><td>flow matching</td></tr>
+</table>
+<p>Attention is bidirectional inside each expert and blockwise causal across experts in the order
+<b>Code → Video → Action</b>.</p>
+
+<h3>Data</h3>
+<p>Pretrain on ~2,000 h YAM robot data + ~1,000 h egocentric human video, all labeled with code by an agentic
+pipeline (Gemini 3.1 Pro annotator + Claude Code coordinator) that also discovers a library of 50 reusable skills.
+Fine-tune with 100 demos per real task, 50 per RoboTwin task.</p>
+
+<h3>Results</h3>
+<table>
+  <tr><th>Setting</th><th>Best baseline</th><th>AW-0</th><th>AW-0 hybrid</th></tr>
+  <tr><td>RoboTwin 2.0 clean (50 tasks)</td><td>64.8 (WLA)</td><td><b>80.8</b></td><td>63.1</td></tr>
+  <tr><td>RoboTwin 2.0 random</td><td>27.7 (π0.5)</td><td>20.6</td><td><b>29.2</b></td></tr>
+  <tr><td>Real, 8 tasks (YAM + dexterous hands), rubric</td><td>46.0 (DreamZero)</td><td><b>71.1</b></td><td>–</td></tr>
+  <tr><td>Real YAM Fold &amp; Stack Towels</td><td>–</td><td>84.4</td><td><b>90.6</b></td></tr>
+</table>
+<p>Ablations (real, avg of 8): no code 32.9% (0.19 s) · autoregressive code 54.5% (0.55 s) · joint denoising
+<b>71.1% (0.23 s)</b>. Code beats natural-language subgoals on 7/8 tasks; removing comments or skills hurts all 8.</p>
+</section>
+
+<!-- ============================================================ -->
+<section class="section key-notes">
+<h2>🖊 My Key Notes</h2>
+
+<h3>Q&amp;A — the code expert</h3>
+
+<div class="qa"><div class="q">What does the code expert output? Is it executable? How does it affect the video and action experts at inference?</div>
+<p><b>Output:</b> a short Python "slice" — a few API / skill calls plus comments for the <i>next subtask only</i>.
+A real online output (Pack Backpack, matched the annotation exactly):</p>
+<pre class="calc"># STAGE 2/5 -- OPENING, right arm: grasp the pull at the MIDDLE of the seam.
+# Lift UP, then slide MIDDLE -> RIGHT; after this the backpack is fully OPEN.
+approach_best_grasp(robot, 'zipper pull', 'right', [0.0, 0.0, 0.05])
+robot.close_gripper('right')</pre>
+<p><b>Executable?</b> It is valid Python (87.5% parse rate) and <i>can</i> run, but <b>by default it is not run</b>:
+"it serves as a subtask plan that conditions the action expert", and the action chunk drives the robot.</p>
+<p><b>Effect:</b> through attention during joint denoising. Video attends to code; action attends to code + video. All
+three are denoised together in 4 steps; code reveals 128 / 4 = 32 tokens per step, so video and action read a plan
+that gets clearer each step.</p>
+<table>
+  <tr><th>Variant</th><th>Real avg</th><th>Latency</th></tr>
+  <tr><td>No code (V → A)</td><td>32.9%</td><td>0.19 s</td></tr>
+  <tr><td>Code, autoregressive</td><td>54.5%</td><td>0.55 s</td></tr>
+  <tr><td>Code, joint denoising (C → V → A)</td><td><b>71.1%</b></td><td>0.23 s</td></tr>
+</table>
+<p>V → C → A is worse than C → V → A: the code must guide the video, not just read it.</p>
+</div>
+
+<div class="qa"><div class="q">If the code is not run, how is it different from a natural-language instruction?</div>
+<p>When not run, it is a <b>structured language plan</b> — the gain comes from what it contains, not from executability.</p>
+<pre class="calc">NL subgoal:  "Grasp the zipper pull with the right arm."
+Code:        approach_best_grasp(robot, 'zipper pull', 'right', [0.0, 0.0, 0.05])
+             robot.close_gripper('right')     + "STAGE 2/5 ..." comments</pre>
+<table>
+  <tr><th></th><th>NL subgoal</th><th>Code</th></tr>
+  <tr><td>Which arm</td><td>sometimes</td><td>always</td></tr>
+  <tr><td>Numbers</td><td>rarely</td><td>yes (approach 5 cm above)</td></tr>
+  <tr><td>Contact events</td><td>vague</td><td>exact; on YAM must match the sensor gripper events</td></tr>
+  <tr><td>Vocabulary</td><td>free text</td><td>fixed verbs + primitives + 50 skills — same name = same motion in every task</td></tr>
+  <tr><td>Progress</td><td>usually missing</td><td><code>STAGE 2/5</code>, "folded: pink, green"</td></tr>
+</table>
+<p>Fig. 7: full code beats subgoals on 7/8 tasks; no comments hurts all 8; no skills hurts all 8 (Deal Poker
+58.3 → 42.0). Best = comments (intent) + skills (reusable motion names) + structure.</p>
+</div>
+
+<div class="qa"><div class="q">What is the difference between skills and primitive APIs?</div>
+<table>
+  <tr><th></th><th>Primitive API</th><th>Skill</th></tr>
+  <tr><td>Made by</td><td>humans, fixed in advance</td><td>the coordinator agent, from repeated patterns</td></tr>
+  <tr><td>Size</td><td>one step (one contact or motion)</td><td>several primitive calls — a "maneuver"</td></tr>
+  <tr><td>Rule</td><td>given</td><td>generic (numbers → parameters), in ≥2 tasks, not a task recipe, not a duplicate</td></tr>
+  <tr><td>Count</td><td>~10 verbs + low-level motion + perception</td><td>50 (23 YAM + 27 human)</td></tr>
+  <tr><td>Example</td><td><code>grasp</code>, <code>release</code>, <code>servo_ee_delta</code></td><td><code>fold_edge_over</code>, <code>tilt_pour_over_target</code>, <code>unscrew_cap</code></td></tr>
+</table>
+<pre class="calc"># skill "spread_taut_and_release": with both arms gripping, pull apart, release both
+# (paper gives the description; this body is my illustration)
+def spread_taut_and_release(robot, left_delta, right_delta):
+    robot.servo_ee_delta('left',  left_delta)
+    robot.servo_ee_delta('right', right_delta)
+    robot.release('left')
+    robot.release('right')</pre>
+</div>
+
+<h3>Q&amp;A — the annotation pipeline (Fig. 3)</h3>
+
+<div class="qa"><div class="q">What are "predefined declaration-only APIs" and the Claude Code coordinator? How does the pipeline work?</div>
+<p><b>Declaration-only</b> = names and arguments exist, bodies are empty:</p>
+<pre class="calc">class ParallelGripperApi:
+    def pick(self, object_name, side): ...
+    def grasp(self, object_name, side): ...
+    def place(self, object_name, target_name, side): ...
+    def servo_ee_delta(self, side, delta_pos, duration_s=1.0): ...
+    def detect_objects_oneshot(self, query, camera='top'): ...</pre>
+<p>The programs are <b>labels, not controllers</b>: never run, only checked statically (syntax, function exists,
+arguments bind, literals in vocabulary). On failure the annotator sees the errors and rewrites.</p>
+<table>
+  <tr><th></th><th>Annotator (Gemini 3.1 Pro)</th><th>Coordinator (Claude Code + Opus 4.8)</th></tr>
+  <tr><td>Job</td><td>writes code for one subtask slice per call</td><td>runs rounds, audits, owns the skill library</td></tr>
+  <tr><td>Writes code?</td><td>yes</td><td><b>never</b></td></tr>
+  <tr><td>Input</td><td>subtask frames + text + program so far; on YAM the sensor gripper events, reproduced exactly</td><td>round summaries, traces of bad slices</td></tr>
+</table>
+<pre class="calc">STAGE 1  skill discovery (1 episode per task)
+  annotator writes code with primitives + current skills
+  coordinator labels each bad slice: detector limit / misread / wrong level /
+                                     VOCABULARY GAP / segmentation artifact
+  only vocabulary gaps → skill proposal → admitted if generic, in ≥2 tasks, maneuver-level, new
+  admitted skills enter the annotator prompt next round   → 50 skills
+
+STAGE 2  freeze library, re-annotate the subset → cache {subtask → code}
+
+STAGE 3  rest of corpus: check cache first
+  YAM:  reuse if implied open/close events match observed events (mirrors OK, motion re-derived)
+  ego:  reuse if hand-motion profile within a fixed distance (never reuse loops)
+  miss → normal annotator call → write back to cache</pre>
+</div>
+
+<h3>Q&amp;A — memory cache</h3>
+
+<div class="qa"><div class="q">What memory do they use? "History slices compressed into K learnable memory slots, read back as prefix tokens" — what is the pipeline?</div>
+<p>One image often cannot show progress (a folded towel looks the same before and after stacking), so the code expert
+gets the code it already wrote this episode.</p>
+<pre class="calc">episode start:  buffer = []
+replan 1:  [visual | instruction | 128 MASK]                   → slice_1   buffer=[s1]
+replan 2:  [s1]  ──compress──▶ K slots
+           [K memory slots | visual | instruction | 128 MASK]  → slice_2   buffer=[s1,s2]
+replan 3:  [s1,s2] ──compress──▶ same K slots ...</pre>
+<ul>
+  <li>Stores past <b>code slices</b> only (not images or actions); fixed K vectors however long the episode.</li>
+  <li>Only the code stream reads it; video and action get it indirectly through attention to code.</li>
+  <li>Progress also lives in the code comments: <code># STAGE 3/6 FOLD BROWN | folded: pink, green | stack: empty</code>.</li>
+</ul>
+<div class="warn">Not given in the paper: K, p, the compressor design, or a memory ablation. A Perceiver / Q-Former-style
+cross-attention is my guess, not stated.</div>
+</div>
+
+<div class="qa"><div class="q">"During training the buffer holds annotated slices, replaced with probability p by the model's own predictions" — what does that mean?</div>
+<p>Training normally fills memory with correct labels, but at test time memory holds the model's <b>own</b> (maybe
+wrong) code. If it only ever saw correct memory, one wrong slice at test time would snowball.</p>
+<pre class="calc">correct memory:   s1 "STAGE 1 fold pink"  ✔   s2 "STAGE 2 fold green" ✔
+test-time memory: s1 "STAGE 1 fold pink"  ✔   s2 "STAGE 2 fold brown" ✘
+
+training: for each history slice, flip a coin (e.g. p = 0.3, my example)
+   70% → ground-truth slice     30% → model's own prediction
+target for the next slice stays the CORRECT one</pre>
+<p>So the model learns to write the right next step from the current image even when memory has small errors. Same
+idea as <b>scheduled sampling</b> (vs teacher forcing) in sequence models.</p>
+</div>
+
+<h3>Q&amp;A — hybrid actions</h3>
+
+<div class="qa"><div class="q">What is hybrid (Code-as-Policies) execution? Example?</div>
+<p>One forward pass gives both an action chunk and a code slice; an arbiter picks one at each replan:</p>
+<pre class="calc">loop:
+  actions[1..32], code = model(obs, instruction)
+  if code passes all gates:  run code     # chunk discarded, even if code raises
+  else:                      play actions[1..32]
+
+gates (no repair):  1 stage gate   — stage not done, not earlier, &lt; R failures
+                    2 dependency   — every variable it reads exists in namespace G
+                    3 syntax / whitelist / vacuity — compiles, only allowed calls, has a real statement
+                    + skip a retry if it already failed and nothing changed</pre>
+<pre class="calc"># generated towel-stacking slice (Fig.): code handles the structured stacking
+for towel, arm, target_pos in [('pink towel','right',[0.44,-0.08,0.77]),
+                               ('brown towel','left',[0.47,-0.04,0.81]),
+                               ('green towel','right',[0.42,-0.09,0.79])]:
+    approach_best_grasp(robot, towel, arm, [0.0, 0.0, -0.05])
+    robot.grasp(towel, arm)
+    robot.servo_ee_delta(arm, [0.0, 0.0, 0.08])     # lift clear
+    robot.freespace_move(...target_pos...)
+    robot.servo_ee_delta(arm, [0.0, 0.0, -0.07])    # lower onto pile
+    robot.release(arm)</pre>
+<ul>
+  <li>Towels: soft folding → action expert; approach + stacking → code (gets the order right).</li>
+  <li>blocks ranking rgb: pick-and-place almost all code. pick dual bottles: code finds the bottle but fails the grasp → action expert finishes → code resumes.</li>
+</ul>
+<table>
+  <tr><th></th><th>Default</th><th>Hybrid</th></tr>
+  <tr><td>RoboTwin clean</td><td><b>80.8</b></td><td>63.1</td></tr>
+  <tr><td>RoboTwin random</td><td>20.6</td><td><b>29.2</b></td></tr>
+  <tr><td>Real Fold &amp; Stack Towels</td><td>84.4</td><td><b>90.6</b></td></tr>
+</table>
+<p>Code drives only 8.5% (clean) / 5.6% (random) of steps overall, but 35% in successful random episodes. Hybrid helps
+when learned actions are weak (visual shift); hurts in clean scenes because code inherits primitive failures and the
+arbiter admits code on validity alone.</p>
+</div>
+
+<div class="qa"><div class="q">The APIs are declaration-only — so how can hybrid code actually run?</div>
+<p>There are <b>two versions of the same API</b>: same names and arguments, but for hybrid the bodies are real.</p>
+<table>
+  <tr><th></th><th>Annotation</th><th>Hybrid execution</th></tr>
+  <tr><td>Bodies</td><td>empty <code>...</code></td><td>real code</td></tr>
+  <tr><td>Purpose</td><td>labels, static checks</td><td>move the robot</td></tr>
+</table>
+<pre class="calc">approach_best_grasp(robot, 'zipper pull', 'right', [0, 0, 0.05])     (skill → primitives)
+ ├─ detect_objects_oneshot('zipper pull') → Molmo (pointing) + SAM 3 (segment) → 3D location
+ ├─ sample_grasp_pose(...)                → Contact-GraspNet
+ ├─ select_best_grasp(..., 'right')       → reachable grasp
+ └─ move_arm(...)                         → RoboTwin motion planner
+robot.close_gripper('right')              → gripper control</pre>
+<ul>
+  <li>No privileged simulator state at test time — camera images only.</li>
+  <li>Real-robot hybrid only on YAM: no CaP library exists for the dexterous hands.</li>
+  <li>Sim hybrid was trained on separate CaP-collected demos (programs by Claude Opus 4.8), so the paper admits the
+      comparison "does not isolate the effect of hybrid execution alone".</li>
+</ul>
+</div>
+
+<h3>Q&amp;A — training vs 4-step inference</h3>
+
+<div class="qa"><div class="q">The code expert unmasks over 4 steps — does training also do 4 forwards? How do video and action denoise alongside the code unmasking?</div>
+<p><b>No — training is one forward pass per sample.</b> Each stream gets an independent random corruption:</p>
+<table>
+  <tr><th>Stream</th><th>Corruption</th><th>Random level</th></tr>
+  <tr><td>Code</td><td>each token → [MASK] w.p. r</td><td>r ~ U(0,1)</td></tr>
+  <tr><td>Video</td><td>(1−σ)·clean + σ·noise</td><td>50% Cosmos schedule (high noise) + 50% uniform</td></tr>
+  <tr><td>Action</td><td>(1−σ)·clean + σ·noise</td><td>uniform, shifted to high noise (shift 5)</td></tr>
+</table>
+<p>One pass → code CE on masked positions + video and action flow-matching (target = noise − clean). Loss weights
+video 1, code 0.5, action 1.</p>
+<pre class="calc">sample 1: code 90% masked | video σ=0.2  | action σ=0.7
+sample 2: code 10% masked | video σ=0.95 | action σ=0.3
+sample 3: code 50% masked | video σ=0.6  | action σ=0.9
+→ the model sees every mix, so at inference any intermediate state is familiar</pre>
+<p><b>Inference: 4 forward passes.</b> Each pass gives code logits + video velocity + action velocity:</p>
+<pre class="calc">              code canvas         video σ     action σ
+start           0/128 revealed    1.0         1.0
+step 1  →      32/128             ↓           ↓      code: keep top-32 confident, revealed stay fixed
+step 2  →      64/128             ↓           ↓      video: one UniPC step
+step 3  →      96/128             ↓           ↓      action: Euler  A ← A + (σ_next − σ_now)·v
+step 4  →     128/128             0           0      → play the 32-step chunk</pre>
+<div class="keypt">Code attends only to itself (+ image, instruction, memory), never to video or action. So the code
+result does not depend on them — you could decode it alone first and get the same code. "Joint" mainly buys
+<b>speed</b> (4 passes total; 0.23 s vs 0.55 s for AR) and avoids AR's teacher-forcing error build-up
+(71.1% vs 54.5%), while video and action read the code as it forms.</div>
+</div>
+
+</section>
+
+</body>
+</html>
