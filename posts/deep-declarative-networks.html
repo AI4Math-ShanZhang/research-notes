@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deep Declarative Networks — Research Notes</title>
+<link rel="stylesheet" href="../assets/blog.css">
+<style>
+  .callout{ background:#fff; border-left:4px solid #4A8ED4; padding:.6rem 1rem; margin:1rem 0; border-radius:0 6px 6px 0; }
+  .step{ border-top:2px solid #e3e8ef; padding-top:.3rem; margin-top:1.8rem; }
+  pre.code{ background:#1f2933; color:#e6edf3; border-radius:8px; padding:.8rem 1rem; overflow-x:auto;
+       font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.82rem; line-height:1.45; }
+  pre.code b{ color:#F79A38; }
+  table{ border-collapse:collapse; margin:.8rem 0; font-size:.9rem; }
+  th,td{ border:1px solid #d8dee6; padding:.3rem .6rem; text-align:left; vertical-align:top; }
+  th{ background:#f3f6fa; }
+  .wrap{ overflow-x:auto; }
+</style>
+</head>
+<body class="note-page">
+
+<p class="back"><a href="../index.html">&larr; Back to blog</a></p>
+
+<h1>Deep Declarative Networks — a Layer Defined by "argmin"</h1>
+<p class="paper-meta">Paper: <em>Deep Declarative Networks: A New Hope</em> —
+Stephen Gould, Richard Hartley &amp; Dylan Campbell (ANU), TPAMI 2021,
+<a href="https://arxiv.org/abs/1909.04866">arXiv:1909.04866</a>.
+Code: <a href="https://github.com/anucvml/ddn">anucvml/ddn</a>.</p>
+
+<!-- ===== Section 1: objective summary ===== -->
+<section class="section paper-summary">
+  <h2>📄 Paper Summary</h2>
+  <p>A normal layer gives an explicit forward function, like <code>y = ReLU(Wx + b)</code>.
+  A <b>declarative node</b> instead says what the output should satisfy: the output is the
+  solution of an optimization problem,</p>
+  <p style="text-align:center"><code>y(x) = argmin<sub>u</sub> f(x, u)</code> &nbsp;(optionally subject to constraints)</p>
+  <ul>
+    <li><b>Forward:</b> run any solver to find y. The paper calls these networks
+      <em>deep declarative networks</em> (DDNs).</li>
+    <li><b>Backward:</b> use the implicit function theorem at the solution.
+      With no constraints, <code>dy/dx = −(H<sub>uu</sub>)⁻¹ · H<sub>ux</sub></code>, where H are second
+      derivatives of f. The paper also gives the gradients for equality and inequality constraints.
+      The backward pass does not need to know how the solver worked, only the final y.</li>
+    <li>Normal layers are a special case (e.g. the mean is <code>argmin Σ(u − x<sub>i</sub>)²</code>),
+      so DDNs include current deep models.</li>
+    <li>A PyTorch library lets declarative and normal layers live in the same network.</li>
+    <li><b>Experiments:</b> robust pooling (Huber, Welsch, truncated quadratic, …) in place of max pooling
+      for point cloud classification (ModelNet40 with added outliers), and projection onto L1 / L2 / L∞
+      balls/spheres as a layer in image classification (ImageNet).</li>
+  </ul>
+</section>
+
+<!-- ===== Section 2: my notes ===== -->
+<section class="section key-notes">
+  <h2>🖊 My Key Notes</h2>
+
+  <h3>Notation</h3>
+  <ul>
+    <li><b>x</b> — input to the layer (e.g. features from a CNN / PointNet).</li>
+    <li><b>u</b> — a <em>candidate</em> output. The solver moves it around.</li>
+    <li><b>f(x, u)</b> — the cost of picking u. Smaller is better. This is the layer's definition.</li>
+    <li><b>y</b> — the layer output = the u with the smallest cost.</li>
+    <li><b>H<sub>uu</sub>, H<sub>ux</sub></b> — second derivatives of f (w.r.t. u twice; w.r.t. u then x).</li>
+    <li><b>W, L</b> — the network weights and the training loss (e.g. cross-entropy). Not the same as f.</li>
+  </ul>
+  <p>Running example: <b>robust pooling</b> on one feature channel, <code>x = [1, 2, 3, 100]</code>
+  (100 is an outlier), with <code>f(x, u) = Σ huber(u − x<sub>i</sub>)</code>, threshold 1.</p>
+
+  <h3 class="step">Step 1 — Same layer, two ways to write it</h3>
+  <p>L2 normalization of x = [3, 4]:</p>
+  <div class="wrap"><table>
+    <tr><th>Style</th><th>Definition</th><th>Output</th></tr>
+    <tr><td>Imperative (normal layer)</td><td>y = x / ‖x‖ — <em>how</em> to compute</td><td>[0.6, 0.8]</td></tr>
+    <tr><td>Declarative</td><td>f = ‖u − x‖², subject to ‖u‖ = 1 — <em>what</em> we want: "the point on the unit circle closest to x"</td><td>[0.6, 0.8]</td></tr>
+  </table></div>
+  <p>Same answer. If a closed form exists (mean, L2 norm), just use autograd — the declarative view gives nothing extra.</p>
+
+  <h3 class="step">Step 2 — When it matters: no formula for y</h3>
+  <p>"Knowing f" is not "knowing a formula y = g(x)". Autograd can differentiate f, but not "argmin".
+  Smallest example: define y by <code>y⁵ + y = x</code>. At x = 2, y = 1. There is no formula for y,
+  but differentiate both sides w.r.t. x:</p>
+<pre class="code">
+5y⁴ · dy/dx + dy/dx = 1   →   dy/dx = 1 / (5y⁴ + 1) = 1/6
+</pre>
+  <p>Only the equation and the solution are needed. That is the implicit function theorem. In a DDN,
+  the equation is the optimality condition <code>∂f/∂u = 0</code>, and the solution comes from the solver.</p>
+  <ul>
+    <li>Mean pooling: <code>Σ(u − x<sub>i</sub>) = 0</code> solves by hand → formula → autograd.</li>
+    <li>Robust pooling: <code>Σ clamp(u − x<sub>i</sub>, −1, 1) = 0</code> has no closed form → solver + IFT.</li>
+  </ul>
+
+  <h3 class="step">Step 3 — Defining the layer = writing f (the cost)</h3>
+  <p>The layer picks the u with the lowest cost:</p>
+  <div class="wrap"><table>
+    <tr><th>candidate u</th><th>cost f</th></tr>
+    <tr><td>26.5 (the mean)</td><td>145</td></tr>
+    <tr><td>2</td><td>98.5</td></tr>
+    <tr><td>3</td><td>98.5</td></tr>
+    <tr><td><b>2.5</b></td><td><b>98.25 ← smallest</b></td></tr>
+  </table></div>
+  <p>Output y = 2.5. Max pooling would give 100, the mean gives 26.5 — both pulled by the outlier.</p>
+
+  <h3 class="step">Step 4 — Forward: the solver is an inner loop</h3>
+  <p>The solver is plain optimization code with <b>no learned weights</b>. It is not the CNN.
+  It walks downhill on f: slope <code>g(u) = Σ clamp(u − x<sub>i</sub>, −1, 1)</code>;
+  slope &gt; 0 → go left, slope &lt; 0 → go right, slope = 0 → stop.</p>
+  <div class="wrap"><table>
+    <tr><th>u</th><th>clamp terms</th><th>slope g</th><th>move</th></tr>
+    <tr><td>1</td><td>0, −1, −1, −1</td><td>−3</td><td>right</td></tr>
+    <tr><td>2</td><td>1, 0, −1, −1</td><td>−1</td><td>right</td></tr>
+    <tr><td><b>2.5</b></td><td>1, 0.5, −0.5, −1</td><td><b>0</b></td><td><b>stop</b></td></tr>
+    <tr><td>3</td><td>1, 1, 0, −1</td><td>+1</td><td>left</td></tr>
+    <tr><td>26.5</td><td>1, 1, 1, −1</td><td>+2</td><td>left</td></tr>
+  </table></div>
+  <p>Gradient descent from the mean with step 1: 26.5 → 24.5 → … → 4.5 → 2.5, twelve steps, then the slope is 0.
+  f is convex (one bowl, one bottom), so slope = 0 means the global minimum. For a non-convex f
+  (e.g. truncated quadratic) the solver only finds a nearby minimum, and the start point matters.</p>
+  <p>You don't compute slopes by hand. You write <code>objective</code>; autograd gives the slope;
+  any off-the-shelf optimizer moves u:</p>
+<pre class="code">
+<b>def</b> objective(self, x, u):              <i># the layer's definition (you write this)</i>
+    <b>return</b> huber(u - x).sum()
+
+<b>def</b> solve(self, x):                     <i># generic: works for any smooth objective</i>
+    u = x.mean().clone().requires_grad_()   <i># start point (a guess near the answer)</i>
+    opt = torch.optim.LBFGS([u])
+    <b>def</b> closure():
+        opt.zero_grad()
+        loss = self.objective(x.detach(), u)  <i># x is fixed while searching</i>
+        loss.backward()                       <i># autograd computes the slope</i>
+        <b>return</b> loss
+    <b>for</b> _ <b>in</b> range(20):
+        opt.step(closure)
+    <b>return</b> u.detach()
+
+<i># gradient(): not written — the library applies −H_uu⁻¹·H_ux using autograd on objective</i>
+</pre>
+  <p><code>objective</code> says <em>what</em> is good; <code>solve</code> says <em>how</em> to find it.
+  They are split only so you can swap in a faster solver (closed form, Newton, sorting for L1 projection).</p>
+
+  <h3 class="step">Step 5 — Backward: IFT at the solution</h3>
+  <p>At y = 2.5: H<sub>uu</sub> = number of inliers (|y − x<sub>i</sub>| &lt; 1) = 2 (the points 2 and 3);
+  H<sub>ux<sub>i</sub></sub> = −1 for inliers, 0 for the others. So</p>
+<pre class="code">
+dy/dx = −H_uu⁻¹ · H_ux = [0, 1/2, 1/2, 0]
+</pre>
+  <p>The outlier 100 gets <b>zero gradient</b>, so it sends no error signal back to the backbone.</p>
+
+  <h3 class="step">Step 6 — Why not just backprop through the solver steps (unrolling)?</h3>
+  <p>In the 12 steps above every clamp is saturated at ±1, so the slope is a constant 2 and has zero derivative.
+  Autograd therefore records only <code>y = mean(x) − 2·12</code>, and gives</p>
+<pre class="code">
+unrolled:  dy/dx = [1/4, 1/4, 1/4, 1/4]     <i># outlier gets 1/4 — wrong</i>
+IFT:       dy/dx = [0,   1/2, 1/2, 0  ]     <i># true derivative of the solution</i>
+</pre>
+  <ul>
+    <li><b>Correctness:</b> unrolling differentiates the <em>path</em> (start, step size, stop step), not the <em>answer</em>.</li>
+    <li><b>Memory:</b> unrolling stores every step; IFT needs only the final y, whatever the number of steps.</li>
+    <li><b>Any solver:</b> sorting, <code>if/break</code>, scipy, C++ or QP solvers can't be backpropagated through — with IFT that does not matter.</li>
+  </ul>
+
+  <h3 class="step">Step 7 — Two loops: f is not the loss, u is not a parameter</h3>
+<pre class="code">
+training step:
+  forward:
+    x    = CNN_W(input)                        <i># e.g. PointNet per-point features</i>
+    <b>inner loop</b>: solver moves u until f is smallest  →  y = u      <i># per input, no labels</i>
+    pred = MLP_W(y)
+    L    = cross_entropy(pred, label)          <i># e.g. "chair" 0.7 → L ≈ 0.36</i>
+  backward:
+    L → y   normal autograd
+    y → x   IFT (not through the inner-loop steps)
+    x → W   normal autograd
+  <b>outer loop</b>: SGD / Adam updates W
+</pre>
+  <div class="wrap"><table>
+    <tr><th></th><th>Weights W</th><th>u (layer output)</th></tr>
+    <tr><td>What it is</td><td>parameter</td><td>activation</td></tr>
+    <tr><td>Updated by</td><td>outer loop (SGD), using loss L</td><td>inner loop (solver), using cost f</td></tr>
+    <tr><td>When</td><td>once per training step</td><td>every forward pass, every input — also at test time</td></tr>
+    <tr><td>Saved after training</td><td>yes</td><td>no</td></tr>
+  </table></div>
+  <p>This is bilevel optimization — the same shape as MAML / MetaOptNet.</p>
+
+  <h3 class="step">Step 8 — Where this shows up (and the link to loop transformers)</h3>
+  <p>Standard CNN / Transformer layers are all explicit (<code>y = MLP(x)</code>, <code>y = Attn(x)</code>),
+  so they never need this. Declarative layers appear when the output is defined by a condition:</p>
+  <ul>
+    <li><b>Deep Equilibrium Models (DEQ):</b> loop one transformer block until it stops changing,
+      <code>y = Layer(y, x)</code>. The fixed point has no formula; backward uses IFT with memory independent of
+      loop count. <em>A looped transformer run to convergence is a DEQ</em> — this is the bridge to this category.</li>
+    <li><b>MetaOptNet:</b> few-shot head = an SVM solved per task with a QP solver.</li>
+    <li><b>3D geometry:</b> PnP / ICP / bundle adjustment (e.g. EPro-PnP).</li>
+    <li><b>Matching:</b> optimal transport via Sinkhorn.</li>
+    <li><b>Control:</b> differentiable MPC.</li>
+  </ul>
+
+  <h3 class="step">Honesty section</h3>
+  <ul>
+    <li>Niche: no benefit for layers with a closed form, which is almost every layer in mainstream nets.</li>
+    <li>Cost: the forward pass runs a solver per input; the backward pass inverts H<sub>uu</sub>, which is expensive
+      when the output is large (hand-written gradients help when H<sub>uu</sub> has a simple form, like "count the inliers").</li>
+    <li>The gradient can fail to exist when f is non-smooth or the solution is not unique; non-convex f gives a
+      local minimum that depends on the start point.</li>
+    <li>Related tooling: <code>cvxpylayers</code> (convex problems — no solver or gradient to write),
+      Theseus (non-linear least squares), JAXopt <code>custom_root</code> (same IFT idea).</li>
+  </ul>
+
+  <div class="callout"><b>Takeaway.</b> A declarative layer is "output = the u with the lowest cost f(x, u)".
+  You write f; a generic solver finds y in an inner loop; the backward pass uses the implicit function theorem
+  at y instead of unrolling the solver, which gives the correct gradient (outlier → 0, not 1/4) with memory
+  independent of the solver's steps. It only matters when y has no formula — e.g. a fixed point of a looped block (DEQ).</div>
+</section>
+
+</body>
+</html>

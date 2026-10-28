@@ -47,6 +47,14 @@ const BLOG = {
       ],
       notes: [
         {
+          title:   "Deep Declarative Networks — a Layer Defined by \"argmin\"",
+          file:    "posts/deep-declarative-networks.html",
+          date:    "2026-10-28",
+          paper:   "Gould, Hartley &amp; Campbell (ANU) · TPAMI 2021 · arXiv:1909.04866",
+          tags:    ["implicit layer", "implicit function theorem", "bilevel", "DEQ", "robust pooling"],
+          summary: "A declarative layer outputs y = argmin_u f(x, u): you write the cost f, a generic solver (LBFGS, Newton, …) finds y in an inner loop, and backward uses the implicit function theorem at y. Worked on robust pooling of x = [1, 2, 3, 100] → y = 2.5: IFT gives dy/dx = [0, ½, ½, 0], while unrolling the 12 solver steps gives [¼, ¼, ¼, ¼] (outlier wrongly gets gradient). Covers f vs the training loss, u as an activation not a parameter, and why it only matters when y has no formula — e.g. a looped block run to its fixed point (DEQ).",
+        },
+        {
           title:   "MemT-1.0 — Local Memory vs Hyper Memory, and How Training and Inference Use Them",
           file:    "posts/memt-native-memory.html",
           date:    "2026-10-21",
@@ -128,6 +136,11 @@ const BLOG = {
         },
       ],
       papers: [
+        {
+          name:    "Deep Declarative Networks: A New Hope",
+          link:    "https://arxiv.org/abs/1909.04866",
+          summary: "Gould, Hartley & Campbell (TPAMI 2021). Layers whose forward function is the solution of an optimization problem (y = argmin f(x, u), with optional constraints); gradients come from the implicit function theorem, so any solver can be used and nothing is unrolled. Normal layers are a special case. Demonstrated with robust pooling for point clouds with outliers and L1/L2/L∞ projection layers on ImageNet; PyTorch library ddn. The general theory behind implicit / equilibrium (DEQ) layers.",
+        },
         {
           name:    "MemT-1.0 — Towards Memory-Native Evolution",
           link:    "https://arxiv.org/abs/2610.26825",
